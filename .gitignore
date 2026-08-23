@@ -361,3 +361,13 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# ---------------------------------------------------------------- project-specific
+# Never commit a real signing key or connection string override.
+appsettings.Production.json
+appsettings.*.Local.json
+secrets.json
+logs/
+
+# db/ scratch + inspection scripts. _linked.sql carries the production linked-server
+# login; the other _*.sql are throwaway schema dumps. Never commit these.
+db/_*.sql
