@@ -40,7 +40,7 @@ IF COL_LENGTH('dbo.MonthlyFees', 'stu_actual_monthly_fees') IS NULL
     ALTER TABLE dbo.MonthlyFees ADD stu_actual_monthly_fees decimal(18,2) NULL;
 GO
 
-IF DB_ID('ph19987796653_') IS NULL
+IF DB_ID('ph19987796653_prod') IS NULL
 BEGIN
     PRINT 'Source database not attached - column added, nothing backfilled.';
     RETURN;

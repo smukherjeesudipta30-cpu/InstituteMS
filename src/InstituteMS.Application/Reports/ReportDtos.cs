@@ -16,6 +16,9 @@ public class AdmissionsReportQuery : PagedQuery
 
     /// <summary>Optional course filter. The legacy page had none - it listed every course.</summary>
     public int? CourseId { get; set; }
+
+    /// <summary>Optional branch filter. Empty for every branch.</summary>
+    public string? Branch { get; set; }
 }
 
 public record AdmissionRowDto(
@@ -53,6 +56,9 @@ public class DuesReportQuery : PagedQuery
     /// Defaults to true; set false to reproduce the legacy row set exactly.
     /// </summary>
     public bool IncludeNeverPaid { get; set; } = true;
+
+    /// <summary>Optional branch filter. Empty for every branch.</summary>
+    public string? Branch { get; set; }
 }
 
 public record DuesRowDto(
@@ -65,8 +71,39 @@ public record DuesRowDto(
     decimal AdmissionFees,
     /// <summary>Most recent payment of any date, or null if the student has never paid.</summary>
     DateOnly? LastPaymentDate,
-    /// <summary>Outstanding balance carried on that last payment.</summary>
+
+    /// <summary>
+    /// What the student owes as at the report's <c>To</c> date: the balance left on
+    /// their last payment, plus every fee month that has passed since without one.
+    /// </summary>
+    /// <remarks>
+    /// This used to be the carried balance alone, which is nearly always zero — a
+    /// student who settles each bill in full leaves nothing carried — so a report
+    /// listing people who had not paid for months showed ₹0.00 against every one of
+    /// them. The carried balance is still reported, as <see cref="CarriedDue"/>.
+    /// </remarks>
     decimal OutstandingDue,
+
+    /// <summary>The balance left unpaid at the time of the last payment.</summary>
+    decimal CarriedDue,
+
+    /// <summary>
+    /// Complete fee months elapsed since the last payment (or since joining, for a
+    /// student who has never paid). A fee month is 32 days, the same figure the late
+    /// fine uses, so the two agree about when a month has gone by.
+    /// </summary>
+    int MonthsUnpaid,
+
+    /// <summary>The student's agreed monthly fee, which is what a missed month costs.</summary>
+    decimal MonthlyFee,
+
+    /// <summary>
+    /// The fine that would apply if they paid on the report's <c>To</c> date, from
+    /// the same <c>LateFineCalculator</c> the fee counter uses — so the figure here
+    /// and the figure charged at the desk cannot disagree.
+    /// </summary>
+    decimal LateFine,
+
     /// <summary>False when the student has no payment history at all.</summary>
     bool HasEverPaid);
 
@@ -87,13 +124,17 @@ public class ExpenseReportQuery : PagedQuery
 {
     public DateOnly From { get; set; }
     public DateOnly To { get; set; }
+
+    /// <summary>Optional branch filter. Empty for every branch.</summary>
+    public string? Branch { get; set; }
 }
 
 public record ExpenseRowDto(
     int ExpenseId,
     string? Details,
     DateOnly? ExpenseDate,
-    decimal Amount);
+    decimal Amount,
+    string? Branch);
 
 public record ExpenseReportDto(
     DateOnly From,
@@ -274,7 +315,22 @@ public record StudentCertificateDto(
     /// certificate regardless, so the UI warns rather than refuses.
     /// </summary>
     bool IsComplete,
-    DateTime GeneratedOn);
+    DateTime GeneratedOn,
+
+    /// <summary>
+    /// Which copy this is. 1 is the original; 2 and above print as duplicates.
+    /// </summary>
+    int IssueNo,
+
+    /// <summary>
+    /// True from the second copy onwards. The printed certificate then carries a
+    /// DUPLICATE COPY mark and its copy number, so a reissue can never be mistaken
+    /// for the original.
+    /// </summary>
+    bool IsDuplicate,
+
+    /// <summary>When the original was taken. Null on the original itself.</summary>
+    DateTime? OriginalIssuedOn);
 
 /* ================================================================= service */
 
@@ -309,10 +365,26 @@ public interface IReportService
     Task<Result<int>> ResolveOwnTeacherIdAsync(string email, CancellationToken ct = default);
 
     /// <summary>
-    /// The signed-in student's completion certificate. Replaces the
-    /// <em>Download Certificate</em> button on the legacy student report.
+    /// Issues the signed-in student's completion certificate, recording the copy.
+    /// Replaces the <em>Download Certificate</em> button on the legacy student
+    /// report.
     /// </summary>
-    Task<Result<StudentCertificateDto>> GetOwnCertificateAsync(
+    /// <remarks>
+    /// This <b>records an issue</b> and is therefore not a read: the first call
+    /// returns the original, and every call after it returns the next numbered
+    /// duplicate. There is deliberately no non-recording variant — a second
+    /// endpoint returning the same document without counting it would be the
+    /// obvious way to take an unmarked copy.
+    /// </remarks>
+    /// <summary>
+    /// Admissions, fee payments and expenses by branch, bucketed by month,
+    /// quarter or year. Records with no branch report as <c>Unassigned</c> rather
+    /// than being dropped, so the totals reconcile against the other reports.
+    /// </summary>
+    Task<Result<BranchReportDto>> GetBranchReportAsync(
+        BranchReportQuery query, CancellationToken ct = default);
+
+    Task<Result<StudentCertificateDto>> IssueOwnCertificateAsync(
         string email, CancellationToken ct = default);
 
     /// <summary>
@@ -323,3 +395,111 @@ public interface IReportService
     Task<Result<FeeReceiptDto>> GetOwnReceiptAsync(
         string email, int feeId, CancellationToken ct = default);
 }
+
+/* ========================================================= branch report */
+
+/// <summary>How a branch report's rows are bucketed in time.</summary>
+public enum BranchReportGrouping
+{
+    Month = 0,
+    Quarter = 1,
+    Year = 2
+}
+
+public class BranchReportQuery
+{
+    public DateOnly From { get; set; }
+    public DateOnly To { get; set; }
+
+    public BranchReportGrouping GroupBy { get; set; } = BranchReportGrouping.Month;
+
+    /// <summary>Empty for every branch. <c>Unassigned</c> selects records with no branch.</summary>
+    public string? Branch { get; set; }
+}
+
+/// <summary>
+/// One branch in one period: what came in, what went out, and the difference.
+/// </summary>
+public record BranchPeriodRowDto(
+    string Branch,
+
+    /// <summary>First day of the bucket — the sort key.</summary>
+    DateOnly PeriodStart,
+    /// <summary>Human label: <c>Aug 2026</c>, <c>Q3 2026</c> or <c>2026</c>.</summary>
+    string PeriodLabel,
+
+    /// <summary>Students who joined in this period.</summary>
+    int Admissions,
+    decimal AdmissionFees,
+
+    /// <summary>Monthly fee payments taken in this period.</summary>
+    int Payments,
+    decimal FeesCollected,
+    decimal LateFines,
+
+    decimal Expenses,
+
+    /// <summary>Non-fee income earned by this branch in the period.</summary>
+    decimal OtherIncome,
+
+    /// <summary>Receptionist salary paid by this branch in the period.</summary>
+    decimal ReceptionistPay,
+
+    /// <summary>
+    /// (admission fees + fees collected + late fines + other income)
+    /// − (expenses + receptionist pay).
+    ///
+    /// Teacher payouts are NOT subtracted: they are recorded against a teacher,
+    /// not a branch, and a teacher may teach at more than one. Attributing them
+    /// would be inventing a number, so they are excluded and said to be excluded.
+    /// </summary>
+    decimal Net);
+
+/// <summary>A branch's whole-range total, across every period.</summary>
+public record BranchTotalDto(
+    string Branch,
+    int Admissions,
+    decimal AdmissionFees,
+    int Payments,
+    decimal FeesCollected,
+    decimal LateFines,
+    decimal Expenses,
+    decimal OtherIncome,
+    decimal ReceptionistPay,
+    decimal Net);
+
+/// <summary>
+/// Admissions, fee payments and expenses by branch, bucketed by month, quarter
+/// or year.
+/// </summary>
+/// <remarks>
+/// A record reaches a branch differently depending on what it is: an admission
+/// and a payment through the student's own branch; an expense, other income and
+/// receptionist pay through the branch recorded on the record itself. Anything
+/// with no branch is reported as <c>Unassigned</c> rather than dropped, so the
+/// totals still reconcile against the unfiltered reports.
+///
+/// <para>Teacher payouts are the one cost deliberately absent: dbo.TecExpense is
+/// keyed to a teacher, and a teacher may teach students at several branches, so
+/// there is no truthful way to split their pay between branches.</para>
+/// </remarks>
+public record BranchReportDto(
+    DateOnly From,
+    DateOnly To,
+    string GroupBy,
+
+    IReadOnlyList<BranchPeriodRowDto> Rows,
+    IReadOnlyList<BranchTotalDto> BranchTotals,
+    BranchTotalDto GrandTotal,
+
+    /// <summary>Every branch name seen, for the filter.</summary>
+    IReadOnlyList<string> Branches,
+
+    /// <summary>
+    /// True while most records carry no branch, so the page can say the report is
+    /// only as good as the branch data behind it rather than implying the
+    /// institute really does have one branch.
+    /// </summary>
+    bool MostlyUnassigned,
+
+    DateTime GeneratedOn);

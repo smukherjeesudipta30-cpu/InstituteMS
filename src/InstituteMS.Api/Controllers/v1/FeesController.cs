@@ -76,4 +76,75 @@ public class FeesController : ApiControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Receipt(int id, CancellationToken ct)
         => Envelope(await _fees.GetReceiptAsync(id, ct));
+
+    /* ------------------------------------- online payment (back office) */
+
+    /// <summary>
+    /// Online payments recorded from the portal but not yet checked against the
+    /// institute's Paytm account — the dashboard's notification list.
+    /// </summary>
+    [HttpGet("online/unverified")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<OnlinePaymentNoticeDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> UnverifiedOnline([FromQuery] int take, CancellationToken ct)
+        => Envelope(await _fees.GetUnverifiedOnlinePaymentsAsync(take <= 0 ? 25 : take, ct));
+
+    /// <summary>Marks an online payment as checked and confirmed.</summary>
+    [HttpPost("online/{feeId:int}/verify")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> VerifyOnline(int feeId, CancellationToken ct)
+        => Envelope(
+            await _fees.VerifyOnlinePaymentAsync(feeId, CurrentUserName, ct),
+            "Payment confirmed.");
+}
+
+/// <summary>
+/// A student paying their own monthly fee from the portal, against the institute's
+/// shared UPI QR code.
+/// </summary>
+/// <remarks>
+/// Student role only, and the student is resolved from the signed-in email — there
+/// is no registration id to pass, so no one can pay against someone else's ledger
+/// or read what another student owes.
+/// </remarks>
+[Route("api/v1/my-fees")]
+[Tags("Fees")]
+[Authorize(Roles = UserRoles.Student)]
+public class MyFeesController : ApiControllerBase
+{
+    private readonly IFeeService _fees;
+
+    public MyFeesController(IFeeService fees) => _fees = fees;
+
+    /// <summary>
+    /// What this student owes for their next unpaid month — the fee, the late fine
+    /// worked out by the same calculator the counter uses, and the UPI details.
+    /// </summary>
+    [HttpGet("due")]
+    [ProducesResponseType(typeof(ApiResponse<MyFeeDueDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MyDue(CancellationToken ct)
+        => Envelope(await _fees.GetMyDueAsync(CurrentUserName ?? string.Empty, ct));
+
+    /// <summary>
+    /// Records the fee the student has just paid against the QR code.
+    /// </summary>
+    /// <remarks>
+    /// The amount is taken from the server's own calculation, never from the
+    /// request — the browser sends only the UPI reference, so a student cannot
+    /// choose what their month costs.
+    ///
+    /// <para>The QR is static and there is no gateway callback, so this records the
+    /// payment <b>unverified</b>. The office confirms it from the dashboard against
+    /// the Paytm account.</para>
+    /// </remarks>
+    [HttpPost("pay")]
+    [ProducesResponseType(typeof(ApiResponse<FeeRecordedDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<FeeRecordedDto>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiResponse<FeeRecordedDto>), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Pay(
+        [FromBody] OnlineFeePaymentRequest request, CancellationToken ct)
+        => Envelope(
+            await _fees.PayOnlineAsync(CurrentUserName ?? string.Empty, request, ct),
+            "Payment recorded. The office will confirm it shortly.");
 }

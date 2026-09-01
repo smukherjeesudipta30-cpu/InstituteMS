@@ -37,6 +37,9 @@ public class TeacherFeeConfiguration : IEntityTypeConfiguration<TeacherFee>
         b.Property(x => x.BillNo).HasColumnName("BillNo").HasMaxLength(50);
         b.Property(x => x.Salary).HasColumnName("TecSal").HasPrecision(18, 2);
         b.Property(x => x.PaidOn).HasColumnName("UpdateDate");
+
+        // dbo.TecFees is NOT bare-inserted by the legacy application, so the
+        // coexistence script was able to add these columns to it.
         b.Property(x => x.CreatedBy).HasColumnName("CreatedBy").HasMaxLength(50);
         b.Property(x => x.CreatedOn).HasColumnName("CreatedOn");
 
@@ -61,8 +64,14 @@ public class TeacherExpenseConfiguration : IEntityTypeConfiguration<TeacherExpen
         b.Property(x => x.TeacherId).HasColumnName("TecId");
         b.Property(x => x.ExpenseDate).HasColumnName("InDate");
         b.Property(x => x.Amount).HasColumnName("Amount").HasPrecision(18, 2);
-        b.Property(x => x.CreatedBy).HasColumnName("CreatedBy").HasMaxLength(50);
-        b.Property(x => x.CreatedOn).HasColumnName("CreatedOn");
+
+        // dbo.TecExpense IS bare-inserted by the legacy application
+        // (Models/Expense.cs:44 — "Insert into TecExpense values (...)"), so it
+        // cannot gain audit columns without breaking that statement. Recording a
+        // teacher payment writes here, so mapping these would fail every save
+        // with "Invalid column name 'CreatedBy'".
+        b.Ignore(x => x.CreatedBy);
+        b.Ignore(x => x.CreatedOn);
 
         b.HasOne(x => x.Teacher)
             .WithMany()
@@ -138,5 +147,11 @@ public class BranchConfiguration : IEntityTypeConfiguration<Branch>
         b.Property(x => x.IsActive).HasColumnName("IsActive");
         b.Property(x => x.CreatedBy).HasColumnName("CreatedBy").HasMaxLength(50);
         b.Property(x => x.CreatedOn).HasColumnName("CreatedOn");
+
+        // The legacy column set. Is_active is NOT NULL with no default, so it
+        // must be written or the insert fails.
+        b.Property(x => x.LegacyName).HasColumnName("Branch_name").HasMaxLength(50);
+        b.Property(x => x.LegacyCode).HasColumnName("Branch_id").HasMaxLength(50);
+        b.Property(x => x.LegacyIsActive).HasColumnName("Is_active");
     }
 }

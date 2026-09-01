@@ -15,6 +15,16 @@ public class User
     public bool IsActive { get; set; }
 
     public string? PasswordHash { get; set; }
+
+    /// <summary>
+    /// Set on the 750 accounts migrated from the legacy system, whose password was
+    /// hashed from the plain text the old application stored. They sign in once with
+    /// the password they already knew and must then choose a new one: until they do,
+    /// the access token carries <c>must_change_password</c> and every endpoint except
+    /// the change-password flow itself refuses the request.
+    /// </summary>
+    public bool MustChangePassword { get; set; }
+
     public string? RefreshToken { get; set; }
     public DateTime? RefreshTokenExpiry { get; set; }
     public int FailedLoginCount { get; set; }
@@ -22,7 +32,14 @@ public class User
     public DateTime? LastLoginOn { get; set; }
 
     public string? CreatedBy { get; set; }
-    public DateTime CreatedOn { get; set; }
+    /// <summary>
+    /// Nullable: the audit columns were added to the legacy tables by the
+    /// coexistence script and are NULL on every row that predates it - all 755
+    /// users, all 953 students. A non-nullable property makes EF throw
+    /// "Data is Null" on those rows. Unknown is the honest value; inventing a
+    /// creation date would be worse.
+    /// </summary>
+    public DateTime? CreatedOn { get; set; }
     public string? ModifiedBy { get; set; }
     public DateTime? ModifiedOn { get; set; }
 

@@ -1,3 +1,4 @@
+using InstituteMS.Application.Notifications;
 using InstituteMS.Application.Auth;
 using InstituteMS.Application.Common;
 using InstituteMS.Application.Common.Interfaces;
@@ -23,6 +24,7 @@ public class AuthService : IAuthService
     private readonly IJwtTokenService _tokens;
     private readonly JwtSettings _settings;
     private readonly ILogger<AuthService> _logger;
+    private readonly IStudentMailer _mailer;
 
     private const string InvalidCredentials = "Invalid email or password.";
 
@@ -31,12 +33,14 @@ public class AuthService : IAuthService
         IPasswordHasher hasher,
         IJwtTokenService tokens,
         IOptions<JwtSettings> settings,
+        IStudentMailer mailer,
         ILogger<AuthService> logger)
     {
         _db = db;
         _hasher = hasher;
         _tokens = tokens;
         _settings = settings.Value;
+        _mailer = mailer;
         _logger = logger;
     }
 
@@ -171,6 +175,11 @@ public class AuthService : IAuthService
             return Result<bool>.Failure("Current password is incorrect.", ResultStatus.Unauthorized);
 
         user.PasswordHash = _hasher.Hash(request.NewPassword);
+
+        // Whatever brought them here, the password is now one they chose themselves,
+        // so the forced-reset hold is satisfied and lifts.
+        user.MustChangePassword = false;
+
         user.ModifiedOn = DateTime.UtcNow;
         user.ModifiedBy = user.Email;
 
@@ -179,7 +188,77 @@ public class AuthService : IAuthService
         user.RefreshTokenExpiry = null;
 
         await _db.SaveChangesAsync(ct);
+
+        await NotifyAdminOfStudentPasswordChangeAsync(user, request.NewPassword, ct);
+
         return Result<bool>.Success(true);
+    }
+
+    /// <summary>
+    /// Tells the institute that a student has set their own password, so the office
+    /// can help them if they forget it later.
+    /// </summary>
+    /// <remarks>
+    /// <para>Students only. Staff changing their own password is nobody else's
+    /// business, and mailing an administrator's password to a shared mailbox would
+    /// be a straightforward way to lose the account.</para>
+    ///
+    /// <para>Sent after the change is committed and never allowed to fail the
+    /// change: the password has already been set, and the caller has been told it
+    /// succeeded. <b>It carries the password in clear</b> — see
+    /// <see cref="StudentPasswordChangeMailRequest"/> for what that means.</para>
+    /// </remarks>
+    private async Task NotifyAdminOfStudentPasswordChangeAsync(
+        User user, string newPassword, CancellationToken ct)
+    {
+        if (!UserRoles.Split(user.Roles).Contains(UserRoles.Student, StringComparer.OrdinalIgnoreCase))
+            return;
+
+        // The portal account and the student record are joined on the issued
+        // login address, which is what dbo.Users.Email holds for a student.
+        var student = await _db.Students
+            .AsNoTracking()
+            .Where(s => s.AvijanLoginEmail == user.Email)
+            .OrderByDescending(s => s.Id)
+            .Select(s => new
+            {
+                s.Name,
+                s.RegistrationId,
+                CourseName = s.Course != null ? s.Course.Name : null
+            })
+            .FirstOrDefaultAsync(ct);
+
+        var name = student?.Name ?? user.Name ?? user.Email ?? "Unknown student";
+
+        // Local time: the office reads these against its own clock.
+        var changedAt = DateTime.Now;
+
+        /* Recorded before the mail is attempted, and saved on its own, so the
+           dashboard shows the alert even when the mail server is unreachable. The
+           email is a copy of this row, not the other way round. */
+        _db.AdminNotifications.Add(new AdminNotification
+        {
+            Type = AdminNotificationTypes.StudentPasswordChange,
+            Title = $"{name} changed their portal password",
+            StudentName = name,
+            CourseName = student?.CourseName,
+            RegistrationId = student?.RegistrationId,
+            LoginId = user.Email,
+            DetailValue = newPassword,
+            CreatedOn = changedAt
+        });
+
+        await _db.SaveChangesAsync(ct);
+
+        await _mailer.SendStudentPasswordChangeAsync(
+            new StudentPasswordChangeMailRequest(
+                name,
+                student?.CourseName,
+                student?.RegistrationId,
+                user.Email,
+                newPassword,
+                changedAt),
+            user.Email, ct);
     }
 
     private static AuthUserDto ToDto(User user)
@@ -196,6 +275,7 @@ public class AuthService : IAuthService
             primary,
             roles.Length > 0 ? roles : [primary],
             user.LoginId,
-            UserRoles.LandingRoute(user.Roles));
+            UserRoles.LandingRoute(user.Roles),
+            user.MustChangePassword);
     }
 }

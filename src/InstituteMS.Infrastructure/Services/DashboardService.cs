@@ -1,4 +1,5 @@
 using System.Globalization;
+using InstituteMS.Application.Common;
 using InstituteMS.Application.Dashboard;
 using InstituteMS.Domain.Common;
 using InstituteMS.Infrastructure.Persistence;
@@ -18,6 +19,9 @@ public class DashboardService : IDashboardService
 {
     private const int TrendMonths = 12;
 
+    /// <summary>How many alerts the dashboard card shows before it stops being a dashboard.</summary>
+    private const int NotificationLimit = 10;
+
     private readonly AppDbContext _db;
 
     public DashboardService(AppDbContext db) => _db = db;
@@ -36,21 +40,83 @@ public class DashboardService : IDashboardService
         var notices = await GetRecentNoticesAsync(ct);
         var admissions = await GetRecentAdmissionsAsync(ct);
         var payments = await GetRecentPaymentsAsync(ct);
+        var enquiries = await GetPendingEnquiriesAsync(ct);
+        var notifications = await GetNotificationsAsync(ct);
+        var unread = await _db.AdminNotifications.CountAsync(n => n.ReadOn == null, ct);
 
         return new DashboardSummaryDto(
-            counts, finance, trend, enrolment, notices, admissions, payments, DateTime.UtcNow);
+            counts, finance, trend, enrolment, notices, admissions, payments,
+            enquiries, notifications, unread, DateTime.UtcNow);
+    }
+
+    /// <summary>
+    /// Unread first, then newest. Capped at <see cref="NotificationLimit"/> so a
+    /// long-unread dashboard stays a dashboard; the count beside it is of every
+    /// unread one, not just those shown.
+    /// </summary>
+    private async Task<IReadOnlyList<AdminNotificationDto>> GetNotificationsAsync(CancellationToken ct) =>
+        await _db.AdminNotifications
+            .AsNoTracking()
+            .OrderBy(n => n.ReadOn == null ? 0 : 1)
+            .ThenByDescending(n => n.CreatedOn)
+            .ThenByDescending(n => n.Id)
+            .Take(NotificationLimit)
+            .Select(n => new AdminNotificationDto(
+                n.Id, n.Type, n.Title, n.StudentName, n.CourseName,
+                n.RegistrationId, n.LoginId, n.DetailValue, n.CreatedOn,
+                n.ReadOn != null))
+            .ToListAsync(ct);
+
+    public async Task<Result<bool>> MarkNotificationReadAsync(
+        int id, string? actor, CancellationToken ct = default)
+    {
+        var notification = await _db.AdminNotifications.FirstOrDefaultAsync(n => n.Id == id, ct);
+
+        if (notification is null)
+            return Result<bool>.Failure("Notification not found.", ResultStatus.NotFound);
+
+        // Already read is success, not an error: two tabs open is not a failure.
+        if (notification.ReadOn is null)
+        {
+            notification.ReadOn = DateTime.Now;
+            notification.ReadBy = actor;
+            await _db.SaveChangesAsync(ct);
+        }
+
+        return Result<bool>.Success(true);
+    }
+
+    public async Task<Result<int>> MarkAllNotificationsReadAsync(
+        string? actor, CancellationToken ct = default)
+    {
+        var unread = await _db.AdminNotifications.Where(n => n.ReadOn == null).ToListAsync(ct);
+
+        foreach (var notification in unread)
+        {
+            notification.ReadOn = DateTime.Now;
+            notification.ReadBy = actor;
+        }
+
+        if (unread.Count > 0) await _db.SaveChangesAsync(ct);
+
+        return Result<int>.Success(unread.Count);
     }
 
     private async Task<DashboardCountsDto> GetCountsAsync(CancellationToken ct)
     {
-        var activeStudents = await _db.Students.CountAsync(s => s.IsActive, ct);
-        var inactiveStudents = await _db.Students.CountAsync(s => !s.IsActive, ct);
-        var completedStudents = await _db.Students.CountAsync(s => s.IsComplete, ct);
+        var activeStudents = await _db.Students.CountAsync(s => s.IsActive == true, ct);
+        // "!s.IsActive == true" would be (!IsActive) == true, which counts a NULL
+        // student as neither active nor inactive. "!= true" puts NULL here, where
+        // an unknown status belongs.
+        var inactiveStudents = await _db.Students.CountAsync(s => s.IsActive != true, ct);
+        var completedStudents = await _db.Students.CountAsync(s => s.IsComplete == true, ct);
         var courses = await _db.Courses.CountAsync(ct);
 
-        // Placeholder rows stand in for teachers deleted from the legacy system while
-        // still referenced; they are not real headcount.
-        var teachers = await _db.Teachers.CountAsync(t => t.CreatedBy != "migration-004-orphan", ct);
+        // Placeholder teachers were an artefact of migration 004, which only ever
+        // ran against the migrated database. dbo.Teacher in the legacy database has
+        // no CreatedBy column to mark them with and holds no such rows, so every
+        // teacher here is a real one.
+        var teachers = await _db.Teachers.CountAsync(ct);
 
         var studentAccounts = await _db.Users
             .CountAsync(u => u.IsActive && u.Roles != null && u.Roles.Contains(UserRoles.Student), ct);
@@ -58,7 +124,10 @@ public class DashboardService : IDashboardService
         var staffAccounts = await _db.Users
             .CountAsync(u => u.IsActive && (u.Roles == null || !u.Roles.Contains(UserRoles.Student)), ct);
 
-        var enquiries = await _db.ContactMessages.CountAsync(m => !m.IsHandled, ct);
+        // No side row means nobody has dealt with it yet, which is exactly the
+        // enquiry that should still be counted.
+        var enquiries = await _db.ContactMessages
+            .CountAsync(m => m.Ext == null || !m.Ext.IsHandled, ct);
 
         return new DashboardCountsDto(
             activeStudents, inactiveStudents, completedStudents,
@@ -120,7 +189,7 @@ public class DashboardService : IDashboardService
     private async Task<(decimal Outstanding, int StudentsInArrears)> GetOutstandingAsync(CancellationToken ct)
     {
         var activeRegIds = _db.Students
-            .Where(s => s.IsActive && s.RegistrationId != null)
+            .Where(s => s.IsActive == true && s.RegistrationId != null)
             .Select(s => s.RegistrationId!);
 
         var latestDues = await _db.MonthlyFees
@@ -195,7 +264,7 @@ public class DashboardService : IDashboardService
             {
                 c.Cid,
                 c.Name,
-                StudentCount = c.Students.Count(s => s.IsActive)
+                StudentCount = c.Students.Count(s => s.IsActive == true)
             })
             .Where(c => c.StudentCount > 0)
             .OrderByDescending(c => c.StudentCount)
@@ -218,7 +287,7 @@ public class DashboardService : IDashboardService
     private async Task<IReadOnlyList<RecentStudentDto>> GetRecentAdmissionsAsync(CancellationToken ct) =>
         await _db.Students
             .AsNoTracking()
-            .Where(s => s.IsActive)
+            .Where(s => s.IsActive == true)
             .OrderByDescending(s => s.DateOfJoining)
             .ThenByDescending(s => s.Id)
             .Take(5)
@@ -231,6 +300,42 @@ public class DashboardService : IDashboardService
     /// <c>StuRegId</c>, and because the legacy data has duplicate registration ids
     /// the first match is taken rather than assuming one.
     /// </summary>
+    public async Task<Result<bool>> MarkEnquiryHandledAsync(int id, CancellationToken ct = default)
+    {
+        var enquiry = await _db.ContactMessages.FirstOrDefaultAsync(m => m.Id == id, ct);
+
+        if (enquiry is null)
+            return Result<bool>.Failure("That enquiry no longer exists.", ResultStatus.NotFound);
+
+        // Marked, never deleted: the enquiry is still a record of who got in touch.
+        enquiry.IsHandled = true;
+        await _db.SaveChangesAsync(ct);
+
+        return Result<bool>.Success(true);
+    }
+
+    /// <summary>
+    /// The unhandled enquiries themselves, newest first. The dashboard has always
+    /// counted these, but there was nothing anywhere that showed the messages - the
+    /// badge said "15 new enquiry" and that was the end of it.
+    /// </summary>
+    /// <remarks>
+    /// Capped so one spam run cannot make the dashboard payload enormous; the count
+    /// beside it is the true total, so a larger backlog is still visible as a number.
+    /// </remarks>
+    private async Task<IReadOnlyList<EnquiryDto>> GetPendingEnquiriesAsync(CancellationToken ct)
+    {
+        return await _db.ContactMessages
+            .AsNoTracking()
+            .Where(m => m.Ext == null || !m.Ext.IsHandled)
+            .OrderByDescending(m => m.SubmittedOn)
+            .ThenByDescending(m => m.Id)
+            .Take(25)
+            .Select(m => new EnquiryDto(
+                m.Id, m.Name, m.Email, m.Phone, m.Body, m.SubmittedOn))
+            .ToListAsync(ct);
+    }
+
     private async Task<IReadOnlyList<RecentPaymentDto>> GetRecentPaymentsAsync(CancellationToken ct)
     {
         var rows = await _db.MonthlyFees

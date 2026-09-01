@@ -22,6 +22,22 @@ public static class UserRoles
     /// <summary>Roles allowed into the back-office dashboard (legacy <c>[Authorize(Roles="Admin,Editor")]</c>).</summary>
     public const string BackOffice = $"{Admin},{Editor}";
 
+    /// <summary>
+    /// Who may work with the master data — students, teachers, receptionists,
+    /// branches, courses, marks and notices. The receptionist runs the front desk,
+    /// so these are the screens they spend the day in.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Users is deliberately not a master.</b> The user screen creates
+    /// sign-ins and assigns roles, so a receptionist with access to it could make
+    /// themselves an administrator. It stays on <see cref="BackOffice"/>.</para>
+    ///
+    /// <para>Deleting also stays with the administrator on every one of these
+    /// screens. Reading and entering is the receptionist's job; destroying a master
+    /// row that reports and ledgers point at is not.</para>
+    /// </remarks>
+    public const string MasterData = $"{Admin},{Editor},{Receptionist}";
+
     /// <summary>Separators seen in the legacy column: "Receptionist &amp; Teacher", "A,B", "A/B".</summary>
     private static readonly char[] Separators = ['&', ',', '/', '+'];
 

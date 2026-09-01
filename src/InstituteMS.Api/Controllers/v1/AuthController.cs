@@ -1,3 +1,4 @@
+using InstituteMS.Api.Filters;
 using InstituteMS.Application.Auth;
 using InstituteMS.Application.Common;
 using Microsoft.AspNetCore.Authorization;
@@ -37,6 +38,7 @@ public class AuthController : ApiControllerBase
 
     /// <summary>Revokes the caller's refresh token.</summary>
     [HttpPost("logout")]
+    [AllowWhilePasswordResetPending]
     [Authorize]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Logout(CancellationToken ct)
@@ -49,6 +51,7 @@ public class AuthController : ApiControllerBase
 
     /// <summary>The signed-in user — replaces <c>Session["UserID"]</c> (defect D8).</summary>
     [HttpGet("me")]
+    [AllowWhilePasswordResetPending]
     [Authorize]
     [ProducesResponseType(typeof(ApiResponse<AuthUserDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Me(CancellationToken ct)
@@ -61,6 +64,7 @@ public class AuthController : ApiControllerBase
 
     /// <summary>Changes the caller's password and revokes their other sessions.</summary>
     [HttpPost("change-password")]
+    [AllowWhilePasswordResetPending]
     [Authorize]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
     public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request, CancellationToken ct)

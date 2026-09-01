@@ -31,6 +31,13 @@ public interface IStudentService
     /// <param name="branchId">Optional — shapes the preview as <c>AVI/{code}/{n}/{yy}</c>.</param>
     Task<NextRegistrationDto> PeekNextRegistrationAsync(int? branchId, CancellationToken ct = default);
 
+    /// <summary>
+    /// The portal sign-in that would be issued for a student name, so the
+    /// registration form can show it before the student is saved.
+    /// </summary>
+    Task<SuggestedLoginDto> SuggestLoginAsync(
+        string? studentName, int? excludingStudentId = null, CancellationToken ct = default);
+
     Task<Result<(byte[] Content, string ContentType, string FileName)>> GetPhotoAsync(
         string registrationId, CancellationToken ct = default);
 

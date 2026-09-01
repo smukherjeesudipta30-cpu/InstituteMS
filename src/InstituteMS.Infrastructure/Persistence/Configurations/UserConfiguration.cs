@@ -23,6 +23,7 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         b.Property(x => x.IsActive).HasColumnName("IsActive");
 
         b.Property(x => x.PasswordHash).HasColumnName("PasswordHash").HasMaxLength(255);
+        b.Property(x => x.MustChangePassword).HasColumnName("MustChangePassword");
         b.Property(x => x.RefreshToken).HasColumnName("RefreshToken").HasMaxLength(255);
         b.Property(x => x.RefreshTokenExpiry).HasColumnName("RefreshTokenExpiry");
         b.Property(x => x.FailedLoginCount).HasColumnName("FailedLoginCount");

@@ -17,7 +17,9 @@ public record ExpenseListItemDto(
     int ExpenseId,
     string? Details,
     DateOnly? ExpenseDate,
-    decimal Amount);
+    decimal Amount,
+    /// <summary>Where the money was spent. Null on entries taken before branches were recorded.</summary>
+    string? Branch);
 
 /// <summary>
 /// One expense entry. The legacy form posted three loose strings and inserted them
@@ -32,6 +34,12 @@ public record ExpenseSaveRequest
     public DateOnly? ExpenseDate { get; init; }
 
     public decimal Amount { get; init; }
+
+    /// <summary>
+    /// Which branch the money was spent at. Required: an expense saved without one
+    /// is invisible to the branch report for good.
+    /// </summary>
+    public string? Branch { get; init; }
 }
 
 /// <summary>Totals for whatever the current filter selects.</summary>
@@ -52,6 +60,13 @@ public class ExpenseSaveRequestValidator : AbstractValidator<ExpenseSaveRequest>
         RuleFor(x => x.Details)
             .NotEmpty().WithMessage("Expense details are required.")
             .MaximumLength(500).WithMessage("Expense details must be 500 characters or fewer.");
+
+        // Required, so every expense reaches the branch report. An entry saved
+        // without one would sit in "Unassigned" for good, and nothing later can
+        // tell where the money actually went.
+        RuleFor(x => x.Branch)
+            .NotEmpty().WithMessage("Choose the branch this expense belongs to.")
+            .MaximumLength(100);
 
         // The column is decimal(9,2): five digits before the point once scale is taken
         // off, so anything from 1,000,000 up cannot be stored.

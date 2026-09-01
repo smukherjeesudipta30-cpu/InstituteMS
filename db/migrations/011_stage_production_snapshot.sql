@@ -12,8 +12,12 @@
    with 'rpc out' = false, so no remote procedure can be executed through
    it; only SELECT is possible.
 
-   The older restored copy, ph19987796653_, is left untouched as a
-   reference point for comparing what changed since 31-05-2026.
+   The older restored copy, ph19987796653_, has been dropped. It was a
+   backup from 31-05-2026 holding roughly half of production - 459
+   students against 953 - and every script that still pointed at it was
+   quietly loading stale data. Keeping it around only invited that
+   mistake again; restore the .bak if a point-in-time comparison is ever
+   needed.
 
    SELECT ... INTO reproduces each source column's own type and width,
    which matters: production is wider than the old backup in several

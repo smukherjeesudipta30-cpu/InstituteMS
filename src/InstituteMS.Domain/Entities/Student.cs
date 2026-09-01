@@ -26,18 +26,44 @@ public class Student
     public int? PrimaryTeacherId { get; set; }
     public int? SecondTeacherId { get; set; }
     public int? ThirdTeacherId { get; set; }
-    public bool IsActive { get; set; }
-    public bool IsComplete { get; set; }
+    /// <summary>
+    /// Nullable because the legacy columns are. Both are <c>bit NULL</c> in
+    /// <c>dbo.student</c> and six production students have <c>IsComplete = NULL</c>;
+    /// a non-nullable property makes EF read the column with GetBoolean and throw
+    /// "Data is Null" on those rows before any converter can intervene.
+    ///
+    /// Treat NULL as false at every use: an unknown completion is not a
+    /// completion, so no certificate is offered on the strength of a missing value.
+    /// </summary>
+    public bool? IsActive { get; set; }
+
+    /// <inheritdoc cref="IsActive"/>
+    public bool? IsComplete { get; set; }
     /// <summary>User who created/last touched the row (legacy <c>patCode</c> = Session["UserID"]).</summary>
     public string? LoginId { get; set; }
     public string? Branch { get; set; }
     public string? PersonalEmail { get; set; }
     public string? AvijanLoginEmail { get; set; }
+
+    /// <summary>
+    /// The student portal password, generated when the student is registered.
+    /// <b>Stored in clear text</b>, exactly as production does - the office needs to
+    /// be able to read it back to the student. The account they actually sign in
+    /// with is <c>dbo.Users</c>, where the same value is held as a BCrypt hash.
+    /// </summary>
+    public string? AvijanLoginPassword { get; set; }
     /// <summary>Legacy self-reference written by <c>usp_StudentSaveData</c> (Replica_id = own id).</summary>
     public int? ReplicaId { get; set; }
 
     public string? CreatedBy { get; set; }
-    public DateTime CreatedOn { get; set; }
+    /// <summary>
+    /// Nullable: the audit columns were added to the legacy tables by the
+    /// coexistence script and are NULL on every row that predates it - all 755
+    /// users, all 953 students. A non-nullable property makes EF throw
+    /// "Data is Null" on those rows. Unknown is the honest value; inventing a
+    /// creation date would be worse.
+    /// </summary>
+    public DateTime? CreatedOn { get; set; }
     public string? ModifiedBy { get; set; }
     public DateTime? ModifiedOn { get; set; }
 

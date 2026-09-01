@@ -3,17 +3,23 @@ using InstituteMS.Application.Academics;
 using InstituteMS.Application.Auth;
 using InstituteMS.Application.Common.Interfaces;
 using InstituteMS.Application.Dashboard;
+using InstituteMS.Application.Documents;
 using InstituteMS.Application.Fees;
 using InstituteMS.Application.Income;
 using InstituteMS.Application.Lookups;
 using InstituteMS.Application.Masters;
+using InstituteMS.Application.Notifications;
+using InstituteMS.Application.Enquiries;
 using InstituteMS.Application.Expenses;
+using InstituteMS.Application.Exams;
 using InstituteMS.Application.Reports;
 using InstituteMS.Application.Students;
 using InstituteMS.Application.Users;
+using InstituteMS.Infrastructure.Documents;
 using InstituteMS.Infrastructure.Persistence;
 using InstituteMS.Infrastructure.Security;
 using InstituteMS.Infrastructure.Services;
+using InstituteMS.Infrastructure.Settings;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,6 +45,8 @@ public static class DependencyInjection
 
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
         services.Configure<InstituteProfileOptions>(configuration.GetSection(InstituteProfileOptions.SectionName));
+        services.Configure<PaymentSettings>(configuration.GetSection(PaymentSettings.SectionName));
+        services.Configure<MailOptions>(configuration.GetSection(MailOptions.SectionName));
 
         services.AddSingleton<IPasswordHasher, BCryptPasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
@@ -52,13 +60,21 @@ public static class DependencyInjection
         services.AddScoped<IFeeService, FeeService>();
         services.AddScoped<IIncomeService, IncomeService>();
         services.AddScoped<ITeacherService, TeacherService>();
+        services.AddScoped<IReceptionistService, ReceptionistService>();
+        services.AddScoped<IOtherIncomeService, OtherIncomeService>();
+        services.AddScoped<IStudentMailer, SmtpStudentMailer>();
         services.AddScoped<IBranchService, BranchService>();
         services.AddScoped<ICourseService, CourseService>();
         services.AddScoped<IMarkService, MarkService>();
         services.AddScoped<INoticeService, NoticeService>();
+        services.AddScoped<IEnquiryService, EnquiryService>();
+        services.AddSingleton<IReceiptPdfGenerator, ReceiptPdfGenerator>();
+        services.AddScoped<IReceiptLinkService, ReceiptLinkService>();
         services.AddScoped<IReportService, ReportService>();
         services.AddScoped<IExpenseService, ExpenseService>();
+        services.AddScoped<IExamService, ExamService>();
         services.AddScoped<RegistrationNumberService>();
+        services.AddScoped<StudentLoginGenerator>();
 
         return services;
     }

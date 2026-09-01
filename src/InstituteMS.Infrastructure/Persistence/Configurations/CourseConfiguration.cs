@@ -14,9 +14,13 @@ public class CourseConfiguration : IEntityTypeConfiguration<Course>
         b.Property(x => x.Cid).HasColumnName("Cid");
         b.Property(x => x.Name).HasColumnName("CName").HasMaxLength(300);
         b.Property(x => x.Duration).HasColumnName("Duration");
-        b.Property(x => x.CreatedBy).HasColumnName("CreatedBy").HasMaxLength(50);
-        b.Property(x => x.CreatedOn).HasColumnName("CreatedOn");
-        b.Property(x => x.ModifiedBy).HasColumnName("ModifiedBy").HasMaxLength(50);
-        b.Property(x => x.ModifiedOn).HasColumnName("ModifiedOn");
+        // The legacy application inserts into this table with "INSERT INTO t
+        // VALUES (...)" and no column list, so it cannot gain audit columns
+        // without that statement failing. The properties stay on the entity and
+        // simply are not persisted.
+        b.Ignore(x => x.CreatedBy);
+        b.Ignore(x => x.CreatedOn);
+        b.Ignore(x => x.ModifiedBy);
+        b.Ignore(x => x.ModifiedOn);
     }
 }

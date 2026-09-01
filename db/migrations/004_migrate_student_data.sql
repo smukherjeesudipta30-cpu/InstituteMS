@@ -1,6 +1,6 @@
 /* =====================================================================
    004_migrate_student_data.sql
-   Source    : ph19987796653_   (legacy, READ ONLY -- never written to)
+   Source    : ph19987796653_prod   (production snapshot, READ ONLY)
    Target    : Avijan_Angular_Migration
    Purpose   : Load the real Course / Teacher / Student / ImageUpload data.
 
@@ -47,9 +47,9 @@ GO
 USE [Avijan_Angular_Migration];
 GO
 
-IF DB_ID('ph19987796653_') IS NULL
+IF DB_ID('ph19987796653_prod') IS NULL
 BEGIN
-    RAISERROR('Source database ph19987796653_ is not attached on this server.', 16, 1);
+    RAISERROR('Source database ph19987796653_prod is not attached on this server.', 16, 1);
     RETURN;
 END
 GO
@@ -76,6 +76,21 @@ SELECT  c.CId,
         SYSDATETIME()
 FROM    ph19987796653_prod.dbo.Course AS c;
 
+/* T11: placeholders for courses deleted while students still referenced
+   them - the same defect as T4, on the Course side. Production has 10
+   students on course id 28, which no longer exists in Course. Nulling the
+   reference would lose which course those students were enrolled on. */
+INSERT INTO dbo.Course (Cid, CName, Duration, CreatedBy, CreatedOn)
+SELECT  DISTINCT s.Cid,
+        '(removed course #' + CAST(s.Cid AS varchar(10)) + ')',
+        NULL,
+        'migration-004-orphan',
+        SYSDATETIME()
+FROM    ph19987796653_prod.dbo.student AS s
+WHERE   s.Cid IS NOT NULL
+        AND s.Cid <> 0
+        AND NOT EXISTS (SELECT 1 FROM dbo.Course c WHERE c.Cid = s.Cid);
+
 SET IDENTITY_INSERT dbo.Course OFF;
 GO
 
@@ -100,11 +115,19 @@ SELECT  DISTINCT o.TecId,
         'migration-004-orphan',
         SYSDATETIME()
 FROM (
+        /* Every place a teacher id is referenced, not just the student rows:
+           TecFees and TecExpense also point at teachers that were deleted,
+           and 6 of those ids appear nowhere on a student. Missing them left
+           FK_TecExpense_Teacher failing when 008 loaded the payouts. */
         SELECT s.TecName  AS TecId FROM ph19987796653_prod.dbo.student s WHERE s.TecName  > 0
         UNION
         SELECT s.TecName1        FROM ph19987796653_prod.dbo.student s WHERE s.TecName1 > 0
         UNION
         SELECT s.TecName2        FROM ph19987796653_prod.dbo.student s WHERE s.TecName2 > 0
+        UNION
+        SELECT f.tecid           FROM ph19987796653_prod.dbo.TecFees f    WHERE f.tecid > 0
+        UNION
+        SELECT e.tecid           FROM ph19987796653_prod.dbo.TecExpense e WHERE e.tecid > 0
      ) AS o
 WHERE NOT EXISTS (SELECT 1 FROM dbo.Teacher t WHERE t.id = o.TecId);
 

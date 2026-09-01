@@ -72,12 +72,18 @@ public class UsersController : ApiControllerBase
     /// handed to that member of staff.
     /// </summary>
     /// <remarks>
-    /// The legacy Users grid rendered the plain-text <c>Password</c> column so an
-    /// administrator could read out someone's sign-in. Passwords are BCrypt hashes
-    /// now and cannot be reversed, so there is nothing to display: an administrator
-    /// who needs to tell a teacher or receptionist their password <em>sets</em> a
-    /// known one here and passes that on. The value is hashed on arrival, never
-    /// stored or returned in clear text, and the user's other sessions are ended.
+    /// <para>
+    /// For <b>staff</b>, the stored password is a BCrypt hash and cannot be read
+    /// back, so an administrator who needs to tell a teacher or receptionist their
+    /// sign-in <em>sets</em> a known one here and passes that on.
+    /// </para>
+    /// <para>
+    /// For a <b>student</b>, the portal password issued at registration is also kept
+    /// in clear on their student row (as production does, so the office can read it
+    /// back), and <see cref="UserListItemDto.StudentPassword"/> returns it. Setting a
+    /// new one here updates both that copy and the hash, so the two never drift.
+    /// </para>
+    /// <para>The user's other sessions are ended either way.</para>
     /// </remarks>
     [HttpPost("{id:int}/set-password")]
     [Authorize(Roles = UserRoles.Admin)]
@@ -88,7 +94,7 @@ public class UsersController : ApiControllerBase
         int id, [FromBody] SetPasswordRequest request, CancellationToken ct)
         => Envelope(
             await _users.SetPasswordAsync(id, request.Password, CurrentUserName, ct),
-            "Password set. Share it with the user - it cannot be shown again.");
+            "Password set. Share it with the user.");
 
     /// <summary>Enables or disables an account. Disabling also revokes its refresh token.</summary>
     [HttpPatch("{id:int}/status")]

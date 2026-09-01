@@ -72,7 +72,10 @@ public class ReportsController : ApiControllerBase
     /// <c>LoginId</c> matches their sign-in and gets 403 for anyone else's.
     /// </remarks>
     [HttpGet("teacher-earnings")]
-    [Authorize(Roles = $"{UserRoles.BackOffice},{UserRoles.Teacher}")]
+    // Admin and the teacher themselves. Narrower than the legacy
+    // "Editor,Admin,Teacher": a teacher's account is what the institute owes a
+    // named person, and paying it is an administrator's decision.
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Teacher}")]
     [ProducesResponseType(typeof(ApiResponse<TeacherEarningsReportDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<TeacherEarningsReportDto>), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ApiResponse<TeacherEarningsReportDto>), StatusCodes.Status404NotFound)]
@@ -82,7 +85,10 @@ public class ReportsController : ApiControllerBase
         [FromQuery] DateOnly to,
         CancellationToken ct)
     {
-        if (!IsBackOffice)
+        // Admin, not IsBackOffice. Editors can no longer reach this endpoint at
+        // all, and someone holding Editor *and* Teacher would otherwise satisfy
+        // IsBackOffice and read every teacher's account through their Teacher role.
+        if (!User.IsInRole(UserRoles.Admin))
         {
             var own = await _reports.ResolveOwnTeacherIdAsync(CurrentUserName ?? string.Empty, ct);
 
@@ -154,6 +160,25 @@ public class ReportsController : ApiControllerBase
     }
 
     /// <summary>
+    /// Admissions, fee payments and expenses by branch, bucketed by month,
+    /// quarter or year.
+    /// </summary>
+    /// <remarks>
+    /// An admission and a payment reach a branch through the student; an expense
+    /// through the branch recorded on the expense itself. Anything with no branch
+    /// is reported as <c>Unassigned</c> rather than dropped, so these totals
+    /// reconcile against the unfiltered admission, income and expense reports.
+    /// </remarks>
+    [HttpGet("branch")]
+    // Whole-institute money. The class-level [Authorize] alone would let any
+    // signed-in student read it.
+    [Authorize(Roles = UserRoles.BackOffice)]
+    [ProducesResponseType(typeof(ApiResponse<BranchReportDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<BranchReportDto>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Branch([FromQuery] BranchReportQuery query, CancellationToken ct)
+        => Envelope(await _reports.GetBranchReportAsync(query, ct));
+
+    /// <summary>
     /// The signed-in student's own registration id, resolved from their email the
     /// way the legacy page resolved it from <c>Session["UserID"]</c>.
     /// </summary>
@@ -167,13 +192,21 @@ public class ReportsController : ApiControllerBase
     /// to a printable view. Anyone could edit that URL and print a certificate
     /// naming any person, course and grade they liked. Nothing is passed in here:
     /// every field is read server-side from the signed-in student's own record.
+    ///
+    /// <para><b>POST, because issuing a certificate is not a read.</b> The first
+    /// call returns the original; every call after it returns the next numbered
+    /// DUPLICATE COPY, and each is recorded in <c>dbo.CertificateIssue</c>. A GET
+    /// would be re-fetched by browsers, caches and refreshes, quietly inflating the
+    /// count — and a non-recording variant would be the obvious way to take an
+    /// unmarked second copy, so there isn't one.</para>
     /// </remarks>
-    [HttpGet("my-certificate")]
+    [HttpPost("my-certificate")]
     [Authorize(Roles = UserRoles.Student)]
     [ProducesResponseType(typeof(ApiResponse<StudentCertificateDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<StudentCertificateDto>), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ApiResponse<StudentCertificateDto>), StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> MyCertificate(CancellationToken ct)
-        => Envelope(await _reports.GetOwnCertificateAsync(CurrentUserName ?? string.Empty, ct));
+    public async Task<IActionResult> IssueMyCertificate(CancellationToken ct)
+        => Envelope(await _reports.IssueOwnCertificateAsync(CurrentUserName ?? string.Empty, ct));
 
     /// <summary>
     /// Money receipt for one of the signed-in student's own payments — the per-row

@@ -39,40 +39,64 @@ public class IncomeService : IIncomeService
     public IncomeService(AppDbContext db) => _db = db;
 
     public async Task<Result<IncomeReportDto>> GetReportAsync(
-        DateOnly from, DateOnly to, CancellationToken ct = default)
+        DateOnly from, DateOnly to, string? branch = null, CancellationToken ct = default)
     {
+        branch = string.IsNullOrWhiteSpace(branch) ? null : branch.Trim();
+
         if (to < from)
             return Result<IncomeReportDto>.Failure("The 'to' date cannot be before the 'from' date.", ResultStatus.BadRequest);
 
         // Totals come straight from SQL aggregates, so they stay correct however many
         // detail rows the range contains.
-        var fees = await FeeQuery(from, to).SumAsync(f => (decimal?)f.Installment ?? 0m, ct);
-        var feeCount = await FeeQuery(from, to).CountAsync(ct);
+        var fees = await FeeQuery(from, to, branch).SumAsync(f => (decimal?)f.Installment ?? 0m, ct);
+        var feeCount = await FeeQuery(from, to, branch).CountAsync(ct);
 
-        var admissions = await AdmissionQuery(from, to).SumAsync(s => (decimal?)s.AdmissionFees ?? 0m, ct);
-        var admissionCount = await AdmissionQuery(from, to).CountAsync(ct);
+        var admissions = await AdmissionQuery(from, to, branch).SumAsync(s => (decimal?)s.AdmissionFees ?? 0m, ct);
+        var admissionCount = await AdmissionQuery(from, to, branch).CountAsync(ct);
 
-        var otherIncome = await OtherIncomeQuery(from, to).SumAsync(i => (decimal?)i.Amount ?? 0m, ct);
-        var otherIncomeCount = await OtherIncomeQuery(from, to).CountAsync(ct);
+        var otherIncome = await OtherIncomeQuery(from, to, branch).SumAsync(i => (decimal?)i.Amount ?? 0m, ct);
+        var otherIncomeCount = await OtherIncomeQuery(from, to, branch).CountAsync(ct);
 
-        var lateFines = await LateFineQuery(from, to).SumAsync(l => (decimal?)l.FineAmount ?? 0m, ct);
-        var lateFineCount = await LateFineQuery(from, to).CountAsync(ct);
+        var lateFines = await LateFineQuery(from, to, branch).SumAsync(l => (decimal?)l.FineAmount ?? 0m, ct);
+        var lateFineCount = await LateFineQuery(from, to, branch).CountAsync(ct);
 
-        var expenses = await ExpenseQuery(from, to).SumAsync(e => (decimal?)e.Amount ?? 0m, ct);
-        var expenseCount = await ExpenseQuery(from, to).CountAsync(ct);
+        var expenses = await ExpenseQuery(from, to, branch).SumAsync(e => (decimal?)e.Amount ?? 0m, ct);
+        var expenseCount = await ExpenseQuery(from, to, branch).CountAsync(ct);
 
-        var teacherPayouts = await TeacherPayoutQuery(from, to).SumAsync(t => (decimal?)t.Salary ?? 0m, ct);
-        var teacherPayoutCount = await TeacherPayoutQuery(from, to).CountAsync(ct);
+        var teacherPayouts = await TeacherPayoutQuery(from, to, branch).SumAsync(t => (decimal?)t.Salary ?? 0m, ct);
+        var teacherPayoutCount = await TeacherPayoutQuery(from, to, branch).CountAsync(ct);
 
-        var teacherExpenses = await TeacherExpenseQuery(from, to).SumAsync(t => (decimal?)t.Amount ?? 0m, ct);
-        var teacherExpenseCount = await TeacherExpenseQuery(from, to).CountAsync(ct);
+        var teacherExpenses = await TeacherExpenseQuery(from, to, branch).SumAsync(t => (decimal?)t.Amount ?? 0m, ct);
+        var teacherExpenseCount = await TeacherExpenseQuery(from, to, branch).CountAsync(ct);
 
         // Movement in dues: how much the outstanding balance grew or shrank.
-        var duesMovement = await FeeQuery(from, to)
+        var duesMovement = await FeeQuery(from, to, branch)
             .SumAsync(f => ((decimal?)f.NewDue ?? 0m) - ((decimal?)f.OldDue ?? 0m), ct);
 
+        var receptionistPay = await ReceptionistPayQuery(from, to, branch)
+            .SumAsync(p => (decimal?)p.Amount ?? 0m, ct);
+
+        var receptionistPayCount = await ReceptionistPayQuery(from, to, branch).CountAsync(ct);
+
         var totalIncome = fees + admissions + otherIncome;
-        var totalCost = expenses + teacherPayouts + teacherExpenses;
+
+        /* ---- teacher cost is counted ONCE ---------------------------------
+           TecFees and TecExpense are the two sides of one obligation, not two
+           costs. A teacher's share is incurred the moment a fee is collected
+           (TecFees); handing the money over later (TecExpense) settles that
+           liability, exactly like paying a creditor.
+
+           Adding both roughly doubled the teacher cost: across 2026 the two
+           came to Rs 2,30,782.80 and Rs 2,31,160 — the same money, counted
+           twice, understating profit by about Rs 2.3 lakh.
+
+           The share earned is the cost, because that is when it was incurred
+           and because it is written automatically with every fee. What has
+           actually been handed over is still reported alongside it, but as a
+           figure in its own right rather than a subset: paid can exceed
+           earned within a range, so it is not an "of which" at all. */
+
+        var totalCost = expenses + teacherPayouts + receptionistPay;
         var net = totalIncome - totalCost;
 
         var margin = totalIncome == 0m
@@ -86,26 +110,42 @@ public class IncomeService : IIncomeService
             new(IncomeSection.OtherIncome, "Other income", otherIncome, otherIncomeCount, false, false),
             new(IncomeSection.LateFines, "of which late fines", lateFines, lateFineCount, false, true),
             new(IncomeSection.Expenses, "Institute expenses", expenses, expenseCount, true, false),
-            new(IncomeSection.TeacherPayouts, "Teacher payouts", teacherPayouts, teacherPayoutCount, true, false),
-            new(IncomeSection.TeacherExpenses, "Teacher expenses", teacherExpenses, teacherExpenseCount, true, false),
+            /* Two views of ONE obligation, never to be added together.
+                 earned = dbo.TecFees    - the teacher's share accrued each time a
+                                           student pays, one row per teacher per
+                                           payment (2,080 rows in 2026)
+                 paid   = dbo.TecExpense - cash actually handed over, recorded on
+                                           the Teacher master (111 rows in 2026)
+
+               They were labelled "Teacher payouts" and "of which paid to
+               teachers", which was wrong: paid exceeded earned by 508 rupees in
+               2026, and a subset cannot be larger than what contains it. Payment
+               settles work accrued before the range began, so paid legitimately
+               runs ahead. The labels no longer imply containment. Only `earned`
+               counts towards the cost total; `paid` stays informational, exactly
+               as before. */
+            new(IncomeSection.TeacherPayouts, "Teacher share earned", teacherPayouts, teacherPayoutCount, true, false),
+            new(IncomeSection.TeacherExpenses, "Paid to teachers", teacherExpenses, teacherExpenseCount, true, true),
+            new(IncomeSection.ReceptionistPay, "Receptionist pay", receptionistPay, receptionistPayCount, true, false),
             new(IncomeSection.Dues, "Dues movement", duesMovement, feeCount, false, true)
         };
 
-        var monthly = await GetMonthlyAsync(from, to, ct);
+        var monthly = await GetMonthlyAsync(from, to, branch, ct);
 
         return Result<IncomeReportDto>.Success(new IncomeReportDto(
             from, to,
             fees, admissions, otherIncome, totalIncome,
             lateFines,
-            expenses, teacherPayouts, teacherExpenses, totalCost,
+            expenses, teacherPayouts, teacherExpenses, receptionistPay, totalCost,
             net, margin, duesMovement,
-            sections, monthly, DateTime.UtcNow));
+            sections, monthly, DateTime.Now, branch, branch is not null));
     }
 
     public async Task<PagedResult<IncomeDetailDto>> GetDetailAsync(
         IncomeDetailQuery query, CancellationToken ct = default)
     {
         var (from, to) = (query.From, query.To);
+        var branch = string.IsNullOrWhiteSpace(query.Branch) ? null : query.Branch.Trim();
         var skip = (query.Page - 1) * query.PageSize;
 
         switch (query.Section)
@@ -113,7 +153,7 @@ public class IncomeService : IIncomeService
             case IncomeSection.Fees:
             case IncomeSection.Dues:
             {
-                var source = FeeQuery(from, to);
+                var source = FeeQuery(from, to, branch);
                 var total = await source.CountAsync(ct);
 
                 var rows = await source
@@ -143,7 +183,7 @@ public class IncomeService : IIncomeService
 
             case IncomeSection.Admissions:
             {
-                var source = AdmissionQuery(from, to);
+                var source = AdmissionQuery(from, to, branch);
                 var total = await source.CountAsync(ct);
 
                 var items = await source
@@ -160,7 +200,7 @@ public class IncomeService : IIncomeService
 
             case IncomeSection.OtherIncome:
             {
-                var source = OtherIncomeQuery(from, to);
+                var source = OtherIncomeQuery(from, to, branch);
                 var total = await source.CountAsync(ct);
 
                 var items = await source
@@ -176,7 +216,7 @@ public class IncomeService : IIncomeService
 
             case IncomeSection.LateFines:
             {
-                var source = LateFineQuery(from, to);
+                var source = LateFineQuery(from, to, branch);
                 var total = await source.CountAsync(ct);
 
                 var rows = await source
@@ -198,7 +238,7 @@ public class IncomeService : IIncomeService
 
             case IncomeSection.Expenses:
             {
-                var source = ExpenseQuery(from, to);
+                var source = ExpenseQuery(from, to, branch);
                 var total = await source.CountAsync(ct);
 
                 var items = await source
@@ -214,7 +254,7 @@ public class IncomeService : IIncomeService
 
             case IncomeSection.TeacherPayouts:
             {
-                var source = TeacherPayoutQuery(from, to);
+                var source = TeacherPayoutQuery(from, to, branch);
                 var total = await source.CountAsync(ct);
 
                 var rows = await source
@@ -240,7 +280,7 @@ public class IncomeService : IIncomeService
 
             case IncomeSection.TeacherExpenses:
             {
-                var source = TeacherExpenseQuery(from, to);
+                var source = TeacherExpenseQuery(from, to, branch);
                 var total = await source.CountAsync(ct);
 
                 var items = await source
@@ -255,6 +295,27 @@ public class IncomeService : IIncomeService
                 return PagedResult<IncomeDetailDto>.Create(items, query.Page, query.PageSize, total);
             }
 
+            case IncomeSection.ReceptionistPay:
+            {
+                var source = ReceptionistPayQuery(from, to, branch);
+                var total = await source.CountAsync(ct);
+
+                var items = await source
+                    .OrderByDescending(p => p.PaidOn ?? p.PayMonth).ThenByDescending(p => p.Id)
+                    .Skip(skip).Take(query.PageSize)
+                    .Select(p => new IncomeDetailDto(
+                        p.Id,
+                        p.PaidOn ?? p.PayMonth,
+                        null, null, null, null,
+                        p.Receptionist != null ? p.Receptionist.Name : null,
+                        // The month it covers, since that is not the date shown.
+                        "Receptionist pay",
+                        p.Amount))
+                    .ToListAsync(ct);
+
+                return PagedResult<IncomeDetailDto>.Create(items, query.Page, query.PageSize, total);
+            }
+
             default:
                 return PagedResult<IncomeDetailDto>.Create([], query.Page, query.PageSize, 0);
         }
@@ -263,39 +324,48 @@ public class IncomeService : IIncomeService
     /* ------------------------------------------------------------- monthly */
 
     private async Task<IReadOnlyList<IncomeTrendPointDto>> GetMonthlyAsync(
-        DateOnly from, DateOnly to, CancellationToken ct)
+        DateOnly from, DateOnly to, string? branch, CancellationToken ct)
     {
         // Cap the chart so a decade-wide range does not return hundreds of points.
         var months = ((to.Year - from.Year) * 12) + to.Month - from.Month + 1;
         if (months is < 1 or > 36) return [];
 
-        var feeByMonth = await FeeQuery(from, to)
+        var feeByMonth = await FeeQuery(from, to, branch)
             .GroupBy(f => new { f.FeeDate!.Value.Year, f.FeeDate!.Value.Month })
             .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Installment ?? 0m)))
             .ToListAsync(ct);
 
-        var admissionByMonth = await AdmissionQuery(from, to)
+        var admissionByMonth = await AdmissionQuery(from, to, branch)
             .GroupBy(s => new { s.DateOfJoining!.Value.Year, s.DateOfJoining!.Value.Month })
             .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.AdmissionFees ?? 0m)))
             .ToListAsync(ct);
 
-        var otherByMonth = await OtherIncomeQuery(from, to)
+        var otherByMonth = await OtherIncomeQuery(from, to, branch)
             .GroupBy(i => new { i.IncomeDate!.Value.Year, i.IncomeDate!.Value.Month })
             .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Amount ?? 0m)))
             .ToListAsync(ct);
 
-        var expenseByMonth = await ExpenseQuery(from, to)
+        var expenseByMonth = await ExpenseQuery(from, to, branch)
             .GroupBy(e => new { e.ExpenseDate!.Value.Year, e.ExpenseDate!.Value.Month })
             .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Amount ?? 0m)))
             .ToListAsync(ct);
 
-        var payoutByMonth = await TeacherPayoutQuery(from, to)
+        var payoutByMonth = await TeacherPayoutQuery(from, to, branch)
             .GroupBy(t => new { t.PaidOn!.Value.Year, t.PaidOn!.Value.Month })
             .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Salary ?? 0m)))
             .ToListAsync(ct);
 
-        var teacherExpenseByMonth = await TeacherExpenseQuery(from, to)
+        var teacherExpenseByMonth = await TeacherExpenseQuery(from, to, branch)
             .GroupBy(t => new { t.ExpenseDate!.Value.Year, t.ExpenseDate!.Value.Month })
+            .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Amount ?? 0m)))
+            .ToListAsync(ct);
+
+        var receptionistByMonth = await ReceptionistPayQuery(from, to, branch)
+            .GroupBy(p => new
+            {
+                (p.PaidOn ?? p.PayMonth).Year,
+                (p.PaidOn ?? p.PayMonth).Month
+            })
             .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Amount ?? 0m)))
             .ToListAsync(ct);
 
@@ -306,7 +376,10 @@ public class IncomeService : IIncomeService
              cursor = cursor.AddMonths(1))
         {
             var income = Total(feeByMonth, cursor) + Total(admissionByMonth, cursor) + Total(otherByMonth, cursor);
-            var cost = Total(expenseByMonth, cursor) + Total(payoutByMonth, cursor) + Total(teacherExpenseByMonth, cursor);
+            // Teacher cost is the payout, not the payout plus the cash settling it.
+            var cost = Total(expenseByMonth, cursor)
+                       + Total(payoutByMonth, cursor)
+                       + Total(receptionistByMonth, cursor);
 
             var label = CultureInfo.InvariantCulture.DateTimeFormat.GetAbbreviatedMonthName(cursor.Month);
             points.Add(new IncomeTrendPointDto(cursor.Year, cursor.Month, label, income, cost, income - cost));
@@ -325,32 +398,128 @@ public class IncomeService : IIncomeService
        lists, so a figure can never disagree with the rows behind it. Ranges
        are inclusive of both ends, matching the legacy BETWEEN. */
 
-    private IQueryable<Domain.Entities.MonthlyFee> FeeQuery(DateOnly from, DateOnly to) =>
-        _db.MonthlyFees.AsNoTracking().Where(f => f.FeeDate >= from && f.FeeDate <= to);
+    /* ---- branch scoping ------------------------------------------------
+       Five of the seven sources reach a branch: fees, admissions, late fines
+       and teacher payouts through the student who paid, and expenses through
+       the branch on the expense row.
+
+       Two do not. Other income (OIncome) and teacher expenses (TecExpense)
+       have no branch and no student to borrow one from. Rather than fold
+       institute-wide figures into one branch's profit — which would make
+       every branch look worse than it is — they are excluded when a branch is
+       selected, and the report says so. */
+
+    /// <summary>Registration ids of students at one branch, for scoping the fee tables.</summary>
+    private IQueryable<string> RegistrationIdsAtBranch(string branch) =>
+        _db.Students.AsNoTracking()
+            .Where(s => s.RegistrationId != null && s.Branch != null && s.Branch == branch)
+            .Select(s => s.RegistrationId!);
+
+    private IQueryable<Domain.Entities.MonthlyFee> FeeQuery(DateOnly from, DateOnly to, string? branch = null)
+    {
+        var q = _db.MonthlyFees.AsNoTracking().Where(f => f.FeeDate >= from && f.FeeDate <= to);
+
+        return branch is null
+            ? q
+            : q.Where(f => f.StudentRegistrationId != null
+                           && RegistrationIdsAtBranch(branch).Contains(f.StudentRegistrationId));
+    }
 
     /// <summary>
     /// Admission fees of students who joined in the range. The legacy roll-up
     /// restricted this to active students, so a student who has since left drops out
     /// of a historic report; that behaviour is preserved.
     /// </summary>
-    private IQueryable<Domain.Entities.Student> AdmissionQuery(DateOnly from, DateOnly to) =>
-        _db.Students.AsNoTracking()
-            .Where(s => s.IsActive && s.DateOfJoining >= from && s.DateOfJoining <= to);
+    private IQueryable<Domain.Entities.Student> AdmissionQuery(DateOnly from, DateOnly to, string? branch = null)
+    {
+        /* NOT filtered on IsActive, deliberately.
+           ------------------------------------------------------------------
+           An admission fee is cash received on the day of admission. Nothing
+           that happens afterwards un-receives it, so filtering on the
+           student's CURRENT status made a past period's income shrink every
+           time somebody left: run the report in March and again in August and
+           the same range reported less the second time.
 
-    private IQueryable<Domain.Entities.OtherIncome> OtherIncomeQuery(DateOnly from, DateOnly to) =>
-        _db.OtherIncomes.AsNoTracking().Where(i => i.IncomeDate >= from && i.IncomeDate <= to);
+           It was hiding 354,800 rupees of real income - 327 students who
+           COMPLETED their course and were closed off, 338 more who paid
+           monthly fees for a while before leaving, and 47 who enrolled and
+           never came back. All three paid to enrol.
 
-    private IQueryable<Domain.Entities.LateFee> LateFineQuery(DateOnly from, DateOnly to) =>
-        _db.LateFees.AsNoTracking().Where(l => l.FineDate >= from && l.FineDate <= to);
+           It is also inconsistent with how costs are treated here: an expense
+           is not removed because the thing it bought was later discarded. */
+        var q = _db.Students.AsNoTracking()
+            .Where(s => s.DateOfJoining >= from && s.DateOfJoining <= to);
 
-    private IQueryable<Domain.Entities.Expense> ExpenseQuery(DateOnly from, DateOnly to) =>
-        _db.Expenses.AsNoTracking().Where(e => e.ExpenseDate >= from && e.ExpenseDate <= to);
+        return branch is null ? q : q.Where(s => s.Branch == branch);
+    }
 
-    private IQueryable<Domain.Entities.TeacherFee> TeacherPayoutQuery(DateOnly from, DateOnly to) =>
-        _db.TeacherFees.AsNoTracking().Where(t => t.PaidOn >= from && t.PaidOn <= to);
+    /// <summary>Non-fee income, scoped by the branch recorded on the entry.</summary>
+    private IQueryable<Domain.Entities.OtherIncome> OtherIncomeQuery(DateOnly from, DateOnly to, string? branch = null)
+    {
+        var q = _db.OtherIncomes.AsNoTracking().Where(i => i.IncomeDate >= from && i.IncomeDate <= to);
 
-    private IQueryable<Domain.Entities.TeacherExpense> TeacherExpenseQuery(DateOnly from, DateOnly to) =>
-        _db.TeacherExpenses.AsNoTracking().Where(t => t.ExpenseDate >= from && t.ExpenseDate <= to);
+        return branch is null ? q : q.Where(i => i.Ext != null && i.Ext.Branch == branch);
+    }
+
+    private IQueryable<Domain.Entities.LateFee> LateFineQuery(DateOnly from, DateOnly to, string? branch = null)
+    {
+        var q = _db.LateFees.AsNoTracking().Where(l => l.FineDate >= from && l.FineDate <= to);
+
+        return branch is null
+            ? q
+            : q.Where(l => l.StudentRegistrationId != null
+                           && RegistrationIdsAtBranch(branch).Contains(l.StudentRegistrationId));
+    }
+
+    private IQueryable<Domain.Entities.Expense> ExpenseQuery(DateOnly from, DateOnly to, string? branch = null)
+    {
+        var q = _db.Expenses.AsNoTracking().Where(e => e.ExpenseDate >= from && e.ExpenseDate <= to);
+
+        return branch is null ? q : q.Where(e => e.Ext != null && e.Ext.Branch == branch);
+    }
+
+    private IQueryable<Domain.Entities.TeacherFee> TeacherPayoutQuery(DateOnly from, DateOnly to, string? branch = null)
+    {
+        var q = _db.TeacherFees.AsNoTracking().Where(t => t.PaidOn >= from && t.PaidOn <= to);
+
+        return branch is null
+            ? q
+            : q.Where(t => t.StudentRegistrationId != null
+                           && RegistrationIdsAtBranch(branch).Contains(t.StudentRegistrationId));
+    }
+
+    /// <summary>
+    /// Ad-hoc payments to a teacher. Recorded against the teacher, not a student or
+    /// a branch, so like other income it is left out of a branch-scoped report.
+    /// </summary>
+    private IQueryable<Domain.Entities.TeacherExpense> TeacherExpenseQuery(DateOnly from, DateOnly to, string? branch = null)
+    {
+        var q = _db.TeacherExpenses.AsNoTracking().Where(t => t.ExpenseDate >= from && t.ExpenseDate <= to);
+
+        return branch is null ? q : q.Where(_ => false);
+    }
+
+    /// <summary>
+    /// Receptionists' monthly pay — a running cost like any other salary.
+    /// </summary>
+    /// <remarks>
+    /// Dated by <b>when the money was handed over</b>, not the month it was for, so
+    /// it lands in the same period as every other figure here. The rest of this
+    /// report is cash in and cash out; a salary for July paid in August belongs to
+    /// August's costs.
+    ///
+    /// <para>Unlike teacher expenses, this one <b>does</b> scope by branch: each
+    /// payment carries the branch it was made at.</para>
+    /// </remarks>
+    private IQueryable<Domain.Entities.ReceptionistPayment> ReceptionistPayQuery(
+        DateOnly from, DateOnly to, string? branch = null)
+    {
+        var q = _db.ReceptionistPayments
+            .AsNoTracking()
+            .Where(p => (p.PaidOn ?? p.PayMonth) >= from && (p.PaidOn ?? p.PayMonth) <= to);
+
+        return branch is null ? q : q.Where(p => p.Branch == branch);
+    }
 
     /* --------------------------------------------------------------- names */
 

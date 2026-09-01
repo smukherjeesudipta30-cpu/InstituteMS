@@ -14,7 +14,9 @@ public class LookupService : ILookupService
     /// Teachers created by the data migration to stand in for rows that were
     /// deleted while students still referenced them (db/migrations/004, T4).
     /// </summary>
-    private const string PlaceholderMarker = "migration-004-orphan";
+    /* Placeholder teachers were created by migration 004 against the migrated
+       database. The legacy database has no such rows and dbo.Teacher has no
+       CreatedBy column to mark them with, so nothing is treated as a stand-in. */
 
     private readonly AppDbContext _db;
 
@@ -36,7 +38,7 @@ public class LookupService : ILookupService
                 t.Id,
                 t.Name,
                 t.LoginId,
-                IsPlaceholder = t.CreatedBy == PlaceholderMarker
+                IsPlaceholder = false
             })
             .ToListAsync(ct);
 

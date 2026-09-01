@@ -18,7 +18,15 @@ public record UserListItemDto(
     DateOnly? EndDate,
     bool IsActive,
     DateTime? LastLoginOn,
-    bool HasPassword);
+    bool HasPassword,
+
+    /// <summary>
+    /// For a student account only: the portal password as issued, read from
+    /// <c>Student.Avijan_login_Password</c> where production keeps it in clear so
+    /// the office can read it back. Null for staff - their password is a BCrypt
+    /// hash and there is nothing to show.
+    /// </summary>
+    string? StudentPassword);
 
 public record UserSaveRequest
 {

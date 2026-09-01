@@ -43,7 +43,7 @@ public class CourseService : ICourseService
                 c.Cid,
                 c.Name,
                 c.Duration,
-                c.Students.Count(s => s.IsActive),
+                c.Students.Count(s => s.IsActive == true),
                 c.Students.Count,
                 c.Students.Any()))
             .ToListAsync(ct);
@@ -142,7 +142,7 @@ public class CourseService : ICourseService
     public async Task<PagedResult<CourseProgressDto>> GetProgressAsync(
         CourseProgressQuery query, CancellationToken ct = default)
     {
-        var students = _db.Students.AsNoTracking().Where(s => s.IsActive);
+        var students = _db.Students.AsNoTracking().Where(s => s.IsActive == true);
 
         if (query.CourseId is { } courseId)
             students = students.Where(s => s.CourseId == courseId);
@@ -200,7 +200,11 @@ public class CourseService : ICourseService
 
             var paidMonths = r.RegistrationId is null
                 ? 0
-                : paid.FirstOrDefault(p => p.RegistrationId == r.RegistrationId)?.Months ?? 0;
+                // Case-insensitive: mixed-case ids in the ledger would otherwise
+                // report every paid month as zero.
+                : paid.FirstOrDefault(
+                      p => string.Equals(p.RegistrationId, r.RegistrationId,
+                                         StringComparison.OrdinalIgnoreCase))?.Months ?? 0;
 
             // A student can pay past the nominal course length, so the remaining
             // figure is floored at zero rather than going negative.
@@ -408,8 +412,13 @@ public class MarkService : IMarkService
                 ? 0m
                 : decimal.Round(totalObtained * 100m / totalFull, 2, MidpointRounding.AwayFromZero);
 
-            // Registration ids are not unique in the migrated data, so take the first.
-            var student = students.FirstOrDefault(s => s.RegistrationId == m.StudentRegistrationId);
+            /* Case-insensitive for the same reason as the teacher payout list: the
+               ledger holds ids in mixed case and C# equality is ordinal, so an
+               exact match leaves the student and course blank. Ids are also not
+               unique in the migrated data, so the first match is taken. */
+            var student = students.FirstOrDefault(
+                s => string.Equals(s.RegistrationId, m.StudentRegistrationId,
+                                   StringComparison.OrdinalIgnoreCase));
 
             return new MarkListItemDto(
                 m.Id, m.StudentRegistrationId, student?.Name, student?.CourseName,

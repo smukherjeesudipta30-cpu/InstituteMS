@@ -1,6 +1,8 @@
+using System.Globalization;
 using InstituteMS.Application.Common;
 using InstituteMS.Application.Fees;
 using InstituteMS.Application.Reports;
+using InstituteMS.Domain.Entities;
 using InstituteMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -55,13 +57,19 @@ public class ReportService : IReportService
         // blank course, because the admission fee was still taken.
         var q = _db.Students
             .AsNoTracking()
-            .Where(s => s.IsActive
+            .Where(s => s.IsActive == true
                         && s.DateOfJoining != null
                         && s.DateOfJoining >= query.From
                         && s.DateOfJoining <= query.To);
 
         if (query.CourseId is > 0)
             q = q.Where(s => s.CourseId == query.CourseId);
+
+        if (!string.IsNullOrWhiteSpace(query.Branch))
+        {
+            var branch = query.Branch.Trim();
+            q = q.Where(s => s.Branch == branch);
+        }
 
         var studentCount = await q.CountAsync(ct);
         var totalFees = await q.SumAsync(s => (decimal?)s.AdmissionFees ?? 0m, ct);
@@ -118,21 +126,39 @@ public class ReportService : IReportService
         if (course is null)
             return Result<DuesReportDto>.Failure("That course no longer exists.", ResultStatus.NotFound);
 
-        // Registration ids that were paid inside the window - the EXCEPT side.
+        /* Registration ids that were paid inside the window - the EXCEPT side.
+
+           Keyed on FeeDate, NOT PaymentDate. The two are different things and the
+           difference is the whole report: FeeDate (legacy Date1) is when this
+           payment was made, while PaymentDate (legacy PDate) holds the date of the
+           PREVIOUS payment, which RecordPaymentAsync copies from
+           request.PreviousPaymentDate.
+
+           Measured against the live ledger for August 2026: 189 payments fall in
+           the month by FeeDate and only 9 by PaymentDate. Testing the wrong column
+           left about 180 students who had paid still listed as owing money - and a
+           student's FIRST payment has no previous date at all, so anyone paying for
+           the first time inside the window could never be excluded. */
         var paidInWindow = _db.MonthlyFees
             .AsNoTracking()
-            .Where(f => f.PaymentDate != null
-                        && f.PaymentDate >= query.From
-                        && f.PaymentDate <= query.To
+            .Where(f => f.FeeDate != null
+                        && f.FeeDate >= query.From
+                        && f.FeeDate <= query.To
                         && f.StudentRegistrationId != null)
             .Select(f => f.StudentRegistrationId!);
 
         var q = _db.Students
             .AsNoTracking()
-            .Where(s => s.IsActive
+            .Where(s => s.IsActive == true
                         && s.CourseId == query.CourseId
                         && s.RegistrationId != null
                         && !paidInWindow.Contains(s.RegistrationId));
+
+        if (!string.IsNullOrWhiteSpace(query.Branch))
+        {
+            var branch = query.Branch.Trim();
+            q = q.Where(s => s.Branch == branch);
+        }
 
         if (!query.IncludeNeverPaid)
         {
@@ -161,7 +187,8 @@ public class ReportService : IReportService
                 s.Phone,
                 s.DateOfJoining,
                 CourseName = s.Course != null ? s.Course.Name : null,
-                AdmissionFees = s.AdmissionFees ?? 0m
+                AdmissionFees = s.AdmissionFees ?? 0m,
+                MonthlyFee = s.MonthlyFees ?? 0m
             })
             .ToListAsync(ct);
 
@@ -178,9 +205,20 @@ public class ReportService : IReportService
             .Select(g => new
             {
                 RegistrationId = g.Key,
-                LastDate = g.Max(f => f.PaymentDate),
-                Due = g.OrderByDescending(f => f.PaymentDate).ThenByDescending(f => f.Id)
-                       .Select(f => f.NewDue).FirstOrDefault()
+
+                /* FeeDate for the same reason as the EXCEPT above: PaymentDate
+                   carries the PREVIOUS payment's date, so "last paid on" showed the
+                   date before the last one, and the due was read off whichever row
+                   happened to have the highest previous-date rather than the latest
+                   payment. Id breaks the tie, so two payments dated the same day
+                   resolve to the one entered last. */
+                LastDate = g.Max(f => f.FeeDate),
+                Due = g.OrderByDescending(f => f.FeeDate).ThenByDescending(f => f.Id)
+                       .Select(f => f.NewDue).FirstOrDefault(),
+
+                // Feeds the fine calculation, which needs to know how many months
+                // have already been settled.
+                InstallmentsPaid = g.Count()
             })
             .ToListAsync(ct);
 
@@ -191,11 +229,41 @@ public class ReportService : IReportService
             var last = lastPayments.FirstOrDefault(
                 l => string.Equals(l.RegistrationId, p.RegistrationId, StringComparison.OrdinalIgnoreCase));
 
+            var carried = last?.Due ?? 0m;
+
+            /* What they actually owe as at the report's end date.
+               ---------------------------------------------------
+               The carried balance alone is nearly always zero: a student who
+               settles each bill in full leaves nothing carried, so a report about
+               people who have not paid for months showed 0.00 against every one of
+               them. What they owe is the months that have gone by unpaid.
+
+               A fee month is 32 days — LateFineCalculator.GraceDays — so the two
+               agree about when a month has passed. Counting from the last payment,
+               or from joining for a student who has never paid. */
+            var reference = last?.LastDate ?? p.DateOfJoining;
+
+            var monthsUnpaid = reference is null
+                ? 0
+                : Math.Max(0, p.DateOfJoining is null
+                    ? 0
+                    : (query.To.DayNumber - reference.Value.DayNumber) / LateFineCalculator.GraceDays);
+
+            /* The fine from the shared calculator rather than a second rule here, so
+               what the report says a student owes is what the counter would charge
+               them on that date. */
+            var fine = LateFineCalculator.Calculate(
+                query.To, p.DateOfJoining, last?.LastDate, last?.InstallmentsPaid ?? 0).LateFine;
+
             return new DuesRowDto(
                 p.Id, p.RegistrationId, p.Name, p.Phone, p.DateOfJoining, p.CourseName,
                 p.AdmissionFees,
                 last?.LastDate,
-                last?.Due ?? 0m,
+                carried + monthsUnpaid * p.MonthlyFee + fine,
+                carried,
+                monthsUnpaid,
+                p.MonthlyFee,
+                fine,
                 last is not null);
         }).ToList();
 
@@ -204,14 +272,56 @@ public class ReportService : IReportService
             .Where(s => !_db.MonthlyFees.Any(f => f.StudentRegistrationId == s.RegistrationId))
             .CountAsync(ct);
 
-        var totalOutstanding = await _db.MonthlyFees
+        /* The headline total, worked out the same way as each row — carried balance
+           plus unpaid months plus the fine. Summing the carried balances alone gave
+           the ₹0.00 the rows used to show.
+
+           Materialised over the whole result set rather than aggregated in SQL,
+           because the month count and the fine are C# rules that EF cannot
+           translate. The set is students on one course who have not paid in a
+           range: tens of rows, not thousands. */
+        var allStudents = await q
+            .Select(s => new
+            {
+                s.RegistrationId,
+                s.DateOfJoining,
+                MonthlyFee = s.MonthlyFees ?? 0m
+            })
+            .ToListAsync(ct);
+
+        var allRegIds = allStudents.Select(s => s.RegistrationId!).ToList();
+
+        var allLastPayments = await _db.MonthlyFees
             .AsNoTracking()
-            .Where(f => f.StudentRegistrationId != null
-                        && q.Select(s => s.RegistrationId!).Contains(f.StudentRegistrationId))
+            .Where(f => f.StudentRegistrationId != null && allRegIds.Contains(f.StudentRegistrationId))
             .GroupBy(f => f.StudentRegistrationId!)
-            .Select(g => g.OrderByDescending(f => f.PaymentDate).ThenByDescending(f => f.Id)
-                          .Select(f => f.NewDue).FirstOrDefault() ?? 0m)
-            .SumAsync(ct);
+            .Select(g => new
+            {
+                RegistrationId = g.Key,
+                LastDate = g.Max(f => f.FeeDate),
+                Due = g.OrderByDescending(f => f.FeeDate).ThenByDescending(f => f.Id)
+                       .Select(f => f.NewDue).FirstOrDefault(),
+                InstallmentsPaid = g.Count()
+            })
+            .ToListAsync(ct);
+
+        var totalOutstanding = allStudents.Sum(s =>
+        {
+            var last = allLastPayments.FirstOrDefault(
+                l => string.Equals(l.RegistrationId, s.RegistrationId, StringComparison.OrdinalIgnoreCase));
+
+            var carried = last?.Due ?? 0m;
+            var reference = last?.LastDate ?? s.DateOfJoining;
+
+            var months = reference is null || s.DateOfJoining is null
+                ? 0
+                : Math.Max(0, (query.To.DayNumber - reference.Value.DayNumber) / LateFineCalculator.GraceDays);
+
+            var fine = LateFineCalculator.Calculate(
+                query.To, s.DateOfJoining, last?.LastDate, last?.InstallmentsPaid ?? 0).LateFine;
+
+            return carried + months * s.MonthlyFee + fine;
+        });
 
         var rows = PagedResult<DuesRowDto>.Create(items, query.Page, query.PageSize, studentCount);
 
@@ -238,6 +348,12 @@ public class ReportService : IReportService
                         && e.ExpenseDate >= query.From
                         && e.ExpenseDate <= query.To);
 
+        if (!string.IsNullOrWhiteSpace(query.Branch))
+        {
+            var branch = query.Branch.Trim();
+            q = q.Where(e => e.Ext != null && e.Ext.Branch == branch);
+        }
+
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();
@@ -252,7 +368,9 @@ public class ReportService : IReportService
             .ThenByDescending(e => e.Id)
             .Skip((query.Page - 1) * query.PageSize)
             .Take(query.PageSize)
-            .Select(e => new ExpenseRowDto(e.Id, e.Details, e.ExpenseDate, e.Amount ?? 0m))
+            .Select(e => new ExpenseRowDto(
+                e.Id, e.Details, e.ExpenseDate, e.Amount ?? 0m,
+                e.Ext != null ? e.Ext.Branch : null))
             .ToListAsync(ct);
 
         var rows = PagedResult<ExpenseRowDto>.Create(items, query.Page, query.PageSize, entryCount);
@@ -394,7 +512,7 @@ public class ReportService : IReportService
                         || s.ThirdTeacherId == query.TeacherId);
 
         if (query.ActiveOnly)
-            q = q.Where(s => s.IsActive);
+            q = q.Where(s => s.IsActive == true);
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
@@ -434,8 +552,8 @@ public class ReportService : IReportService
                 s.SecondTeacher != null ? s.SecondTeacher.Phone : null,
                 s.ThirdTeacher != null ? s.ThirdTeacher.Name : null,
                 s.ThirdTeacher != null ? s.ThirdTeacher.Phone : null,
-                s.IsActive,
-                s.IsComplete))
+                s.IsActive == true,
+                s.IsComplete == true))
             .ToListAsync(ct);
 
         var rows = PagedResult<StudentByTeacherRowDto>.Create(
@@ -466,7 +584,7 @@ public class ReportService : IReportService
         // is theirs while they are on the rolls or have finished the course.
         var student = await _db.Students
             .AsNoTracking()
-            .Where(s => s.RegistrationId == regId && (s.IsActive || s.IsComplete))
+            .Where(s => s.RegistrationId == regId && (s.IsActive == true || s.IsComplete == true))
             .Select(s => new
             {
                 s.Id,
@@ -481,8 +599,8 @@ public class ReportService : IReportService
                 CourseDuration = s.Course != null ? s.Course.Duration : null,
                 AdmissionFees = s.AdmissionFees ?? 0m,
                 MonthlyFees = s.MonthlyFees ?? 0m,
-                s.IsActive,
-                s.IsComplete
+                IsActive = s.IsActive == true,
+                IsComplete = s.IsComplete == true
             })
             .FirstOrDefaultAsync(ct);
 
@@ -540,7 +658,13 @@ public class ReportService : IReportService
             .ThenByDescending(m => m.Id)
             .ToListAsync(ct);
 
-        var markDtos = marks.Select(ToStatementMark).ToList();
+        // The legacy register and the examination portal are two separate stores,
+        // and a student may have results in either or both. The statement is the
+        // one place that shows their whole record, so it reads both.
+        var markDtos = marks.Select(ToStatementMark)
+            .Concat(await GetPortalMarksAsync(regId, completeOnly: false, ct))
+            .OrderByDescending(m => m.ExamDate)
+            .ToList();
 
         return Result<StudentStatementDto>.Success(new StudentStatementDto(
             student.Id,
@@ -555,8 +679,8 @@ public class ReportService : IReportService
             student.CourseDuration,
             student.AdmissionFees,
             student.MonthlyFees,
-            student.IsActive,
-            student.IsComplete,
+            student.IsActive == true,
+            student.IsComplete == true,
             hasPhoto,
             payments.Count,
             payments.Sum(p => p.AmountPaid),
@@ -587,7 +711,7 @@ public class ReportService : IReportService
     /// exam is used here, which is at least deterministic.
     /// </para>
     /// </remarks>
-    public async Task<Result<StudentCertificateDto>> GetOwnCertificateAsync(
+    public async Task<Result<StudentCertificateDto>> IssueOwnCertificateAsync(
         string email, CancellationToken ct = default)
     {
         var own = await ResolveOwnRegistrationIdAsync(email, ct);
@@ -599,14 +723,14 @@ public class ReportService : IReportService
 
         var student = await _db.Students
             .AsNoTracking()
-            .Where(s => s.RegistrationId == regId && (s.IsActive || s.IsComplete))
+            .Where(s => s.RegistrationId == regId && (s.IsActive == true || s.IsComplete == true))
             .Select(s => new
             {
                 s.Name,
                 s.GuardianName,
                 s.RegistrationId,
                 s.DateOfJoining,
-                s.IsComplete,
+                IsComplete = s.IsComplete == true,
                 CourseName = s.Course != null ? s.Course.Name : null,
                 CourseDuration = s.Course != null ? s.Course.Duration : null
             })
@@ -616,19 +740,102 @@ public class ReportService : IReportService
             return Result<StudentCertificateDto>.Failure(
                 "No active or completed student record found for this sign-in.", ResultStatus.NotFound);
 
-        var mark = await _db.Marks
-            .AsNoTracking()
-            .Where(m => m.StudentRegistrationId == regId)
-            .OrderByDescending(m => m.ExamDate)
-            .ThenByDescending(m => m.Id)
-            .FirstOrDefaultAsync(ct);
-
-        if (mark is null)
+        // A certificate says the course was completed, so it is issued only once the
+        // course actually is. An earlier version handed out a "provisional" one to a
+        // student still enrolled, which the certificate wording does not support.
+        if (!student.IsComplete == true)
             return Result<StudentCertificateDto>.Failure(
-                "No exam result has been recorded yet, so a certificate cannot be issued.",
-                ResultStatus.NotFound);
+                "Your certificate becomes available once the course is completed and the " +
+                "institute marks your record complete.",
+                ResultStatus.Forbidden);
 
-        var scored = ToStatementMark(mark);
+        /* ---- what the certificate certifies ------------------------------
+           Results live in two places: the legacy register the Marks screen
+           writes, and the examination portal. A student may have either.
+
+           The portal wins when it has a finished examination for them, because
+           that is the course they actually sat here; the legacy register is
+           the historical record carried over for migrated students. Reading
+           only dbo.Marks refused a certificate outright to anyone who sat
+           their whole course through the portal. */
+
+        var portalAll = await GetPortalMarksAsync(regId, completeOnly: false, ct);
+
+        // A finished examination carries both its papers, so exactly two subjects.
+        var portal = portalAll.Where(m => m.Subjects.Count == 2).ToList();
+
+        StatementMarkDto? scored;
+
+        if (portal.Count > 0)
+        {
+            // Every finished examination of the course counts, not just the last
+            // one — the certificate states the course result, not one term's.
+            var subjects = portal.SelectMany(m => m.Subjects).ToList();
+            var full = subjects.Sum(s => s.FullMarks);
+            var obtained = subjects.Sum(s => s.ObtainedMarks);
+
+            var percent = full <= 0
+                ? 0m
+                : decimal.Round(obtained * 100m / full, 2, MidpointRounding.AwayFromZero);
+
+            scored = new StatementMarkDto(
+                portal[0].MarkId,
+                portal.Max(m => m.ExamDate),
+                subjects,
+                full,
+                obtained,
+                percent,
+                Grade(percent));
+        }
+        else
+        {
+            var mark = await _db.Marks
+                .AsNoTracking()
+                .Where(m => m.StudentRegistrationId == regId)
+                .OrderByDescending(m => m.ExamDate)
+                .ThenByDescending(m => m.Id)
+                .FirstOrDefaultAsync(ct);
+
+            if (mark is null)
+            {
+                // Distinguish "nothing sat" from "sat, but the examination is not
+                // finished" — they need different things done about them.
+                return Result<StudentCertificateDto>.Failure(
+                    portalAll.Count > 0
+                        ? "Your examination is not complete yet — the practical mark has " +
+                          "still to be entered by the institute, so a certificate cannot be issued."
+                        : "No exam result has been recorded yet, so a certificate cannot be issued.",
+                    ResultStatus.NotFound);
+            }
+
+            scored = ToStatementMark(mark);
+        }
+
+        /* ---- number this copy -------------------------------------------
+           The first copy a student takes is the original; every one after it
+           is a duplicate and prints as one. The number comes from the log
+           rather than a counter, so the office can also answer when each copy
+           was taken and to which sign-in. */
+
+        var previous = await _db.CertificateIssues
+            .AsNoTracking()
+            .Where(i => i.StudentRegistrationId == regId)
+            .OrderBy(i => i.IssueNo)
+            .Select(i => new { i.IssueNo, i.IssuedOn })
+            .ToListAsync(ct);
+
+        var issueNo = previous.Count + 1;
+        var now = DateTime.Now;
+
+        _db.CertificateIssues.Add(new CertificateIssue
+        {
+            StudentRegistrationId = regId,
+            IssueNo = issueNo,
+            IssuedOn = now,
+            IssuedTo = email?.Trim()
+        });
+
+        await _db.SaveChangesAsync(ct);
 
         return Result<StudentCertificateDto>.Success(new StudentCertificateDto(
             student.Name,
@@ -642,8 +849,11 @@ public class ReportService : IReportService
             scored.TotalObtainedMarks,
             scored.PercentScored,
             scored.Grade,
-            student.IsComplete,
-            DateTime.Now));
+            student.IsComplete == true,
+            now,
+            issueNo,
+            issueNo > 1,
+            previous.FirstOrDefault()?.IssuedOn));
     }
 
     /// <summary>
@@ -711,11 +921,11 @@ public class ReportService : IReportService
         // under either address, so both are checked before giving up.
         var regId = await _db.Students
             .AsNoTracking()
-            .Where(s => (s.IsActive || s.IsComplete)
+            .Where(s => (s.IsActive == true || s.IsComplete == true)
                         && (s.Email == trimmed
                             || s.PersonalEmail == trimmed
                             || s.AvijanLoginEmail == trimmed))
-            .OrderByDescending(s => s.IsActive)
+            .OrderByDescending(s => s.IsActive == true)
             .ThenByDescending(s => s.Id)
             .Select(s => s.RegistrationId)
             .FirstOrDefaultAsync(ct);
@@ -728,6 +938,107 @@ public class ReportService : IReportService
     }
 
     /* ============================================================= helpers */
+
+    /// <summary>
+    /// The student's examination-portal results, shaped as statement marks — one
+    /// entry per examination, carrying Theory and Practical as its subjects.
+    /// </summary>
+    /// <remarks>
+    /// The statement and the certificate originally read <c>dbo.Marks</c> alone,
+    /// which is the legacy register the Marks screen writes. A student who sits
+    /// everything through the examination portal has no row there at all, so their
+    /// statement showed no marks and their certificate was refused outright with
+    /// "no exam result has been recorded" — however many papers they had actually
+    /// sat. Portal results are read here so both screens see the whole picture.
+    ///
+    /// <para><paramref name="completeOnly"/> separates two different jobs. The
+    /// <b>statement</b> is a record of what has been sat, so it shows every paper
+    /// including a term with only its theory in so far — otherwise a mark the
+    /// student has genuinely earned is invisible to them. The <b>certificate</b>
+    /// states a course result, so it counts finished examinations only: a
+    /// half-finished term would otherwise be averaged in as though complete and
+    /// drag the grade down.</para>
+    ///
+    /// <para><c>MarkId</c> is synthetic and negative. It has to be unique for the
+    /// grid to track rows, and negative keeps it clearly distinct from a real
+    /// <c>dbo.Marks</c> id — nothing looks these up.</para>
+    /// </remarks>
+    private async Task<List<StatementMarkDto>> GetPortalMarksAsync(
+        string regId, bool completeOnly, CancellationToken ct)
+    {
+        var sat = await _db.ExamAttempts
+            .AsNoTracking()
+            .Where(a => a.StudentRegistrationId == regId
+                        && a.SubmittedOn != null
+                        && a.Score != null)
+            .Join(_db.ExamPapers.AsNoTracking(),
+                a => a.ExamId, p => p.ExamId,
+                (a, p) => new
+                {
+                    a.Score,
+                    AttemptTotal = a.TotalMarks,
+                    PaperTotal = p.TotalMarks,
+                    a.SubmittedOn,
+                    PaperType = a.PaperType ?? p.PaperType,
+                    TermNumber = a.TermNumber ?? p.TermNumber,
+                    CourseId = a.CourseId ?? p.CourseId
+                })
+            .ToListAsync(ct);
+
+        return sat
+            .GroupBy(x => new { x.CourseId, x.TermNumber })
+            .Select(g =>
+            {
+                var theory = g.FirstOrDefault(x =>
+                    string.Equals(x.PaperType, "Theory", StringComparison.OrdinalIgnoreCase));
+
+                var practical = g.FirstOrDefault(x =>
+                    string.Equals(x.PaperType, "Practical", StringComparison.OrdinalIgnoreCase));
+
+                return new { g.Key, theory, practical };
+            })
+            // A finished examination has both. The certificate insists; the
+            // statement shows whichever papers are in.
+            .Where(x => !completeOnly || (x.theory is not null && x.practical is not null))
+            .Select(x =>
+            {
+                // Only the papers actually recorded, so the total never counts
+                // marks for a paper that has not been sat or marked yet.
+                var subjects = new List<StatementSubjectDto>();
+
+                if (x.theory is not null)
+                    subjects.Add(new StatementSubjectDto(
+                        "Theory", x.theory.AttemptTotal ?? x.theory.PaperTotal, x.theory.Score ?? 0));
+
+                if (x.practical is not null)
+                    subjects.Add(new StatementSubjectDto(
+                        "Practical", x.practical.AttemptTotal ?? x.practical.PaperTotal, x.practical.Score ?? 0));
+
+                var full = subjects.Sum(s => s.FullMarks);
+                var obtained = subjects.Sum(s => s.ObtainedMarks);
+
+                var percent = full <= 0
+                    ? 0m
+                    : decimal.Round(obtained * 100m / full, 2, MidpointRounding.AwayFromZero);
+
+                // Either paper may be absent on the statement, so only dated
+                // entries are considered.
+                var completedOn = new[] { x.theory?.SubmittedOn, x.practical?.SubmittedOn }
+                    .Where(d => d is not null)
+                    .Max();
+
+                return new StatementMarkDto(
+                    -((x.Key.CourseId ?? 0) * 1000 + x.Key.TermNumber),
+                    completedOn is null ? null : DateOnly.FromDateTime(completedOn.Value),
+                    subjects,
+                    full,
+                    obtained,
+                    percent,
+                    Grade(percent));
+            })
+            .OrderByDescending(m => m.ExamDate)
+            .ToList();
+    }
 
     private static StatementMarkDto ToStatementMark(Domain.Entities.Mark m)
     {
@@ -772,4 +1083,305 @@ public class ReportService : IReportService
         >= 50m => "C",
         _ => "D"
     };
+
+    /* ========================================================= branch report */
+
+    /// <summary>Everything with no branch recorded reports under this name.</summary>
+    private const string Unassigned = "Unassigned";
+
+    private static string BranchOf(string? value)
+        => string.IsNullOrWhiteSpace(value) ? Unassigned : value.Trim();
+
+    /// <summary>First day of the bucket a date falls in.</summary>
+    private static DateOnly PeriodStartOf(DateOnly date, BranchReportGrouping grouping) => grouping switch
+    {
+        BranchReportGrouping.Year => new DateOnly(date.Year, 1, 1),
+        BranchReportGrouping.Quarter => new DateOnly(date.Year, ((date.Month - 1) / 3) * 3 + 1, 1),
+        _ => new DateOnly(date.Year, date.Month, 1)
+    };
+
+    private static string PeriodLabelOf(DateOnly start, BranchReportGrouping grouping) => grouping switch
+    {
+        BranchReportGrouping.Year => start.Year.ToString(CultureInfo.InvariantCulture),
+        BranchReportGrouping.Quarter => $"Q{(start.Month - 1) / 3 + 1} {start.Year}",
+        _ => start.ToString("MMM yyyy", CultureInfo.InvariantCulture)
+    };
+
+    /// <summary>
+    /// Admissions, fee payments and expenses by branch, bucketed by month,
+    /// quarter or year.
+    /// </summary>
+    /// <remarks>
+    /// The three measures reach a branch by different routes — an admission and a
+    /// payment through the student's own branch, an expense through the branch on
+    /// the expense row — so they are gathered separately and stitched together on
+    /// (branch, period) rather than joined in SQL.
+    ///
+    /// <para>Bucketing happens in memory because the boundaries differ per
+    /// grouping and translating three shapes of date arithmetic to SQL for three
+    /// different sources would cost more in clarity than it saves: the row counts
+    /// here are thousands, not millions.</para>
+    /// </remarks>
+    public async Task<Result<BranchReportDto>> GetBranchReportAsync(
+        BranchReportQuery query, CancellationToken ct = default)
+    {
+        if (query.To < query.From)
+            return Result<BranchReportDto>.Failure("The 'to' date cannot be before the 'from' date.");
+
+        var grouping = query.GroupBy;
+        var wanted = string.IsNullOrWhiteSpace(query.Branch) ? null : query.Branch.Trim();
+
+        /* ---- admissions: students who joined in the range ---------------- */
+        var admissions = await _db.Students
+            .AsNoTracking()
+            .Where(s => s.DateOfJoining != null
+                        && s.DateOfJoining >= query.From
+                        && s.DateOfJoining <= query.To)
+            .Select(s => new { s.Branch, Joined = s.DateOfJoining!.Value, Fees = s.AdmissionFees ?? 0m })
+            .ToListAsync(ct);
+
+        /* ---- payments: fees taken in the range, branch via the student --- */
+        /* The branch comes from the student, but this must NOT be a join.
+           ---------------------------------------------------------------
+           dbo.student holds 15 registration ids belonging to more than one
+           row, so joining fees to students multiplied every fee against a
+           duplicated id: 57 extra rows and 26,220 rupees of fee income that
+           was never collected, inflating the branch Net by the same amount.
+
+           A correlated lookup returns exactly one branch per fee however many
+           student rows share the id. The duplicates all agree on branch, so
+           which row wins does not matter - ordering by id only makes the
+           choice deterministic rather than incidental.
+
+           It also keeps a fee whose student is missing entirely: the branch
+           comes back null and the row lands in "Unassigned", where an inner
+           join would have dropped it and quietly understated the total. */
+        var payments = await _db.MonthlyFees
+            .AsNoTracking()
+            .Where(f => f.FeeDate != null && f.FeeDate >= query.From && f.FeeDate <= query.To)
+            .Select(f => new
+            {
+                Branch = _db.Students
+                    .Where(s => s.RegistrationId == f.StudentRegistrationId)
+                    .OrderBy(s => s.Id)
+                    .Select(s => s.Branch)
+                    .FirstOrDefault(),
+                Paid = f.FeeDate!.Value,
+                Amount = f.OtherInstallment ?? f.Installment ?? 0m,
+                f.BillNo
+            })
+            .ToListAsync(ct);
+
+        // Fines live in their own table keyed by bill number, as everywhere else.
+        var billNos = payments.Select(p => p.BillNo).Where(b => b != null).Distinct().ToList();
+
+        var fines = await _db.LateFees
+            .AsNoTracking()
+            .Where(l => l.BillNo != null && billNos.Contains(l.BillNo))
+            .Select(l => new { l.BillNo, l.FineAmount })
+            .ToListAsync(ct);
+
+        var fineByBill = fines
+            .GroupBy(f => f.BillNo!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.FineAmount ?? 0m), StringComparer.OrdinalIgnoreCase);
+
+        /* ---- expenses: branch recorded on the expense itself ------------- */
+        var expenses = await _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.ExpenseDate != null
+                        && e.ExpenseDate >= query.From
+                        && e.ExpenseDate <= query.To)
+            .Select(e => new
+            {
+                Branch = e.Ext != null ? e.Ext.Branch : null,
+                Spent = e.ExpenseDate!.Value,
+                Amount = e.Amount ?? 0m
+            })
+            .ToListAsync(ct);
+
+        /* ---- other income: branch on the side row ------------------------ */
+        var otherIncome = await _db.OtherIncomes
+            .AsNoTracking()
+            .Where(i => i.IncomeDate != null
+                        && i.IncomeDate >= query.From
+                        && i.IncomeDate <= query.To)
+            .Select(i => new
+            {
+                Branch = i.Ext != null ? i.Ext.Branch : null,
+                Earned = i.IncomeDate!.Value,
+                Amount = i.Amount ?? 0m
+            })
+            .ToListAsync(ct);
+
+        /* ---- receptionist pay: the branch is copied onto the payment ------
+           Dated by PaidOn, when the money actually left, falling back to the
+           month it was for when nobody recorded a payment date. */
+        var receptionistPay = await _db.ReceptionistPayments
+            .AsNoTracking()
+            .Where(p => (p.PaidOn ?? p.PayMonth) >= query.From
+                        && (p.PaidOn ?? p.PayMonth) <= query.To)
+            .Select(p => new
+            {
+                p.Branch,
+                Paid = p.PaidOn ?? p.PayMonth,
+                p.Amount
+            })
+            .ToListAsync(ct);
+
+        /* ---- stitch them together on (branch, period) -------------------- */
+        var buckets = new Dictionary<(string Branch, DateOnly Start), BranchPeriodAccumulator>();
+
+        BranchPeriodAccumulator Bucket(string? branch, DateOnly date)
+        {
+            var key = (BranchOf(branch), PeriodStartOf(date, grouping));
+
+            if (!buckets.TryGetValue(key, out var acc))
+            {
+                acc = new BranchPeriodAccumulator();
+                buckets[key] = acc;
+            }
+
+            return acc;
+        }
+
+        foreach (var a in admissions)
+        {
+            var acc = Bucket(a.Branch, a.Joined);
+            acc.Admissions++;
+            acc.AdmissionFees += a.Fees;
+        }
+
+        foreach (var p in payments)
+        {
+            var acc = Bucket(p.Branch, p.Paid);
+            acc.Payments++;
+
+            var fine = p.BillNo is not null && fineByBill.TryGetValue(p.BillNo, out var f) ? f : 0m;
+
+            // Installment is stored fee + fine together, so the fee alone is the
+            // difference. Never let a rounding oddity make it negative.
+            acc.LateFines += fine;
+            acc.FeesCollected += Math.Max(0m, p.Amount - fine);
+        }
+
+        foreach (var e in expenses)
+        {
+            Bucket(e.Branch, e.Spent).Expenses += e.Amount;
+        }
+
+        foreach (var i in otherIncome)
+        {
+            Bucket(i.Branch, i.Earned).OtherIncome += i.Amount;
+        }
+
+        foreach (var r in receptionistPay)
+        {
+            Bucket(r.Branch, r.Paid).ReceptionistPay += r.Amount;
+        }
+
+        var rows = buckets
+            .Where(kv => wanted is null || string.Equals(kv.Key.Branch, wanted, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => new BranchPeriodRowDto(
+                kv.Key.Branch,
+                kv.Key.Start,
+                PeriodLabelOf(kv.Key.Start, grouping),
+                kv.Value.Admissions,
+                kv.Value.AdmissionFees,
+                kv.Value.Payments,
+                kv.Value.FeesCollected,
+                kv.Value.LateFines,
+                kv.Value.Expenses,
+                kv.Value.OtherIncome,
+                kv.Value.ReceptionistPay,
+
+                // Teacher payouts are absent on purpose - see BranchReportDto.
+                kv.Value.AdmissionFees + kv.Value.FeesCollected + kv.Value.LateFines
+                    + kv.Value.OtherIncome
+                    - kv.Value.Expenses - kv.Value.ReceptionistPay))
+            .OrderBy(r => r.Branch == Unassigned)      // real branches first
+            .ThenBy(r => r.Branch)
+            .ThenBy(r => r.PeriodStart)
+            .ToList();
+
+        var branchTotals = rows
+            .GroupBy(r => r.Branch)
+            .Select(g => new BranchTotalDto(
+                g.Key,
+                g.Sum(r => r.Admissions),
+                g.Sum(r => r.AdmissionFees),
+                g.Sum(r => r.Payments),
+                g.Sum(r => r.FeesCollected),
+                g.Sum(r => r.LateFines),
+                g.Sum(r => r.Expenses),
+                g.Sum(r => r.OtherIncome),
+                g.Sum(r => r.ReceptionistPay),
+                g.Sum(r => r.Net)))
+            .OrderBy(t => t.Branch == Unassigned)
+            .ThenBy(t => t.Branch)
+            .ToList();
+
+        var grand = new BranchTotalDto(
+            "All branches",
+            branchTotals.Sum(t => t.Admissions),
+            branchTotals.Sum(t => t.AdmissionFees),
+            branchTotals.Sum(t => t.Payments),
+            branchTotals.Sum(t => t.FeesCollected),
+            branchTotals.Sum(t => t.LateFines),
+            branchTotals.Sum(t => t.Expenses),
+            branchTotals.Sum(t => t.OtherIncome),
+            branchTotals.Sum(t => t.ReceptionistPay),
+            branchTotals.Sum(t => t.Net));
+
+        // Every branch on record, not just those with activity in the range, so the
+        // filter does not shrink as the dates move.
+        var known = await _db.Branches
+            .AsNoTracking()
+            .Where(b => b.Name != null)
+            .Select(b => b.Name!)
+            .ToListAsync(ct);
+
+        var branches = known
+            .Concat(buckets.Keys.Select(k => k.Branch))
+            .Where(b => !string.IsNullOrWhiteSpace(b) && b != Unassigned)
+            .Select(b => b.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(b => b)
+            .ToList();
+
+        // Offered only when something is actually unattributed. Listing it always
+        // leaves a filter that returns nothing once every record has a branch.
+        if (buckets.Keys.Any(k => k.Branch == Unassigned))
+            branches.Add(Unassigned);
+
+        // Said out loud rather than left for the reader to infer from a chart that
+        // is almost entirely one bar.
+        var unassignedRecords = admissions.Count(a => BranchOf(a.Branch) == Unassigned)
+                                + payments.Count(p => BranchOf(p.Branch) == Unassigned)
+                                + expenses.Count(e => BranchOf(e.Branch) == Unassigned);
+
+        var totalRecords = admissions.Count + payments.Count + expenses.Count;
+
+        return Result<BranchReportDto>.Success(new BranchReportDto(
+            query.From,
+            query.To,
+            grouping.ToString(),
+            rows,
+            branchTotals,
+            grand,
+            branches,
+            totalRecords > 0 && unassignedRecords * 2 > totalRecords,
+            DateTime.Now));
+    }
+
+    private sealed class BranchPeriodAccumulator
+    {
+        public int Admissions;
+        public decimal AdmissionFees;
+        public int Payments;
+        public decimal FeesCollected;
+        public decimal LateFines;
+        public decimal Expenses;
+        public decimal OtherIncome;
+        public decimal ReceptionistPay;
+    }
 }

@@ -13,7 +13,7 @@ namespace InstituteMS.Api.Controllers.v1;
 /// </summary>
 [Route("api/v1/students")]
 [Tags("Students")]
-[Authorize(Roles = UserRoles.BackOffice)]
+[Authorize(Roles = UserRoles.MasterData)]
 public class StudentsController : ApiControllerBase
 {
     private readonly IStudentService _students;
@@ -71,6 +71,21 @@ public class StudentsController : ApiControllerBase
     [ProducesResponseType(typeof(ApiResponse<NextRegistrationDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> NextRegistrationNo([FromQuery] int? branchId, CancellationToken ct)
         => Envelope(await _students.PeekNextRegistrationAsync(branchId, ct));
+
+    /// <summary>
+    /// The Avijan portal sign-in that will be issued for a student name, so the
+    /// registration form can show it before saving.
+    /// </summary>
+    /// <remarks>
+    /// The legacy form built these in the browser and posted them to
+    /// <c>usp_StudentSaveData</c>. Generating them server-side means the uniqueness
+    /// check actually looks at the database rather than trusting the page.
+    /// </remarks>
+    [HttpGet("suggest-login")]
+    [ProducesResponseType(typeof(ApiResponse<SuggestedLoginDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SuggestLogin(
+        [FromQuery] string? name, [FromQuery] int? excludingStudentId, CancellationToken ct)
+        => Envelope(await _students.SuggestLoginAsync(name, excludingStudentId, ct));
 
     /// <summary>Admission receipt data — replaces <c>getPrint</c> / <c>PrintReport.cshtml</c>.</summary>
     [HttpGet("{id:int}/receipt")]

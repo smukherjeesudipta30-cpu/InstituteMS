@@ -29,6 +29,12 @@ public class ValidationFilter : IAsyncActionFilter
             if (_services.GetService(validatorType) is not IValidator validator) continue;
 
             var validationContext = new ValidationContext<object>(argument);
+
+            /* Some rules differ between creating and editing - a new admission must
+               carry a personal email, while 932 of the 953 migrated students have
+               none and must still be editable. The verb is the only honest way to
+               tell the two apart here, since both actions bind the same request. */
+            validationContext.RootContextData["HttpMethod"] = context.HttpContext.Request.Method;
             var result = await validator.ValidateAsync(validationContext, context.HttpContext.RequestAborted);
 
             if (!result.IsValid)

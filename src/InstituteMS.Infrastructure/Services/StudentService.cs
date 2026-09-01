@@ -1,5 +1,9 @@
+using InstituteMS.Application.Documents;
 using InstituteMS.Application.Common;
+using InstituteMS.Application.Common.Interfaces;
+using InstituteMS.Application.Notifications;
 using InstituteMS.Application.Students;
+using InstituteMS.Domain.Common;
 using InstituteMS.Domain.Entities;
 using InstituteMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -16,15 +20,30 @@ public class StudentService : IStudentService
 {
     private readonly AppDbContext _db;
     private readonly RegistrationNumberService _numbers;
+    private readonly StudentLoginGenerator _logins;
+    private readonly IPasswordHasher _hasher;
     private readonly ILogger<StudentService> _logger;
+    private readonly IStudentMailer _mailer;
+    private readonly IReceiptPdfGenerator _pdf;
+    private readonly IReceiptLinkService _links;
 
     public StudentService(
         AppDbContext db,
         RegistrationNumberService numbers,
+        StudentLoginGenerator logins,
+        IPasswordHasher hasher,
+        IStudentMailer mailer,
+        IReceiptPdfGenerator pdf,
+        IReceiptLinkService links,
         ILogger<StudentService> logger)
     {
         _db = db;
         _numbers = numbers;
+        _logins = logins;
+        _hasher = hasher;
+        _mailer = mailer;
+        _pdf = pdf;
+        _links = links;
         _logger = logger;
     }
 
@@ -73,7 +92,7 @@ public class StudentService : IStudentService
     public async Task<IReadOnlyList<StudentLookupDto>> GetLookupAsync(
         string? search, CancellationToken ct = default)
     {
-        var students = _db.Students.AsNoTracking().Where(s => s.IsActive);
+        var students = _db.Students.AsNoTracking().Where(s => s.IsActive == true);
 
         if (!string.IsNullOrWhiteSpace(search))
         {
@@ -125,7 +144,8 @@ public class StudentService : IStudentService
             NumberToWords.Convert(student.AdmissionFees ?? 0m),
             student.DateOfJoining,
             // Legacy convert3(): joining date + 32 days.
-            student.DateOfJoining?.AddDays(32)));
+            student.DateOfJoining?.AddDays(32),
+            _links.CreateUrl(ReceiptKind.Admission, student.Id)));
     }
 
     public async Task<NextRegistrationDto> PeekNextRegistrationAsync(
@@ -133,6 +153,13 @@ public class StudentService : IStudentService
     {
         var branch = await ResolveBranchAsync(branchId, ct);
         return await _numbers.PeekAsync(branch?.Code, ct);
+    }
+
+    public async Task<SuggestedLoginDto> SuggestLoginAsync(
+        string? studentName, int? excludingStudentId = null, CancellationToken ct = default)
+    {
+        var (email, password) = await _logins.GenerateAsync(studentName, excludingStudentId, ct);
+        return new SuggestedLoginDto(email, password);
     }
 
     public async Task<Result<(byte[] Content, string ContentType, string FileName)>> GetPhotoAsync(
@@ -305,6 +332,13 @@ public class StudentService : IStudentService
     public async Task<Result<StudentCreatedDto>> CreateAsync(
         StudentSaveRequest request, string? actor, CancellationToken ct = default)
     {
+        /* A new admission must name its branch. Enforced here rather than in the
+           validator because the validator also serves the update path, where a
+           student admitted before this rule is allowed to keep the branch already
+           recorded against them instead of being blocked at every edit. */
+        if (request.BranchId is not > 0)
+            return Result<StudentCreatedDto>.Failure("Please select a branch.", ResultStatus.BadRequest);
+
         var referenceError = await ValidateReferencesAsync(request, ct);
         if (referenceError is not null)
             return Result<StudentCreatedDto>.Failure(referenceError, ResultStatus.BadRequest);
@@ -345,6 +379,14 @@ public class StudentService : IStudentService
 
             // Legacy Replica_id is the row's own id.
             entity.ReplicaId = entity.Id;
+
+            // The portal sign-in, and the account the student actually uses. The
+            // legacy usp_StudentSaveData did both in the same procedure, so a
+            // student could sign in the moment they were registered; the generated
+            // values were passed in from the browser. They are generated here
+            // instead, and only when the caller did not supply them.
+            await IssuePortalLoginAsync(entity, request, actor, ct);
+
             await _db.SaveChangesAsync(ct);
 
             await tx.CommitAsync(ct);
@@ -355,8 +397,113 @@ public class StudentService : IStudentService
             "Student {StudentId} admitted as {RegistrationId} by {Actor}",
             student.Id, student.RegistrationId, actor);
 
+        /* Sent after the transaction has committed, so a slow or unreachable mail
+           server cannot hold a database transaction open - and deliberately
+           awaited rather than fired and forgotten, so the attempt is logged
+           before the response returns. The mailer never throws. */
+        var courseName = student.CourseId is null
+            ? null
+            : await _db.Courses.AsNoTracking()
+                .Where(c => c.Cid == student.CourseId)
+                .Select(c => c.Name)
+                .FirstOrDefaultAsync(ct);
+
+        /* The admission receipt as a PDF, attached to the message. Built from the
+           same GetReceiptAsync the printed one uses, so the two cannot disagree.
+           An addition to the mail, never a condition of it: if it fails to render
+           the student still gets the message. */
+        byte[]? pdf = null;
+        var receiptResult = await GetReceiptAsync(student.Id, ct);
+
+        if (receiptResult.Succeeded && receiptResult.Value is not null)
+        {
+            try { pdf = _pdf.AdmissionReceipt(receiptResult.Value); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Could not render the PDF for admission {RegistrationId}; sending without it.",
+                    student.RegistrationId);
+            }
+        }
+
+        await _mailer.SendWelcomeAsync(
+            new RegistrationMailRequest(
+                student.RegistrationId!,
+                student.Name ?? string.Empty,
+                courseName,
+                student.PersonalEmail,
+                student.AvijanLoginEmail,
+                student.AvijanLoginPassword,
+                /* The admission receipt, so the emailed copy carries the same
+                   figures as the printed one. Worked out the same way
+                   GetReceiptAsync does, including the legacy convert3() rule
+                   that the next payment falls 32 days after joining. */
+                student.BillNo,
+                student.AdmissionFees,
+                NumberToWords.Convert(student.AdmissionFees ?? 0m),
+                student.DateOfJoining,
+                student.DateOfJoining?.AddDays(32),
+                pdf,
+                $"Avijan-Admission-Receipt-{(student.BillNo ?? "receipt").Replace('/', '-')}.pdf"),
+            actor, ct);
+
         return Result<StudentCreatedDto>.Success(
             new StudentCreatedDto(student.Id, student.RegistrationId!, student.BillNo!));
+    }
+
+    /// <summary>
+    /// Gives a newly registered student their Avijan portal sign-in and the
+    /// matching <c>dbo.Users</c> account, the way <c>usp_StudentSaveData</c> did.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two copies of the password are written, deliberately and differently:
+    /// <c>Student.Avijan_login_Password</c> keeps it in clear so the office can read
+    /// it back to the student, exactly as production stores it, while
+    /// <c>Users.PasswordHash</c> holds the BCrypt hash that sign-in actually checks.
+    /// Changing it later through the Users screen updates both.
+    /// </para>
+    /// <para>
+    /// If an account already exists on that address it is left alone rather than
+    /// overwritten — the legacy insert would have created a second row on the same
+    /// email and left sign-in to pick one.
+    /// </para>
+    /// </remarks>
+    private async Task IssuePortalLoginAsync(
+        Student entity, StudentSaveRequest request, string? actor, CancellationToken ct)
+    {
+        var email = request.AvijanLoginEmail?.Trim();
+        var password = request.AvijanLoginPassword?.Trim();
+
+        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+        {
+            var generated = await _logins.GenerateAsync(entity.Name, entity.Id, ct);
+
+            email = string.IsNullOrWhiteSpace(email) ? generated.Email : email;
+            password = string.IsNullOrWhiteSpace(password) ? generated.Password : password;
+        }
+
+        entity.AvijanLoginEmail = email;
+        entity.AvijanLoginPassword = password;
+
+        if (await _db.Users.AnyAsync(u => u.Email == email, ct))
+            return;
+
+        _db.Users.Add(new User
+        {
+            Email = email,
+            Roles = UserRoles.Student,
+            PasswordHash = _hasher.Hash(password!),
+            IsActive = entity.IsActive == true,
+            LoginId = actor,
+            RegisterDate = DateOnly.FromDateTime(DateTime.Today),
+            EndDate = entity.DateOfExit,
+            Name = entity.Name,
+            PhoneNumber = entity.Phone,
+            DateOfBirth = entity.DateOfBirth,
+            CreatedBy = actor,
+            CreatedOn = DateTime.UtcNow
+        });
     }
 
     public async Task<Result<bool>> UpdateAsync(
@@ -370,7 +517,7 @@ public class StudentService : IStudentService
         if (referenceError is not null)
             return Result<bool>.Failure(referenceError, ResultStatus.BadRequest);
 
-        var wasComplete = student.IsComplete;
+        var wasComplete = student.IsComplete == true;
 
         Apply(request, student);
 
@@ -402,7 +549,7 @@ public class StudentService : IStudentService
         if (student is null)
             return Result<bool>.Failure("Student not found.", ResultStatus.NotFound);
 
-        if (!student.IsActive)
+        if (!student.IsActive == true)
             return Result<bool>.Failure("Student is already inactive.", ResultStatus.Conflict);
 
         // Soft delete. The legacy "Delete Student where id=..." destroyed the row and
@@ -566,8 +713,8 @@ public class StudentService : IStudentService
             s.DateOfJoining,
             s.DateOfBirth,
             s.DateOfExit,
-            s.IsActive,
-            s.IsComplete,
+            s.IsActive == true,
+            s.IsComplete == true,
             null,      // BranchId  } both filled in by MaterialiseAsync
             s.Branch,
             false));   // HasPhoto  }
@@ -607,7 +754,9 @@ public class StudentService : IStudentService
     /// <summary>
     /// Looks up the chosen branch so the registration id can carry its code and the
     /// student can store its name. Returns null when no branch was selected, which
-    /// yields the original branch-less registration format.
+    /// yields the original branch-less registration format - reachable now only for
+    /// records written before branch became mandatory, since ValidateReferencesAsync
+    /// rejects both a missing branch and one that does not resolve.
     /// </summary>
     private async Task<Branch?> ResolveBranchAsync(int? branchId, CancellationToken ct)
     {
@@ -651,6 +800,17 @@ public class StudentService : IStudentService
             var found = await _db.Teachers.CountAsync(t => teacherIds.Contains(t.Id), ct);
             if (found != teacherIds.Count)
                 return "One of the selected teachers no longer exists.";
+        }
+
+        /* Branch has to resolve, not merely be present. ResolveBranchAsync answers
+           null both for "none chosen" and for "chosen but no such row", and the
+           callers treat null as "no branch" - so without this check an id that does
+           not exist is accepted and quietly saves a student with no branch at all,
+           which is exactly what making the field required is meant to prevent. */
+        if (request.BranchId is { } branchId &&
+            !await _db.Branches.AnyAsync(b => b.Id == branchId, ct))
+        {
+            return "The selected branch no longer exists.";
         }
 
         return null;

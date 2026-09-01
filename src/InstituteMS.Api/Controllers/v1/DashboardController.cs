@@ -26,4 +26,27 @@ public class DashboardController : ApiControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Summary(CancellationToken ct)
         => Envelope(await _dashboard.GetSummaryAsync(ct));
+
+    /// <summary>
+    /// Marks one enquiry from the public contact form as dealt with, removing it
+    /// from the dashboard. The message itself is kept.
+    /// </summary>
+    [HttpPatch("enquiries/{id:int}/handled")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MarkEnquiryHandled(int id, CancellationToken ct)
+        => Envelope(await _dashboard.MarkEnquiryHandledAsync(id, ct), "Enquiry marked as handled.");
+
+    /// <summary>Dismisses one dashboard alert.</summary>
+    [HttpPatch("notifications/{id:int}/read")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MarkNotificationRead(int id, CancellationToken ct)
+        => Envelope(await _dashboard.MarkNotificationReadAsync(id, CurrentUserName, ct), "Marked as read.");
+
+    /// <summary>Dismisses every unread alert at once.</summary>
+    [HttpPatch("notifications/read-all")]
+    [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> MarkAllNotificationsRead(CancellationToken ct)
+        => Envelope(await _dashboard.MarkAllNotificationsReadAsync(CurrentUserName, ct), "All marked as read.");
 }

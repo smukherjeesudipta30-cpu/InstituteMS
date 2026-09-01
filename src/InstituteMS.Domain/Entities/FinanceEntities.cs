@@ -10,7 +10,14 @@ public class LateFee
     public DateOnly? FineDate { get; set; }
 
     public string? CreatedBy { get; set; }
-    public DateTime CreatedOn { get; set; }
+    /// <summary>
+    /// Nullable: the audit columns were added to the legacy tables by the
+    /// coexistence script and are NULL on every row that predates it - all 755
+    /// users, all 953 students. A non-nullable property makes EF throw
+    /// "Data is Null" on those rows. Unknown is the honest value; inventing a
+    /// creation date would be worse.
+    /// </summary>
+    public DateTime? CreatedOn { get; set; }
 }
 
 /// <summary>
@@ -27,7 +34,14 @@ public class TeacherFee
     public DateOnly? PaidOn { get; set; }
 
     public string? CreatedBy { get; set; }
-    public DateTime CreatedOn { get; set; }
+    /// <summary>
+    /// Nullable: the audit columns were added to the legacy tables by the
+    /// coexistence script and are NULL on every row that predates it - all 755
+    /// users, all 953 students. A non-nullable property makes EF throw
+    /// "Data is Null" on those rows. Unknown is the honest value; inventing a
+    /// creation date would be worse.
+    /// </summary>
+    public DateTime? CreatedOn { get; set; }
 
     public Teacher? Teacher { get; set; }
 }
@@ -41,7 +55,14 @@ public class TeacherExpense
     public decimal? Amount { get; set; }
 
     public string? CreatedBy { get; set; }
-    public DateTime CreatedOn { get; set; }
+    /// <summary>
+    /// Nullable: the audit columns were added to the legacy tables by the
+    /// coexistence script and are NULL on every row that predates it - all 755
+    /// users, all 953 students. A non-nullable property makes EF throw
+    /// "Data is Null" on those rows. Unknown is the honest value; inventing a
+    /// creation date would be worse.
+    /// </summary>
+    public DateTime? CreatedOn { get; set; }
 
     public Teacher? Teacher { get; set; }
 }
@@ -75,7 +96,14 @@ public class Mark
     public int? ObtainedMarks4 { get; set; }
 
     public string? CreatedBy { get; set; }
-    public DateTime CreatedOn { get; set; }
+    /// <summary>
+    /// Nullable: the audit columns were added to the legacy tables by the
+    /// coexistence script and are NULL on every row that predates it - all 755
+    /// users, all 953 students. A non-nullable property makes EF throw
+    /// "Data is Null" on those rows. Unknown is the honest value; inventing a
+    /// creation date would be worse.
+    /// </summary>
+    public DateTime? CreatedOn { get; set; }
     public string? ModifiedBy { get; set; }
     public DateTime? ModifiedOn { get; set; }
 }
@@ -92,7 +120,14 @@ public class FeeTotal
     public DateOnly? StoreDate { get; set; }
 
     public string? CreatedBy { get; set; }
-    public DateTime CreatedOn { get; set; }
+    /// <summary>
+    /// Nullable: the audit columns were added to the legacy tables by the
+    /// coexistence script and are NULL on every row that predates it - all 755
+    /// users, all 953 students. A non-nullable property makes EF throw
+    /// "Data is Null" on those rows. Unknown is the honest value; inventing a
+    /// creation date would be worse.
+    /// </summary>
+    public DateTime? CreatedOn { get; set; }
 }
 
 /// <summary>Maps to <c>dbo.Branch</c>.</summary>
@@ -104,5 +139,23 @@ public class Branch
     public bool IsActive { get; set; }
 
     public string? CreatedBy { get; set; }
-    public DateTime CreatedOn { get; set; }
+    /// <summary>
+    /// Nullable: the audit columns were added to the legacy tables by the
+    /// coexistence script and are NULL on every row that predates it - all 755
+    /// users, all 953 students. A non-nullable property makes EF throw
+    /// "Data is Null" on those rows. Unknown is the honest value; inventing a
+    /// creation date would be worse.
+    /// </summary>
+    public DateTime? CreatedOn { get; set; }
+
+    /* The legacy column set, kept in step with the one above.
+
+       dbo.Branch carries both: Branch_name / Branch_id / Is_active from the
+       legacy schema, and BranchName / BranchCode / IsActive added beside them
+       so neither application has to change. Is_active is NOT NULL with no
+       default, so a row written through the new names alone fails outright -
+       and a row that did save would look blank to the legacy application. */
+    public string? LegacyName { get; set; }
+    public string? LegacyCode { get; set; }
+    public bool LegacyIsActive { get; set; }
 }

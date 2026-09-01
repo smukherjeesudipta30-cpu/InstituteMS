@@ -85,6 +85,112 @@ sqlcmd -S . -E -d Avijan_Angular_Migration -I -W -i db/verify/compare_finance.sq
 | `verify/compare_finance.sql` | Old-vs-new diff for users and money: totals to the paisa, hash checks, role breakdown. Read only. |
 | `verify/compare_income.sql` | Runs the original income SQL beside the new definitions, shows the `UNION` shortfall, and checks the late-fine containment rule. Read only. |
 | `verify/compare_academics.sql` | Old-vs-new diff for courses, marks and notices: row-for-row on the key, all four mark triples, orphan and `obtained > full` checks. Read only. |
+| `011_stage_production_snapshot.sql` | Mirrors the LIVE production database into `ph19987796653_prod` over a read-only linked server. |
+| `012_production_schema_alignment.sql` | Widens `Teacher.LoginId`, adds `Student.Avijan_login_Password`, creates the four tables production has that this schema did not. |
+| `013_reset_target_for_reload.sql` | Empties the application database in FK order so a reload can run cleanly. |
+| `014_migrate_unmodelled_tables.sql` | Loads attendance, daily routine, the mail log, `Login` and the contact messages no earlier script carried. |
+| `015_purge_non_production_rows.sql` | Removes anything the running application created, leaving only migrated data. Keeps the FK placeholders. |
+| `verify/compare_production_snapshot.sql` | Proves the local mirror matches live production row for row. Read only. |
+| `verify/compare_production_to_target.sql` | Proves the application database matches live production, with the placeholder and admin differences stated. Read only. |
+
+## Reloading from live production
+
+The local database is a copy of the **live** production database, not the older
+restored backup. The backup was roughly half the size — 459 students against 953 —
+so anything tested against it was testing against stale data.
+
+Production is only ever read. The linked server is created with `rpc out = false`,
+so no remote procedure can run through it; every statement against it is a `SELECT`.
+
+Run in this order:
+
+```
+011_stage_production_snapshot.sql    -- mirror production into ph19987796653_prod
+012_production_schema_alignment.sql  -- widen/add columns production needs
+013_reset_target_for_reload.sql      -- empty the application database
+004_migrate_student_data.sql         -- courses, teachers, students, photos
+008_migrate_finance_data.sql         -- fees, fines, payouts, marks, notices
+010_monthlyfees_actual_fee.sql       -- agreed fee at time of payment
+014_migrate_unmodelled_tables.sql    -- attendance, routine, mail log, messages
+009_registration_number_sequence.sql -- reseed the number sequence
+InstituteMS.Tools.DataMigration --source ph19987796653_prod
+015_purge_non_production_rows.sql    -- drop anything the app created while testing
+```
+
+Then verify:
+
+```
+verify\compare_production_snapshot.sql   -- mirror matches production
+verify\compare_production_to_target.sql  -- application database matches production
+```
+
+### What production forced us to change
+
+**`Teacher.LoginId` was too narrow.** Production declares `varchar(50)` and holds
+values up to 27 characters; this schema had `varchar(20)`, copied from the older
+backup. The load would have failed outright. Widened here, and in
+`TeacherConfiguration` and `TeacherSaveRequestValidator` to match.
+
+**Four tables live in the `ph19987796653` schema on production, not `dbo`** —
+`dailyRoutine`, `MailLog_registration_time`, **`OIncome`** and **`TecExpense`**. The
+old backup had all of them in `dbo`. Any script assuming `dbo` silently misses other
+income and teacher expenses, two things the income report depends on. The snapshot
+flattens them into `dbo` so downstream scripts have one place to look.
+
+**`CusMessage` had never been migrated at all.** The table is modelled by the
+application but no script loaded it, so all 15 contact-form messages were being
+dropped. Caught by `compare_production_to_target.sql`; loaded by 014.
+
+**Orphaned references are wider than we knew.** Production has 10 students on a course
+that no longer exists, and 20 teacher ids referenced by students, `TecFees` or
+`TecExpense` with no matching `Teacher` row — 6 of which appear on no student at all,
+so the earlier student-only placeholder logic missed them. Placeholders are created
+for both, named `(removed course #n)` / `(removed teacher #n)`, so no reference is
+silently nulled.
+
+**`Student.Avijan_login_Password` was missing from this schema.** 30 students have a
+portal password on production. It is now carried across verbatim so the copy is
+complete — **in clear text, as production stores it**. Nothing in the application
+reads it; student sign-in goes through `Users.PasswordHash`. Hash or drop it before
+this schema is used for anything but testing.
+
+### Not migrated, on purpose
+
+`Branch` is empty on production and the new application has its own branch master.
+
+`AttendanceMaster` (344), `dailyRoutine` (2), `MailLog_registration_time` (26) and
+`Login` (0) have no migrated module yet. They are copied so the data is present when
+a module is built for them.
+
+### Keeping the database pure
+
+Run 015 whenever testing has left rows behind. It identifies them by their
+audit columns - anything whose CreatedBy is not 'migration-*' was created
+through the running application - so it can be run repeatedly and never
+touches migrated data.
+
+Placeholder rows are NOT removed by it. Production has 10 students on a course
+that no longer exists and 20 teacher ids with no Teacher row; their
+'(removed course #n)' / '(removed teacher #n)' stand-ins are what let those real
+rows keep their real references. Deleting them would break the foreign keys and
+lose which course or teacher a student actually had.
+
+The one row production does not have is **admin@avijan.local**, created by the
+migration tool so there is always a way in. Every production Admin still works
+with the password its owner already had, so once you can sign in as one of those:
+
+```sql
+DELETE FROM dbo.Users WHERE Email = 'admin@avijan.local';
+```
+
+### The linked server holds production credentials
+
+`AVIJAN_PROD` stores the production password inside the local SQL Server. Drop it when
+the sync is done — the verify scripts need it, so keep it while testing:
+
+```sql
+EXEC sp_dropserver 'AVIJAN_PROD', 'droplogins';
+```
 
 ## Decisions the real data forced
 

@@ -32,6 +32,18 @@ public class StudentSaveRequestValidator : AbstractValidator<StudentSaveRequest>
             .EmailAddress().WithMessage("Valid Email is required.")
             .MaximumLength(50);
 
+        /* A new admission must carry a personal email: it is where the welcome
+           message goes, and it is the only address the institute has for the
+           student that it does not itself issue.
+
+           Required on CREATE only. 932 of the 953 migrated students have no
+           personal email - 219 of them still active - so requiring it on every
+           save would make those records uneditable until someone invented an
+           address for them. */
+        RuleFor(x => x.PersonalEmail)
+            .NotEmpty().WithMessage("Personal email is required for a new admission.")
+            .When((_, ctx) => IsCreate(ctx));
+
         RuleFor(x => x.PersonalEmail)
             .EmailAddress().WithMessage("Personal email is not valid.")
             .MaximumLength(150)
@@ -86,8 +98,14 @@ public class StudentSaveRequestValidator : AbstractValidator<StudentSaveRequest>
             .WithMessage("The same teacher cannot be selected more than once.")
             .WithName("Teachers");
 
-        // Branch is a lookup id now, not free text — the service rejects an id that
-        // does not resolve, so only the obvious shape is checked here.
+        /* Branch is a lookup id, not free text. Only the shape is checked here,
+           because this validator serves both create and update and the two differ:
+           a NEW admission must name a branch, while editing a student who predates
+           the rule may leave it out and keep whatever they already have. Requiring
+           it here would block those edits.
+
+           So "required" lives in StudentService.CreateAsync, and "must actually
+           exist" in ValidateReferencesAsync, which both paths run. */
         RuleFor(x => x.BranchId)
             .GreaterThan(0).WithMessage("Please select a valid branch.")
             .When(x => x.BranchId.HasValue);
@@ -105,4 +123,13 @@ public class StudentSaveRequestValidator : AbstractValidator<StudentSaveRequest>
 
         return picked.Count == picked.Distinct().Count();
     }
+
+    /// <summary>
+    /// True when this request is creating a student rather than editing one. The
+    /// filter puts the HTTP verb into the context because both actions bind the
+    /// same request type, so the rule cannot tell them apart any other way.
+    /// </summary>
+    private static bool IsCreate(FluentValidation.ValidationContext<StudentSaveRequest> ctx)
+        => ctx.RootContextData.TryGetValue("HttpMethod", out var verb)
+           && string.Equals(verb as string, "POST", StringComparison.OrdinalIgnoreCase);
 }

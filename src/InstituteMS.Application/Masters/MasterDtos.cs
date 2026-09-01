@@ -1,3 +1,4 @@
+using FluentValidation;
 using InstituteMS.Application.Common;
 
 namespace InstituteMS.Application.Masters;
@@ -86,6 +87,30 @@ public interface ITeacherService
 
     Task<PagedResult<TeacherEarningDto>> GetEarningsAsync(
         int teacherId, DateOnly? from, DateOnly? to, PagedQuery query, CancellationToken ct = default);
+
+    /* ------------------------------- payments made to the teacher */
+
+    /// <summary>
+    /// Records money handed to a teacher. Writes <c>dbo.TecExpense</c>, which is
+    /// the "paid" side of the teacher account report.
+    /// </summary>
+    Task<Result<int>> RecordPaymentAsync(
+        TeacherPaymentRequest request, string? actor, CancellationToken ct = default);
+
+    /// <summary>Payments already made to one teacher, newest first.</summary>
+    Task<Result<IReadOnlyList<TeacherPaymentDto>>> GetPaymentsAsync(
+        int teacherId, DateOnly? from, DateOnly? to, CancellationToken ct = default);
+
+    /// <summary>
+    /// Earned, paid and pending for one teacher. Scoped to the same date range as
+    /// the earnings list, so the three figures and the rows below them always
+    /// describe the same period.
+    /// </summary>
+    Task<Result<TeacherAccountDto>> GetAccountAsync(
+        int teacherId, DateOnly? from, DateOnly? to, CancellationToken ct = default);
+
+    /// <summary>Removes a payment recorded in error.</summary>
+    Task<Result<bool>> DeletePaymentAsync(int paymentId, CancellationToken ct = default);
 }
 
 public interface IBranchService
@@ -98,3 +123,64 @@ public interface IBranchService
 
     Task<Result<bool>> SetStatusAsync(int id, bool isActive, CancellationToken ct = default);
 }
+
+/* ============================================= payments made to a teacher */
+
+/// <summary>
+/// A payment handed to a teacher — their share of fees, actually paid out.
+/// Writes <c>dbo.TecExpense</c>, which the teacher account report reads as
+/// "paid".
+/// </summary>
+/// <remarks>
+/// Until this existed the migrated <c>TecExpense</c> rows were read-only, so a
+/// teacher's "paid" figure could never move and their pending balance only ever
+/// grew. Recording a payment is an administrator's act alone.
+/// </remarks>
+public record TeacherPaymentRequest
+{
+    public int TeacherId { get; init; }
+    public DateOnly? PaidOn { get; init; }
+    public decimal Amount { get; init; }
+}
+
+public class TeacherPaymentRequestValidator : AbstractValidator<TeacherPaymentRequest>
+{
+    public TeacherPaymentRequestValidator()
+    {
+        RuleFor(x => x.TeacherId).GreaterThan(0).WithMessage("Choose a teacher.");
+
+        RuleFor(x => x.Amount)
+            .GreaterThan(0m).WithMessage("Amount must be greater than zero.")
+            .LessThan(1_000_000m).WithMessage("Amount must be less than 10,00,000.");
+
+        // A date in the future is a typo, not a payment.
+        RuleFor(x => x.PaidOn)
+            .LessThanOrEqualTo(_ => DateOnly.FromDateTime(DateTime.Now.AddDays(1)))
+            .WithMessage("The payment date cannot be in the future.")
+            .When(x => x.PaidOn.HasValue);
+    }
+}
+
+/// <summary>One payment made to a teacher, as the master screen lists it.</summary>
+public record TeacherPaymentDto(
+    int Id,
+    DateOnly? PaidOn,
+    decimal Amount,
+    string? RecordedBy,
+    DateTime RecordedOn);
+
+/// <summary>A teacher's account at a glance: earned, paid and the balance.</summary>
+public record TeacherAccountDto(
+    int TeacherId,
+    string? TeacherName,
+    decimal TotalEarned,
+    decimal TotalPaid,
+    /// <summary>Earned minus paid. Negative means the teacher has been overpaid.</summary>
+    decimal Pending,
+
+    /// <summary>The range these figures cover. Null on either side means all time.</summary>
+    DateOnly? From = null,
+    DateOnly? To = null,
+
+    /// <summary>True when a date filter is applied, so the screen can say so.</summary>
+    bool IsFiltered = false);

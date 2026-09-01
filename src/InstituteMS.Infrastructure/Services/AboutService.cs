@@ -37,7 +37,7 @@ public class AboutService : IAboutService
             .Select(c => new AboutCourseDto(c.Cid, c.Name ?? "(unnamed)", c.Duration))
             .ToListAsync(ct);
 
-        var activeStudents = await _db.Students.CountAsync(s => s.IsActive, ct);
+        var activeStudents = await _db.Students.CountAsync(s => s.IsActive == true, ct);
         var teachers = await _db.Teachers.CountAsync(ct);
         var earliestJoin = await _db.Students
             .Where(s => s.DateOfJoining != null)
@@ -62,6 +62,27 @@ public class AboutService : IAboutService
             _profile.Contact.Email,
             _profile.Contact.OfficeHours);
 
+        // The front page scrolls the notice board (legacy Notice/getDetails, which
+        // the public page called with no authentication). Only the text and date
+        // are exposed - nothing identifies a student.
+        var notices = await _db.Notices
+            .AsNoTracking()
+            .Where(n => n.Text != null && n.Text != "")
+            .OrderByDescending(n => n.NoticeDate)
+            .ThenByDescending(n => n.Id)
+            .Take(10)
+            .Select(n => new AboutNoticeDto(n.Id, n.Text, n.NoticeDate))
+            .ToListAsync(ct);
+
+        // The "Show Timing" panel (legacy Notice/gettime -> dailyRoutine).
+        var routine = await _db.DailyRoutines
+            .AsNoTracking()
+            .OrderBy(r => r.Id)
+            .Select(r => new RoutineRowDto(
+                r.Id, r.Name, r.Sunday, r.Monday, r.Tuesday,
+                r.Wednesday, r.Thursday, r.Friday, r.Saturday))
+            .ToListAsync(ct);
+
         return new AboutPageDto(
             _profile.Name,
             _profile.Tagline,
@@ -69,7 +90,9 @@ public class AboutService : IAboutService
             _profile.Highlights,
             stats,
             courses,
-            contact);
+            contact,
+            notices,
+            routine);
     }
 
     public async Task<Result<int>> SubmitContactAsync(

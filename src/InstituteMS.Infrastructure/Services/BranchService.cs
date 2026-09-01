@@ -82,6 +82,12 @@ public class BranchService : IBranchService
         {
             Name = name,
             Code = code,
+
+            // Written to the legacy columns too, so the row is complete for both
+            // applications and Is_active (NOT NULL) is satisfied.
+            LegacyName = name,
+            LegacyCode = code,
+            LegacyIsActive = request.IsActive,
             IsActive = request.IsActive,
             CreatedBy = actor,
             CreatedOn = DateTime.UtcNow
@@ -135,6 +141,10 @@ public class BranchService : IBranchService
         branch.Name = name;
         branch.Code = code;
         branch.IsActive = request.IsActive;
+
+        branch.LegacyName = name;
+        branch.LegacyCode = code;
+        branch.LegacyIsActive = request.IsActive;
 
         if (!string.Equals(oldName, name, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(oldName))
         {

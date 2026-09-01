@@ -1,9 +1,13 @@
+using InstituteMS.Application.Documents;
+using InstituteMS.Application.Notifications;
 using InstituteMS.Application.Common;
 using InstituteMS.Application.Fees;
 using InstituteMS.Domain.Entities;
 using InstituteMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using InstituteMS.Infrastructure.Settings;
 
 namespace InstituteMS.Infrastructure.Services;
 
@@ -22,11 +26,79 @@ public class FeeService : IFeeService
 {
     private readonly AppDbContext _db;
     private readonly ILogger<FeeService> _logger;
+    private readonly PaymentSettings _payments;
+    private readonly IStudentMailer _mailer;
+    private readonly IReceiptPdfGenerator _pdf;
+    private readonly IReceiptLinkService _links;
 
-    public FeeService(AppDbContext db, ILogger<FeeService> logger)
+    public FeeService(
+        AppDbContext db,
+        ILogger<FeeService> logger,
+        IOptions<PaymentSettings> payments,
+        IStudentMailer mailer,
+        IReceiptPdfGenerator pdf,
+        IReceiptLinkService links)
     {
         _db = db;
         _logger = logger;
+        _payments = payments.Value;
+        _mailer = mailer;
+        _pdf = pdf;
+        _links = links;
+    }
+
+    /// <summary>
+    /// Emails the student their money receipt after a payment has been committed.
+    /// </summary>
+    /// <remarks>
+    /// Always called <b>after</b> the transaction, never inside it: a slow or
+    /// unreachable mail server must not hold a database transaction open. It is
+    /// awaited rather than fired and forgotten so the attempt is written to
+    /// <c>dbo.MailLog_registration_time</c> before the response returns, and the
+    /// mailer never throws — a fee that has been taken stays taken whether or not
+    /// the message went out.
+    /// </remarks>
+    private async Task SendReceiptAsync(int feeId, string? actor, CancellationToken ct)
+    {
+        var receipt = await GetReceiptAsync(feeId, ct);
+        if (!receipt.Succeeded || receipt.Value is null) return;
+
+        var r = receipt.Value;
+
+        // The receipt itself does not carry the personal address, so it is read
+        // here rather than widening the DTO the printed receipt shares.
+        var personalEmail = await _db.Students
+            .AsNoTracking()
+            .Where(s => s.RegistrationId == r.RegistrationId)
+            .OrderByDescending(s => s.Id)
+            .Select(s => s.PersonalEmail)
+            .FirstOrDefaultAsync(ct);
+
+        /* The PDF is an addition to the message, never a condition of it: a receipt
+           that fails to render must still reach the student as the body it always
+           was. Hence the try — the mailer treats a null attachment as "no PDF". */
+        byte[]? pdf = null;
+        try { pdf = _pdf.MoneyReceipt(r); }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not render the PDF for receipt {BillNo}; sending without it.", r.BillNo);
+        }
+
+        await _mailer.SendFeeReceiptAsync(
+            new FeeReceiptMailRequest(
+                r.RegistrationId ?? string.Empty,
+                r.StudentName ?? string.Empty,
+                r.CourseName,
+                personalEmail,
+                r.BillNo,
+                r.AmountPaid,
+                r.AmountPaidInWords,
+                r.NewDue,
+                r.FeeDate,
+                r.NextDueDate,
+                pdf,
+                $"Avijan-Money-Receipt-{(r.BillNo ?? "receipt").Replace('/', '-')}.pdf"),
+            actor, ct);
     }
 
     /* ------------------------------------------------------------------ read */
@@ -38,11 +110,11 @@ public class FeeService : IFeeService
 
         var student = await _db.Students
             .AsNoTracking()
-            .Where(s => s.RegistrationId == reg && s.IsActive)
+            .Where(s => s.RegistrationId == reg && s.IsActive == true)
             .OrderByDescending(s => s.Id)
             .Select(s => new
             {
-                s.Id, s.RegistrationId, s.Name, s.AdmissionFees, s.MonthlyFees,
+                s.Id, s.RegistrationId, s.Name, s.Phone, s.AdmissionFees, s.MonthlyFees,
                 s.DateOfJoining, s.TechniqueCount,
                 s.PrimaryTeacherId, PrimaryTeacher = s.PrimaryTeacher != null ? s.PrimaryTeacher.Name : null,
                 s.SecondTeacherId, SecondTeacher = s.SecondTeacher != null ? s.SecondTeacher.Name : null,
@@ -70,7 +142,7 @@ public class FeeService : IFeeService
             student.PrimaryTeacherId, student.PrimaryTeacher,
             student.SecondTeacherId, student.SecondTeacher,
             student.ThirdTeacherId, student.ThirdTeacher,
-            installmentsPaid, lastPayment, outstandingDue));
+            installmentsPaid, lastPayment, outstandingDue, student.Phone));
     }
 
     public async Task<PagedResult<FeePaymentDto>> GetPaymentsAsync(
@@ -180,7 +252,8 @@ public class FeeService : IFeeService
             payment.Id, student?.Name, payment.StudentRegistrationId, student?.CourseName,
             payment.BillNo, payment.OtherInstallment,
             NumberToWords.Convert(payment.OtherInstallment ?? 0m),
-            payment.OldDue, payment.NewDue, payment.FeeDate, nextDue));
+            payment.OldDue, payment.NewDue, payment.FeeDate, nextDue,
+            _links.CreateUrl(ReceiptKind.Fee, payment.Id)));
     }
 
     /* ----------------------------------------------------------------- write */
@@ -192,7 +265,7 @@ public class FeeService : IFeeService
 
         var student = await _db.Students
             .AsNoTracking()
-            .Where(s => s.RegistrationId == reg && s.IsActive)
+            .Where(s => s.RegistrationId == reg && s.IsActive == true)
             .OrderByDescending(s => s.Id)
             .Select(s => new
             {
@@ -218,13 +291,14 @@ public class FeeService : IFeeService
         {
             await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
-            var billNo = await NextBillNumberAsync(ct);
+            /* 1. the fee ledger row.
 
-            // 1. the fee ledger row
+               The bill number is filled in AFTER this insert, from the row's own
+               identity — see below. It cannot be worked out first, which is what
+               the previous version did with MAX(id) + 1. */
             var fee = new MonthlyFee
             {
                 StudentRegistrationId = reg,
-                BillNo = billNo,
                 FeeDate = request.FeeDate,
                 PaymentDate = request.PreviousPaymentDate,
                 Installment = request.TotalForMonth,   // legacy stores installment + fine here
@@ -236,9 +310,30 @@ public class FeeService : IFeeService
                 OldDue = request.OldDue,
                 NewDue = request.NewDue,
                 CreatedBy = actor,
-                CreatedOn = DateTime.UtcNow
+                CreatedOn = DateTime.Now
             };
             _db.MonthlyFees.Add(fee);
+
+            /* Saved on its own so SQL Server assigns the identity, and the bill
+               number is then taken FROM that identity rather than predicted before
+               it. Everything below is keyed on the bill number, so it has to exist
+               before those rows are built.
+               -----------------------------------------------------------------
+               The old code read MAX(id) + 1 and used that. The two agree only while
+               nothing has ever disturbed the identity counter - but a deleted row,
+               a rolled-back insert, or a SQL Server restart (which can advance an
+               identity by up to 1000) leaves MAX(id) behind the next identity
+               value. The row then gets one id and carries a bill number one lower,
+               and the NEXT bill number is computed from the new MAX - so a number
+               is skipped. That is the "after 66 comes 68" gap: id 17767 was issued
+               bill S-M-17766, and the following bill became S-M-17768.
+
+               Deriving it from the identity makes bill number and row id the same
+               value by construction, so they can never drift again. */
+            await _db.SaveChangesAsync(ct);
+
+            var billNo = $"S-M-{fee.Id}-{DateTime.Today:yy}";
+            fee.BillNo = billNo;
 
             // 2. the income roll-up the reports read
             _db.FeeTotals.Add(new FeeTotal
@@ -247,7 +342,7 @@ public class FeeService : IFeeService
                 Total = request.TotalForMonth,
                 StoreDate = request.FeeDate,
                 CreatedBy = actor,
-                CreatedOn = DateTime.UtcNow
+                CreatedOn = DateTime.Now
             });
 
             // 3. the fine, always written so the late-fine report stays complete
@@ -258,7 +353,7 @@ public class FeeService : IFeeService
                 FineAmount = request.LateFine,
                 FineDate = request.FeeDate,
                 CreatedBy = actor,
-                CreatedOn = DateTime.UtcNow
+                CreatedOn = DateTime.Now
             });
 
             // 4. one payout row per assigned teacher
@@ -272,7 +367,7 @@ public class FeeService : IFeeService
                     Salary = salaryEach,
                     PaidOn = request.FeeDate,
                     CreatedBy = actor,
-                    CreatedOn = DateTime.UtcNow
+                    CreatedOn = DateTime.Now
                 });
             }
 
@@ -286,6 +381,8 @@ public class FeeService : IFeeService
             "Fee {BillNo} recorded for {RegistrationId}: total {Total}, paid {Paid}, fine {Fine}, {Teachers} teacher payout(s) of {Each} by {Actor}",
             recorded.BillNo, reg, request.TotalForMonth, request.AmountPaid, request.LateFine,
             teacherIds.Count, salaryEach, actor);
+
+        await SendReceiptAsync(recorded.Id, actor, ct);
 
         return Result<FeeRecordedDto>.Success(recorded);
     }
@@ -321,7 +418,7 @@ public class FeeService : IFeeService
         fee.OldDue = request.OldDue;
         fee.NewDue = request.NewDue;
         fee.ModifiedBy = actor;
-        fee.ModifiedOn = DateTime.UtcNow;
+        fee.ModifiedOn = DateTime.Now;
 
         // The sibling rows are keyed by bill number, exactly as usp_UpdateData did.
         if (billNo is not null)
@@ -376,26 +473,344 @@ public class FeeService : IFeeService
         return due is > 0m ? due.Value : 0m;
     }
 
+
+    /* =========================== online payment from the student portal */
+
     /// <summary>
-    /// <c>S-M-{n}-{yy}</c>, matching the legacy format. Derived from the highest
-    /// existing ledger id, then stepped past anything already taken — the legacy
-    /// version did no such check and could reuse a number.
+    /// The student behind a sign-in. Duplicated from <c>ReportService</c> rather
+    /// than injected: <c>ReportService</c> already depends on this service, so
+    /// taking a dependency the other way would close a cycle.
     /// </summary>
-    private async Task<string> NextBillNumberAsync(CancellationToken ct)
+    private async Task<Result<string>> ResolveStudentAsync(string email, CancellationToken ct)
     {
-        var lastId = await _db.MonthlyFees.MaxAsync(f => (int?)f.Id, ct) ?? 0;
-        var year = DateTime.Today.ToString("yy");
+        if (string.IsNullOrWhiteSpace(email))
+            return Result<string>.Failure("No signed-in identity to resolve.", ResultStatus.Unauthorized);
 
-        var next = lastId + 1;
-        var guard = 0;
+        var trimmed = email.Trim();
 
-        while (await _db.MonthlyFees.AnyAsync(f => f.BillNo == $"S-M-{next}-{year}", ct))
+        // Deliberately not filtered on active or complete, unlike the report
+        // version: an inactive student still has a record, and telling them their
+        // sign-in matches nothing would be untrue. The caller checks their status
+        // and says plainly why they cannot pay. Active first, then newest, so a
+        // stale duplicate never wins over a live registration.
+        var regId = await _db.Students
+            .AsNoTracking()
+            .Where(s => s.Email == trimmed
+                        || s.PersonalEmail == trimmed
+                        || s.AvijanLoginEmail == trimmed)
+            .OrderByDescending(s => s.IsActive == true)
+            .ThenByDescending(s => s.Id)
+            .Select(s => s.RegistrationId)
+            .FirstOrDefaultAsync(ct);
+
+        return string.IsNullOrEmpty(regId)
+            ? Result<string>.Failure(
+                "No student record is linked to this sign-in. Ask the office to check the email on your registration.",
+                ResultStatus.NotFound)
+            : Result<string>.Success(regId);
+    }
+
+    public async Task<Result<MyFeeDueDto>> GetMyDueAsync(
+        string email, CancellationToken ct = default)
+    {
+        var own = await ResolveStudentAsync(email, ct);
+
+        if (!own.Succeeded)
+            return Result<MyFeeDueDto>.Failure(own.Error!, own.Status);
+
+        var regId = own.Value!;
+
+        /* ---- who may pay a monthly fee at all ----------------------------
+           Only a student still studying. A completed student has no further
+           months to pay, and an inactive one has left — taking money from
+           either would put a fee on a ledger that should have stopped.
+
+           Checked explicitly rather than left to GetBillAsync's active-only
+           filter, which blocked them by accident with a back-office message
+           ("No active student found with registration id ...") and let a
+           student marked complete while still flagged active straight
+           through. */
+
+        var status = await _db.Students
+            .AsNoTracking()
+            .Where(s => s.RegistrationId == regId)
+            .OrderByDescending(s => s.IsActive == true)
+            .ThenByDescending(s => s.Id)
+            .Select(s => new { IsActive = s.IsActive == true, IsComplete = s.IsComplete == true })
+            .FirstOrDefaultAsync(ct);
+
+        if (status is null)
         {
-            next++;
-            if (++guard > 1000)
-                throw new InvalidOperationException("Could not find a free bill number after 1000 attempts.");
+            return Result<MyFeeDueDto>.Failure(
+                "No student record is linked to this sign-in. Ask the office to check " +
+                "the email on your registration.",
+                ResultStatus.NotFound);
         }
 
-        return $"S-M-{next}-{year}";
+        if (status.IsComplete)
+        {
+            return Result<MyFeeDueDto>.Failure(
+                "You have completed your course, so there are no further monthly fees " +
+                "to pay. If you think this is wrong, please speak to the office.",
+                ResultStatus.Forbidden);
+        }
+
+        if (!status.IsActive)
+        {
+            return Result<MyFeeDueDto>.Failure(
+                "Your registration is not active, so fees cannot be paid online. " +
+                "Please speak to the office.",
+                ResultStatus.Forbidden);
+        }
+
+        var bill = await GetBillAsync(regId, ct);
+
+        if (!bill.Succeeded)
+            return Result<MyFeeDueDto>.Failure(bill.Error!, bill.Status);
+
+        var b = bill.Value!;
+
+        var upiId = _payments.UpiId;
+        var payeeName = _payments.PayeeName;
+
+        /* The payment is being made today, so today is the fee date — exactly as the
+           counter records it.
+
+           This used to be the *due* date (last payment + 32 days), which quietly made
+           the portal cheaper than the desk: the fine is worked out from the fee date,
+           so pricing the month as though it were paid on the day it fell due meant the
+           fine stopped growing however late the student actually was. A student whose
+           fee was due on 23 Jul was charged no fine at all in the portal on 1 Sep,
+           while the same student at the counter that morning was charged 24 rupees.
+
+           It also mis-dated the ledger: the row was written with a fee date weeks in
+           the past, so a September payment landed in August and the dues and income
+           reports, which filter on that date, both disagreed with the cash. */
+        var today = DateOnly.FromDateTime(DateTime.Now);
+
+        var dueDate = b.LastPaymentDate is { } last
+            ? LateFineCalculator.NextDueDate(last)
+            : (DateOnly?)null;
+
+        var feeDate = today;
+
+        var monthlyFee = b.MonthlyFees ?? 0m;
+
+        var calc = await CalculateAsync(
+            new FeeCalculationRequest(regId, feeDate, monthlyFee, null), ct);
+
+        var fine = calc.Succeeded ? calc.Value!.LateFine : 0m;
+        var explanation = calc.Succeeded ? calc.Value!.Explanation : null;
+        var oldDue = calc.Succeeded ? calc.Value!.OldDue : 0m;
+
+        string? reason = null;
+
+        if (monthlyFee <= 0m)
+        {
+            reason = "No monthly fee is set on your record. Please speak to the office.";
+        }
+        else if (string.IsNullOrWhiteSpace(upiId))
+        {
+            reason = "Online payment is not switched on yet. Please pay at the centre.";
+        }
+        else if (b.LastPaymentDate is null)
+        {
+            // The teacher's share is carried over from the previous payment, and a
+            // first payment has none to carry. Taking it at the counter is what sets
+            // the percentage; after that the portal can repeat it.
+            reason = "Your first payment is taken at the centre. Once it is recorded " +
+                     "you can pay the following months from here.";
+        }
+
+        return Result<MyFeeDueDto>.Success(new MyFeeDueDto(
+            regId,
+            b.StudentName,
+            b.CourseName,
+            feeDate,
+            dueDate,
+            monthlyFee,
+            fine,
+            monthlyFee + fine,
+            oldDue,
+            explanation,
+            b.LastPaymentDate,
+            reason is null,
+            reason,
+            upiId,
+            payeeName));
+    }
+
+    public async Task<Result<FeeRecordedDto>> PayOnlineAsync(
+        string email, OnlineFeePaymentRequest request, CancellationToken ct = default)
+    {
+        var due = await GetMyDueAsync(email, ct);
+
+        if (!due.Succeeded)
+            return Result<FeeRecordedDto>.Failure(due.Error!, due.Status);
+
+        var d = due.Value!;
+
+        if (!d.CanPay)
+            return Result<FeeRecordedDto>.Failure(d.Reason ?? "This fee cannot be paid online.");
+
+        var reference = request.TransactionId.Trim();
+
+        // The same reference twice is a double submission — a student tapping the
+        // button again, or a page refresh — not a second month's fee. The unique
+        // index enforces it; catching it here explains what happened.
+        var alreadyUsed = await _db.MonthlyFees
+            .AsNoTracking()
+            .AnyAsync(f => f.TransactionId == reference, ct);
+
+        if (alreadyUsed)
+        {
+            return Result<FeeRecordedDto>.Failure(
+                "That reference has already been submitted. Check your fee history — " +
+                "the payment is most likely already recorded.",
+                ResultStatus.Conflict);
+        }
+
+        // "Like last month": the agreed teacher share is recorded nowhere but on the
+        // previous payment, so it is carried forward rather than guessed.
+        var lastPercentage = await _db.MonthlyFees
+            .AsNoTracking()
+            .Where(f => f.StudentRegistrationId == d.RegistrationId && f.Percentage != null)
+            .OrderByDescending(f => f.PaymentDate)
+            .ThenByDescending(f => f.Id)
+            .Select(f => f.Percentage)
+            .FirstOrDefaultAsync(ct);
+
+        if (lastPercentage is null)
+        {
+            return Result<FeeRecordedDto>.Failure(
+                "Your first payment is taken at the centre. Once it is recorded you " +
+                "can pay the following months from here.");
+        }
+
+        var save = new FeeSaveRequest
+        {
+            RegistrationId = d.RegistrationId,
+            FeeDate = d.FeeDate,
+            PreviousPaymentDate = d.PreviousPaymentDate,
+            InstallmentAmount = d.MonthlyFee,
+            TeacherPercentage = lastPercentage.Value,
+            LateFine = d.LateFine,
+            TotalForMonth = d.AmountPayable,
+            AmountPaid = d.AmountPayable,
+            OldDue = d.OldDue,
+            // Paying the month in full leaves whatever was outstanding before.
+            NewDue = d.OldDue
+        };
+
+        var recorded = await RecordPaymentAsync(save, PortalActor(d.RegistrationId), ct);
+
+        if (!recorded.Succeeded)
+            return recorded;
+
+        // Stamp the reference onto the row just written, so it is identifiable as
+        // an online payment and findable while it is still unverified.
+        var fee = await _db.MonthlyFees
+            .FirstOrDefaultAsync(f => f.BillNo == recorded.Value!.BillNo, ct);
+
+        if (fee is not null)
+        {
+            fee.TransactionId = reference;
+            await _db.SaveChangesAsync(ct);
+        }
+
+        return recorded;
+    }
+
+    /// <summary>
+    /// Who to record the payment against. The student, named, so the ledger never
+    /// suggests a member of staff took money they never handled.
+    /// </summary>
+    private static string PortalActor(string registrationId)
+        => $"portal:{registrationId}";
+
+    public async Task<Result<IReadOnlyList<OnlinePaymentNoticeDto>>> GetUnverifiedOnlinePaymentsAsync(
+        int take = 25, CancellationToken ct = default)
+    {
+        var rows = await _db.MonthlyFees
+            .AsNoTracking()
+            .Where(f => f.TransactionId != null && f.VerifiedOn == null)
+            .OrderByDescending(f => f.CreatedOn)
+            .Take(Math.Clamp(take, 1, 100))
+            .Select(f => new
+            {
+                f.Id, f.BillNo, f.StudentRegistrationId, f.FeeDate,
+                f.AgreedMonthlyFee, f.Installment, f.OtherInstallment,
+                f.TransactionId, f.CreatedOn
+            })
+            .ToListAsync(ct);
+
+        var regIds = rows.Select(r => r.StudentRegistrationId).Distinct().ToList();
+
+        var students = await _db.Students
+            .AsNoTracking()
+            .Where(s => regIds.Contains(s.RegistrationId))
+            .Select(s => new
+            {
+                s.RegistrationId,
+                s.Name,
+                CourseName = s.Course != null ? s.Course.Name : null
+            })
+            .ToListAsync(ct);
+
+        var billNos = rows.Select(r => r.BillNo).ToList();
+
+        var fines = await _db.LateFees
+            .AsNoTracking()
+            .Where(l => billNos.Contains(l.BillNo))
+            .Select(l => new { l.BillNo, l.FineAmount })
+            .ToListAsync(ct);
+
+        var notices = rows.Select(r =>
+        {
+            var student = students.FirstOrDefault(s =>
+                string.Equals(s.RegistrationId, r.StudentRegistrationId, StringComparison.OrdinalIgnoreCase));
+
+            var fine = fines.FirstOrDefault(f =>
+                string.Equals(f.BillNo, r.BillNo, StringComparison.OrdinalIgnoreCase))?.FineAmount ?? 0m;
+
+            return new OnlinePaymentNoticeDto(
+                r.Id,
+                r.BillNo,
+                r.StudentRegistrationId,
+                student?.Name,
+                student?.CourseName,
+                r.FeeDate,
+                r.AgreedMonthlyFee ?? 0m,
+                fine,
+                r.OtherInstallment ?? r.Installment ?? 0m,
+                r.TransactionId,
+                // Recorded when the payment was taken; NULL only for rows that
+                // predate the audit columns, which no online payment does.
+                r.CreatedOn ?? default);
+        }).ToList();
+
+        return Result<IReadOnlyList<OnlinePaymentNoticeDto>>.Success(notices);
+    }
+
+    public async Task<Result<bool>> VerifyOnlinePaymentAsync(
+        int feeId, string? actor, CancellationToken ct = default)
+    {
+        var fee = await _db.MonthlyFees.FirstOrDefaultAsync(f => f.Id == feeId, ct);
+
+        if (fee is null)
+            return Result<bool>.Failure("That payment no longer exists.", ResultStatus.NotFound);
+
+        if (fee.TransactionId is null)
+            return Result<bool>.Failure("That payment was taken at the counter, so there is nothing to verify.");
+
+        if (fee.VerifiedOn is not null)
+            return Result<bool>.Success(true);
+
+        fee.VerifiedOn = DateTime.Now;
+        fee.VerifiedBy = actor;
+
+        await _db.SaveChangesAsync(ct);
+
+        return Result<bool>.Success(true);
     }
 }

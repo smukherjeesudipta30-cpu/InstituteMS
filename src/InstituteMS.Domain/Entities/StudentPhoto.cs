@@ -27,5 +27,12 @@ public class StudentPhoto
     public string? ContentType { get; set; }
 
     public string? CreatedBy { get; set; }
-    public DateTime CreatedOn { get; set; }
+    /// <summary>
+    /// Nullable: the audit columns were added to the legacy tables by the
+    /// coexistence script and are NULL on every row that predates it - all 755
+    /// users, all 953 students. A non-nullable property makes EF throw
+    /// "Data is Null" on those rows. Unknown is the honest value; inventing a
+    /// creation date would be worse.
+    /// </summary>
+    public DateTime? CreatedOn { get; set; }
 }

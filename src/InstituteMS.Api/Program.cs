@@ -13,6 +13,7 @@ using InstituteMS.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Serilog;
@@ -83,7 +84,14 @@ builder.Services.AddAuthorization();
 
 // ------------------------------------------------------------------- MVC
 builder.Services
-    .AddControllers(options => options.Filters.Add<ValidationFilter>())
+    .AddControllers(options =>
+    {
+        options.Filters.Add<ValidationFilter>();
+
+        // Global, so a new controller is covered the moment it is written rather
+        // than when someone remembers to annotate it.
+        options.Filters.Add<PasswordResetFilter>();
+    })
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
@@ -221,12 +229,76 @@ else
 }
 
 app.UseCors(CorsPolicy);
+
+/* Serves the built Angular application from wwwroot when it is present.
+   ---------------------------------------------------------------------
+   In production the Angular build sets apiBaseUrl to "/api/v1" - a relative
+   path - so the browser expects the site and the API on the SAME origin.
+   Without this the published site would need a reverse proxy (IIS ARR) in
+   front of two applications just to put them back on one host.
+
+   Guarded on the folder existing, so development is untouched: there is no
+   wwwroot in the repository and `ng serve` keeps proxying as before. */
+if (Directory.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot")))
+{
+    /* The ACME http-01 challenge, served for Let's Encrypt at issue and at every
+       renewal thereafter. It needs its own middleware because the challenge token
+       is an extensionless file with no registered MIME type, and the ordinary
+       static-file middleware refuses to serve those. Scoped to /.well-known so
+       ServeUnknownFileTypes cannot loosen anything else, and paired with the
+       ".well-known" exclusion in the SPA fallback below - without that exclusion
+       routing claims the request first and this never runs. */
+    var wellKnown = Path.Combine(app.Environment.WebRootPath, ".well-known");
+    Directory.CreateDirectory(wellKnown);
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = new PhysicalFileProvider(wellKnown),
+        RequestPath = "/.well-known",
+        ServeUnknownFileTypes = true,
+        DefaultContentType = "text/plain"
+    });
+
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
+}
+
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
 app.MapHealthChecks("/health").AllowAnonymous();
+
+/* Angular routes are client-side: a browser asked for /students directly - a
+   refresh, or a pasted link - must still be handed index.html rather than a
+   404. Registered after MapControllers so it can never shadow an API route,
+   and excluded for /api and /health so a genuine 404 there stays a 404
+   instead of returning HTML to something expecting JSON. */
+if (Directory.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot")))
+{
+    /* Two constraints, both load-bearing:
+
+       "nonfile" is the one MapFallbackToFile applies by default, and it has to be
+       put back by hand once a custom pattern replaces the default. WebApplication
+       inserts UseRouting at the TOP of the pipeline, so an endpoint is selected
+       before UseStaticFiles runs - and StaticFileMiddleware deliberately stands
+       down on any request that already has one. Without "nonfile" this fallback
+       matches /main.js and /styles.css as well, every asset is answered with
+       index.html at 200, and the application renders a blank page.
+
+       The regex excludes /api and /health. Without it an unknown API route
+       would return index.html with status 200, so a caller expecting JSON would
+       get a page of HTML and a "success" - the worst kind of 404.
+
+       It also excludes /.well-known, which carries the Let's Encrypt challenge.
+       Those tokens are extensionless, so "nonfile" does not cover them: without
+       this the certificate renewal is answered with index.html and fails.
+
+       And "r/", the receipt download links sent to students on WhatsApp. The
+       trailing slash is load-bearing: a bare "r" would also exclude /reports and
+       /receptionists, which are Angular routes and must keep falling through. */
+    app.MapFallbackToFile("{*path:nonfile:regex(^(?!api|health|[.]well-known|r/).*$)}", "index.html");
+}
 
 // Creates the first Admin account when dbo.Users is empty.
 await DbSeeder.SeedAsync(app.Services);

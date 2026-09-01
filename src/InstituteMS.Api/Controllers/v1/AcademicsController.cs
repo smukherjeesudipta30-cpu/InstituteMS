@@ -15,7 +15,7 @@ namespace InstituteMS.Api.Controllers.v1;
 // Receptionist is admitted at the class level only so that the progress report
 // below can accept them; every other action re-states BackOffice, and ASP.NET Core
 // requires *all* [Authorize] attributes on the path to pass.
-[Authorize(Roles = $"{UserRoles.BackOffice},{UserRoles.Receptionist}")]
+[Authorize(Roles = UserRoles.MasterData)]
 public class CoursesController : ApiControllerBase
 {
     private readonly ICourseService _courses;
@@ -24,14 +24,14 @@ public class CoursesController : ApiControllerBase
 
     /// <summary>Paged list with enrolment counts.</summary>
     [HttpGet]
-    [Authorize(Roles = UserRoles.BackOffice)]
+    [Authorize(Roles = UserRoles.MasterData)]
     [ProducesResponseType(typeof(ApiResponse<PagedResult<CourseListItemDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> List([FromQuery] PagedQuery query, CancellationToken ct)
         => Envelope(await _courses.GetListAsync(query, ct));
 
     /// <summary>Legacy <c>CourseCheck</c> / <c>ufnGetCourseChk</c>, for live form feedback.</summary>
     [HttpGet("name-exists")]
-    [Authorize(Roles = UserRoles.BackOffice)]
+    [Authorize(Roles = UserRoles.MasterData)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
     public async Task<IActionResult> NameExists(
         [FromQuery] string name, [FromQuery] int? excludingCourseId, CancellationToken ct)
@@ -68,14 +68,14 @@ public class CoursesController : ApiControllerBase
     }
 
     [HttpPost]
-    [Authorize(Roles = UserRoles.BackOffice)]
+    [Authorize(Roles = UserRoles.MasterData)]
     [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Create([FromBody] CourseSaveRequest request, CancellationToken ct)
         => Envelope(await _courses.CreateAsync(request, CurrentUserName, ct), "Course saved.");
 
     [HttpPut("{courseId:int}")]
-    [Authorize(Roles = UserRoles.BackOffice)]
+    [Authorize(Roles = UserRoles.MasterData)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Update(
@@ -100,7 +100,7 @@ public class CoursesController : ApiControllerBase
 /// </summary>
 [Route("api/v1/marks")]
 [Tags("Marks")]
-[Authorize(Roles = UserRoles.BackOffice)]
+[Authorize(Roles = UserRoles.MasterData)]
 public class MarksController : ApiControllerBase
 {
     private readonly IMarkService _marks;
@@ -150,7 +150,7 @@ public class MarksController : ApiControllerBase
 /// </summary>
 [Route("api/v1/notices")]
 [Tags("Notices")]
-[Authorize(Roles = UserRoles.BackOffice)]
+[Authorize(Roles = UserRoles.MasterData)]
 public class NoticesController : ApiControllerBase
 {
     private readonly INoticeService _notices;

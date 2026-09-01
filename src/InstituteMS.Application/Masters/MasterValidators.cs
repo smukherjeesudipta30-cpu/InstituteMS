@@ -12,14 +12,15 @@ public class TeacherSaveRequestValidator : AbstractValidator<TeacherSaveRequest>
 
         // This is the teacher's sign-in identity: the teacher account report matches
         // it against the signed-in email, the way the legacy
-        // `select id from Teacher where LoginId = Session["UserID"]` did. 16 of the
-        // 26 live rows hold an email, so '@' has to be allowed - an earlier pattern
-        // without it rejected those rows on edit. The column is varchar(20), which
-        // is why an email longer than that cannot be used as a teacher login.
+        // "select id from Teacher where LoginId = Session[UserID]" did. Most live
+        // rows hold an email, so '@' has to be allowed - an earlier pattern without
+        // it rejected those rows on edit. The limit is 50, matching production's
+        // varchar(50); the older restored backup said 20, which was too narrow for
+        // the 27-character logins production actually holds.
         RuleFor(x => x.LoginId)
             .NotEmpty().WithMessage("Teacher's user id is required.")
-            .MaximumLength(20)
-            .WithMessage("User id must be 20 characters or fewer (the column is varchar(20)).")
+            .MaximumLength(50)
+            .WithMessage("User id must be 50 characters or fewer.")
             .Matches("^[A-Za-z0-9@._-]+$")
             .WithMessage("User id may contain only letters, digits, at-sign, dot, underscore or hyphen.");
 

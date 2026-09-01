@@ -70,11 +70,24 @@ public class UserService : IUserService
             })
             .ToListAsync(ct);
 
+        // A student's portal password is readable, because production stores it in
+        // clear on the student row so the office can pass it on. Fetched for the
+        // page's addresses only, in one query rather than one per row.
+        var emails = rows.Select(u => u.Email).Where(e => e != null).ToList();
+
+        var studentPasswords = await _db.Students
+            .AsNoTracking()
+            .Where(s => s.AvijanLoginEmail != null && emails.Contains(s.AvijanLoginEmail))
+            .Select(s => new { s.AvijanLoginEmail, s.AvijanLoginPassword })
+            .ToListAsync(ct);
+
         var items = rows
             .Select(u => new UserListItemDto(
                 u.Id, u.Name, u.Email, u.Roles, UserRoles.Split(u.Roles),
                 u.PhoneNumber, u.DateOfBirth, u.RegisterDate, u.EndDate,
-                u.IsActive, u.LastLoginOn, u.HasPassword))
+                u.IsActive, u.LastLoginOn, u.HasPassword,
+                studentPasswords
+                    .FirstOrDefault(s => s.AvijanLoginEmail == u.Email)?.AvijanLoginPassword))
             .ToList();
 
         return PagedResult<UserListItemDto>.Create(items, query.Page, query.PageSize, totalCount);
@@ -86,12 +99,19 @@ public class UserService : IUserService
 
         var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == id, ct);
 
-        return user is null
-            ? Result<UserListItemDto>.Failure("User not found.", ResultStatus.NotFound)
-            : Result<UserListItemDto>.Success(new UserListItemDto(
-                user.Id, user.Name, user.Email, user.Roles, UserRoles.Split(user.Roles),
-                user.PhoneNumber, user.DateOfBirth, user.RegisterDate, user.EndDate,
-                user.IsActive, user.LastLoginOn, user.PasswordHash is not null));
+        if (user is null)
+            return Result<UserListItemDto>.Failure("User not found.", ResultStatus.NotFound);
+
+        var studentPassword = await _db.Students
+            .AsNoTracking()
+            .Where(s => s.AvijanLoginEmail == user.Email)
+            .Select(s => s.AvijanLoginPassword)
+            .FirstOrDefaultAsync(ct);
+
+        return Result<UserListItemDto>.Success(new UserListItemDto(
+            user.Id, user.Name, user.Email, user.Roles, UserRoles.Split(user.Roles),
+            user.PhoneNumber, user.DateOfBirth, user.RegisterDate, user.EndDate,
+            user.IsActive, user.LastLoginOn, user.PasswordHash is not null, studentPassword));
     }
 
     public async Task<bool> EmailExistsAsync(
@@ -207,6 +227,20 @@ public class UserService : IUserService
         user.PasswordHash = _hasher.Hash(password);
         user.ModifiedBy = actor;
         user.ModifiedOn = DateTime.UtcNow;
+
+        // A student has the same password in two places: the hash here, which sign-in
+        // checks, and the clear copy on the student row that the office reads back to
+        // them. Updating only one would leave the Users screen showing a password
+        // that no longer works.
+        var student = await _db.Students
+            .FirstOrDefaultAsync(s => s.AvijanLoginEmail == user.Email, ct);
+
+        if (student is not null)
+        {
+            student.AvijanLoginPassword = password;
+            student.ModifiedBy = actor;
+            student.ModifiedOn = DateTime.Now;
+        }
 
         // Any password change ends that user's other sessions, so a handed-over
         // credential cannot be used alongside one someone already had.
