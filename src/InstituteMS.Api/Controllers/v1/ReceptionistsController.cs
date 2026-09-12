@@ -55,7 +55,11 @@ public class ReceptionistsController : ApiControllerBase
 
     /* ------------------------------------------------------ payments */
 
+    // One person's salary history. Back office only — the class rule is MasterData
+    // so the front desk can keep the receptionist records up to date, but that must
+    // not hand one receptionist their colleagues' pay.
     [HttpGet("{id:int}/payments")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ReceptionistPaymentDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Payments(
         int id, [FromQuery] DateOnly? from, [FromQuery] DateOnly? to, CancellationToken ct)
@@ -85,7 +89,9 @@ public class ReceptionistsController : ApiControllerBase
         => Envelope(await _receptionists.DeletePaymentAsync(paymentId, ct), "Payment removed.");
 
     /// <summary>Receptionist pay by branch and month.</summary>
+    // Everyone's salary on one page. Back office only, for the reason above.
     [HttpGet("report")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<ReceptionistReportDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<ReceptionistReportDto>), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Report(

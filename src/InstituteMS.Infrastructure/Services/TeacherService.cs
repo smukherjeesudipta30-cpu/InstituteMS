@@ -57,12 +57,17 @@ public class TeacherService : ITeacherService
                 t.Name,
                 t.LoginId,
                 t.Phone,
+                t.PersonalEmail,
+                t.Designation,
+                t.Qualification,
+                t.ComputerTraining,
+                t.IsTechnical,
                 IsPlaceholder = false
             })
             .ToListAsync(ct);
 
         var items = await DecorateAsync(page.Select(t =>
-            (t.Id, t.Name, t.LoginId, t.Phone, t.IsPlaceholder)).ToList(), ct);
+            (t.Id, t.Name, t.LoginId, t.Phone, t.PersonalEmail, t.Designation, t.Qualification, t.ComputerTraining, t.IsTechnical, t.IsPlaceholder)).ToList(), ct);
 
         return PagedResult<TeacherListItemDto>.Create(items, query.Page, query.PageSize, totalCount);
     }
@@ -78,6 +83,11 @@ public class TeacherService : ITeacherService
                 t.Name,
                 t.LoginId,
                 t.Phone,
+                t.PersonalEmail,
+                t.Designation,
+                t.Qualification,
+                t.ComputerTraining,
+                t.IsTechnical,
                 IsPlaceholder = false
             })
             .FirstOrDefaultAsync(ct);
@@ -86,7 +96,7 @@ public class TeacherService : ITeacherService
             return Result<TeacherListItemDto>.Failure("Teacher not found.", ResultStatus.NotFound);
 
         var decorated = await DecorateAsync(
-            [(teacher.Id, teacher.Name, teacher.LoginId, teacher.Phone, teacher.IsPlaceholder)], ct);
+            [(teacher.Id, teacher.Name, teacher.LoginId, teacher.Phone, teacher.PersonalEmail, teacher.Designation, teacher.Qualification, teacher.ComputerTraining, teacher.IsTechnical, teacher.IsPlaceholder)], ct);
 
         return Result<TeacherListItemDto>.Success(decorated[0]);
     }
@@ -99,6 +109,9 @@ public class TeacherService : ITeacherService
         return await _db.Teachers.AnyAsync(
             t => t.LoginId == value && (excludingTeacherId == null || t.Id != excludingTeacherId), ct);
     }
+
+    private static string? Blank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     public async Task<Result<int>> CreateAsync(
         TeacherSaveRequest request, string? actor, CancellationToken ct = default)
@@ -113,6 +126,11 @@ public class TeacherService : ITeacherService
             Name = request.Name?.Trim(),
             LoginId = loginId,
             Phone = request.Phone?.Trim(),
+            PersonalEmail = string.IsNullOrWhiteSpace(request.PersonalEmail) ? null : request.PersonalEmail.Trim(),
+            Designation = Blank(request.Designation),
+            Qualification = Blank(request.Qualification),
+            ComputerTraining = Blank(request.ComputerTraining),
+            IsTechnical = request.IsTechnical,
             CreatedBy = actor,
             CreatedOn = DateTime.UtcNow
         };
@@ -139,6 +157,11 @@ public class TeacherService : ITeacherService
         teacher.Name = request.Name?.Trim();
         teacher.LoginId = loginId;
         teacher.Phone = request.Phone?.Trim();
+        teacher.PersonalEmail = string.IsNullOrWhiteSpace(request.PersonalEmail) ? null : request.PersonalEmail.Trim();
+        teacher.Designation = Blank(request.Designation);
+        teacher.Qualification = Blank(request.Qualification);
+        teacher.ComputerTraining = Blank(request.ComputerTraining);
+        teacher.IsTechnical = request.IsTechnical;
         teacher.ModifiedBy = actor;
         teacher.ModifiedOn = DateTime.UtcNow;
 
@@ -249,7 +272,9 @@ public class TeacherService : ITeacherService
     /// three separate columns on Student, so the counting is done in memory.
     /// </summary>
     private async Task<List<TeacherListItemDto>> DecorateAsync(
-        List<(int Id, string? Name, string? LoginId, string? Phone, bool IsPlaceholder)> teachers,
+        List<(int Id, string? Name, string? LoginId, string? Phone, string? PersonalEmail,
+              string? Designation, string? Qualification, string? ComputerTraining,
+              bool IsTechnical, bool IsPlaceholder)> teachers,
         CancellationToken ct)
     {
         if (teachers.Count == 0) return [];
@@ -285,7 +310,8 @@ public class TeacherService : ITeacherService
             var money = earnings.FirstOrDefault(e => e.TeacherId == t.Id);
 
             return new TeacherListItemDto(
-                t.Id, t.Name, t.LoginId, t.Phone,
+                t.Id, t.Name, t.LoginId, t.Phone, t.PersonalEmail,
+                t.Designation, t.Qualification, t.ComputerTraining, t.IsTechnical,
                 assigned.Count(s => s.IsActive == true),
                 assigned.Count,
                 money?.Total ?? 0m,

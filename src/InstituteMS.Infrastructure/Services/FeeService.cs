@@ -114,7 +114,8 @@ public class FeeService : IFeeService
             .OrderByDescending(s => s.Id)
             .Select(s => new
             {
-                s.Id, s.RegistrationId, s.Name, s.Phone, s.AdmissionFees, s.MonthlyFees,
+                s.Id, s.RegistrationId, s.Name, s.Phone, s.PersonalEmail,
+                s.AdmissionFees, s.AdmissionFeesPaid, s.MonthlyFees,
                 s.DateOfJoining, s.TechniqueCount,
                 s.PrimaryTeacherId, PrimaryTeacher = s.PrimaryTeacher != null ? s.PrimaryTeacher.Name : null,
                 s.SecondTeacherId, SecondTeacher = s.SecondTeacher != null ? s.SecondTeacher.Name : null,
@@ -142,7 +143,11 @@ public class FeeService : IFeeService
             student.PrimaryTeacherId, student.PrimaryTeacher,
             student.SecondTeacherId, student.SecondTeacher,
             student.ThirdTeacherId, student.ThirdTeacher,
-            installmentsPaid, lastPayment, outstandingDue, student.Phone));
+            installmentsPaid, lastPayment, outstandingDue,
+            student.Phone, student.PersonalEmail,
+            /* Null AdmissionFeesPaid predates migration 051, where it meant paid in
+               full — so it leaves no due rather than the whole fee owing. */
+            Math.Max(0m, (student.AdmissionFees ?? 0m) - (student.AdmissionFeesPaid ?? student.AdmissionFees ?? 0m))));
     }
 
     public async Task<PagedResult<FeePaymentDto>> GetPaymentsAsync(
@@ -162,7 +167,8 @@ public class FeeService : IFeeService
             .Select(f => new
             {
                 f.Id, f.StudentRegistrationId, f.BillNo, f.FeeDate, f.PaymentDate,
-                f.Installment, f.OtherInstallment, f.Percentage, f.OldDue, f.NewDue
+                f.Installment, f.OtherInstallment, f.Percentage, f.OldDue, f.NewDue,
+                f.PaymentMode
             })
             .ToListAsync(ct);
 
@@ -186,7 +192,8 @@ public class FeeService : IFeeService
                 r.Id, r.StudentRegistrationId, student?.Name, student?.CourseName, r.BillNo,
                 r.FeeDate, r.PaymentDate, r.Installment, r.OtherInstallment, r.Percentage,
                 r.OldDue, r.NewDue,
-                fines.FirstOrDefault(f => f.BillNo == r.BillNo)?.FineAmount))
+                fines.FirstOrDefault(f => f.BillNo == r.BillNo)?.FineAmount,
+                r.PaymentMode))
             .ToList();
 
         return PagedResult<FeePaymentDto>.Create(items, query.Page, query.PageSize, totalCount);
@@ -208,6 +215,11 @@ public class FeeService : IFeeService
         var paid = request.AmountPaid ?? 0m;
         var newDue = total + student.OutstandingDue - paid;
 
+        // Reported for the desk, not used for the fine — see the DTO.
+        var sinceLastPayment = student.LastPaymentDate is { } last
+            ? Math.Abs(request.FeeDate.DayNumber - last.DayNumber)
+            : (int?)null;
+
         return Result<FeeCalculationDto>.Success(new FeeCalculationDto(
             fine.DaysSincePrevious,
             fine.DaysPerInstallment,
@@ -216,6 +228,8 @@ public class FeeService : IFeeService
             student.OutstandingDue,
             decimal.Round(newDue, 2),
             fine.ReferenceDate,
+            sinceLastPayment,
+            student.LastPaymentDate,
             fine.Explanation));
     }
 
@@ -269,7 +283,7 @@ public class FeeService : IFeeService
             .OrderByDescending(s => s.Id)
             .Select(s => new
             {
-                s.TechniqueCount, s.MonthlyFees,
+                s.TechniqueCount, s.MonthlyFees, s.Branch,
                 s.PrimaryTeacherId, s.SecondTeacherId, s.ThirdTeacherId
             })
             .FirstOrDefaultAsync(ct);
@@ -305,10 +319,17 @@ public class FeeService : IFeeService
                 // Pin the agreed fee onto the row, so a later fee change cannot make
                 // this payment unreadable (db/migrations/010).
                 AgreedMonthlyFee = request.InstallmentAmount,
+                /* The branch is taken from the student, never from the request: a
+                   fee belongs to the branch the student is enrolled at, and there is
+                   deliberately no way for a screen to nominate a different one.
+                   Stamped here so a later transfer cannot move this payment
+                   (db/migrations/030). */
+                Branch = student.Branch,
                 OtherInstallment = request.AmountPaid,
                 Percentage = request.TeacherPercentage,
                 OldDue = request.OldDue,
                 NewDue = request.NewDue,
+                PaymentMode = request.PaymentMode,
                 CreatedBy = actor,
                 CreatedOn = DateTime.Now
             };
@@ -417,6 +438,7 @@ public class FeeService : IFeeService
         fee.Percentage = request.TeacherPercentage;
         fee.OldDue = request.OldDue;
         fee.NewDue = request.NewDue;
+        fee.PaymentMode = request.PaymentMode;
         fee.ModifiedBy = actor;
         fee.ModifiedOn = DateTime.Now;
 
@@ -699,7 +721,10 @@ public class FeeService : IFeeService
             AmountPaid = d.AmountPayable,
             OldDue = d.OldDue,
             // Paying the month in full leaves whatever was outstanding before.
-            NewDue = d.OldDue
+            NewDue = d.OldDue,
+            // A student paying their own fee from the portal is, by construction,
+            // paying by UPI against the QR code — there is no counter involved.
+            PaymentMode = "Bank"
         };
 
         var recorded = await RecordPaymentAsync(save, PortalActor(d.RegistrationId), ct);

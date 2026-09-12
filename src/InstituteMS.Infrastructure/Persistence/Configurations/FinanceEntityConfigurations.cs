@@ -148,6 +148,10 @@ public class BranchConfiguration : IEntityTypeConfiguration<Branch>
         b.Property(x => x.CreatedBy).HasColumnName("CreatedBy").HasMaxLength(50);
         b.Property(x => x.CreatedOn).HasColumnName("CreatedOn");
 
+        b.Property(x => x.Latitude).HasColumnName("Latitude").HasPrecision(9, 6);
+        b.Property(x => x.Longitude).HasColumnName("Longitude").HasPrecision(9, 6);
+        b.Property(x => x.GeofenceMetres).HasColumnName("GeofenceMetres");
+
         // The legacy column set. Is_active is NOT NULL with no default, so it
         // must be written or the insert fails.
         b.Property(x => x.LegacyName).HasColumnName("Branch_name").HasMaxLength(50);

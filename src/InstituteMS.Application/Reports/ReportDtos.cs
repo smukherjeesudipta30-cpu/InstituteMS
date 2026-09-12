@@ -118,6 +118,212 @@ public record DuesReportDto(
     PagedResult<DuesRowDto> Rows,
     DateTime GeneratedOn);
 
+/* ====================================================== pending payments */
+
+/// <summary>
+/// Filters for the branch-wise pending payments report.
+/// </summary>
+/// <remarks>
+/// Unlike <see cref="DuesReportQuery"/> this asks for no course: the point of the
+/// report is every student who owes money, and requiring a course meant running it
+/// 48 times to find out. Course and branch are both optional narrowing.
+/// </remarks>
+public class PendingPaymentsQuery
+{
+    /// <summary>Blank for every branch.</summary>
+    public string? Branch { get; set; }
+
+    /// <summary>Zero for every course.</summary>
+    public int CourseId { get; set; }
+
+    /// <summary>
+    /// Start of the period being checked. Required.
+    /// </summary>
+    public DateOnly From { get; set; }
+
+    /// <summary>
+    /// End of the period being checked. Required. Arrears are also worked out as at
+    /// this date, so the figures and the period always describe the same moment.
+    /// </summary>
+    public DateOnly To { get; set; }
+}
+
+/// <summary>One student who owes money.</summary>
+public record PendingPaymentRowDto(
+    int StudentId,
+    string? RegistrationId,
+    string? StudentName,
+    string? Phone,
+    string? Branch,
+    string? CourseName,
+
+    /// <summary>Every teacher assigned to the student, in any of their three slots.</summary>
+    IReadOnlyList<string> Teachers,
+
+    DateOnly? DateOfJoining,
+
+    /// <summary>Null for a student who has never paid a monthly fee.</summary>
+    DateOnly? LastPaymentDate,
+
+    decimal MonthlyFee,
+
+    /// <summary>Complete fee months (32 days) elapsed since the last payment, or since joining.</summary>
+    int MonthsUnpaid,
+
+    /// <summary>The balance left unpaid at the time of the last payment.</summary>
+    decimal CarriedDue,
+
+    /// <summary>What the counter would charge on the report's date, from the shared calculator.</summary>
+    decimal LateFine,
+
+    /// <summary>Carried balance + unpaid months + fine.</summary>
+    decimal OutstandingDue,
+
+    /// <summary>
+    /// Still owed on the admission fee, shown beside the monthly arrears but
+    /// deliberately not added into <see cref="OutstandingDue"/> — the admission fee
+    /// is not a monthly payment, and the two are settled separately.
+    /// </summary>
+    decimal AdmissionDue = 0m);
+
+/// <summary>
+/// A student carrying an unpaid balance on their admission fee.
+/// </summary>
+/// <remarks>
+/// Its own row type rather than a reuse of <see cref="PendingPaymentRowDto"/>: a
+/// student can owe admission money while being perfectly up to date on monthly
+/// fees, so every monthly-arrears column on that row would read zero and invite
+/// the reader to think nothing is owed.
+/// </remarks>
+public record AdmissionDueRowDto(
+    int StudentId,
+    string? RegistrationId,
+    string? StudentName,
+    string? Phone,
+    string? Branch,
+    string? CourseName,
+    DateOnly? DateOfJoining,
+    decimal AdmissionFees,
+    decimal AdmissionFeesPaid,
+    decimal AdmissionDue,
+    /// <summary>When the last money against this admission fee came in.</summary>
+    DateOnly? LastPaidOn);
+
+/// <summary>A branch's share of the arrears, for the summary above the lists.</summary>
+public record PendingBranchTotalDto(
+    string Branch,
+    int NeverPaidCount,
+    int RegularCount,
+    decimal TotalOutstanding,
+
+    /// <summary>Unpaid admission fees for the branch, kept apart from the monthly arrears.</summary>
+    decimal TotalAdmissionDue = 0m);
+
+public record PendingPaymentsReportDto(
+    DateOnly From,
+    DateOnly To,
+    string? Branch,
+    int CourseId,
+    string? CourseName,
+
+    /// <summary>
+    /// Students who have not made a single monthly payment since being admitted.
+    /// Their admission fee is not a monthly payment, so paying it does not move a
+    /// student out of this list — the owner's definition: "after first registration
+    /// single one payment still not happened".
+    /// </summary>
+    IReadOnlyList<PendingPaymentRowDto> NeverPaid,
+
+    /// <summary>Students who have paid before and have since fallen behind.</summary>
+    IReadOnlyList<PendingPaymentRowDto> Regular,
+
+    IReadOnlyList<PendingBranchTotalDto> BranchTotals,
+
+    decimal TotalOutstanding,
+    DateTime GeneratedOn,
+
+    /// <summary>
+    /// Students still owing part of their admission fee. Unlike the two lists
+    /// above this is not bounded by the report's date range: an admission balance
+    /// is either outstanding today or it is not, and a student who paid their
+    /// monthly fee this month can still owe it — which is exactly the case that
+    /// would otherwise never be seen.
+    /// </summary>
+    IReadOnlyList<AdmissionDueRowDto>? AdmissionDues = null,
+
+    decimal TotalAdmissionDue = 0m);
+
+/* ====================================================== fee collections */
+
+public class FeeCollectionsQuery
+{
+    /// <summary>Blank for every branch.</summary>
+    public string? Branch { get; set; }
+
+    /// <summary>The date each payment was actually taken (MonthlyFee.PaymentDate).</summary>
+    public DateOnly From { get; set; }
+    public DateOnly To { get; set; }
+
+    /// <summary><c>Cash</c>, <c>Bank</c>, or blank for both.</summary>
+    public string? PaymentMode { get; set; }
+
+    /// <summary>
+    /// <c>Monthly</c>, <c>Admission</c>, or blank for both. A month has a hundred-odd
+    /// monthly rows and a handful of admissions, and the admissions land on page
+    /// four of a date-sorted list where nobody reconciling the drawer will see them.
+    /// </summary>
+    public string? Kind { get; set; }
+}
+
+/// <summary>One payment — a monthly fee installment or an admission fee.</summary>
+public record FeeCollectionRowDto(
+    DateOnly? PaidOn,
+    string Kind,
+    string? RegistrationId,
+    string? StudentName,
+    string? Branch,
+    decimal Amount,
+
+    /// <summary><c>Cash</c> or <c>Bank</c>, or null for a payment recorded before migration 044.</summary>
+    string? PaymentMode,
+
+    /// <summary>The login that recorded the payment — a receptionist at the counter, or the
+    /// student's own for a self-service online payment.</summary>
+    string? CollectedBy,
+
+    string? BillNo);
+
+/// <summary>
+/// One (branch, collector, mode) line, for the month-end reconciliation a
+/// receptionist total is checked against.
+/// </summary>
+public record FeeCollectionTotalDto(
+    string Branch,
+    string CollectedBy,
+    string PaymentMode,
+    int PaymentCount,
+    decimal Amount);
+
+public record FeeCollectionsReportDto(
+    DateOnly From,
+    DateOnly To,
+    string? Branch,
+    string? PaymentMode,
+
+    IReadOnlyList<FeeCollectionRowDto> Rows,
+    IReadOnlyList<FeeCollectionTotalDto> Totals,
+
+    decimal CashTotal,
+    decimal BankTotal,
+    decimal GrandTotal,
+    DateTime GeneratedOn,
+
+    /// <summary>The same money split the other way — by what it was for, not how it arrived.</summary>
+    decimal MonthlyTotal = 0m,
+    decimal AdmissionTotal = 0m,
+    int MonthlyCount = 0,
+    int AdmissionCount = 0);
+
 /* ================================================================ expenses */
 
 public class ExpenseReportQuery : PagedQuery
@@ -174,16 +380,49 @@ public record TeacherEarningsReportDto(
     DateOnly From,
     DateOnly To,
 
-    /// <summary>Teacher's share of fees collected in the range (<c>TecFees</c>).</summary>
+    /// <summary>Teacher's share of fees collected in the range (<c>TecFees</c>), before any deduction.</summary>
     decimal TotalEarned,
+
+    /// <summary>
+    /// Taken off for missed scan-outs, one month at a time — see <see cref="Deductions"/>
+    /// for which months and why. Zero for a teacher with no qualifying month in the range.
+    /// </summary>
+    decimal TotalDeduction,
+
+    /// <summary>Earned minus the deduction. This, not <see cref="TotalEarned"/>, is what is actually owed.</summary>
+    decimal NetEarned,
+
     /// <summary>Amounts actually paid to the teacher in the range (<c>TecExpense</c>).</summary>
     decimal TotalPaid,
-    /// <summary>Earned minus paid. Negative means the teacher has been overpaid.</summary>
+    /// <summary>Net earned minus paid. Negative means the teacher has been overpaid.</summary>
     decimal Pending,
 
     IReadOnlyList<TeacherEarningRowDto> Earnings,
     IReadOnlyList<TeacherPaymentRowDto> Payments,
+    IReadOnlyList<TeacherDeductionDto> Deductions,
     DateTime GeneratedOn);
+
+/// <summary>
+/// One calendar month's missed-scan-out penalty, with the reason spelled out so it
+/// reads the same to the teacher looking at their own account as it does to the
+/// office. The owner's rule: below 3 missed scan-outs in a month, nothing is
+/// deducted; 3-5 costs 5% of that month's earnings, 6-8 costs 10%, 9-11 costs
+/// 15%, and so on -- another 5% for every further block of 3.
+/// </summary>
+public record TeacherDeductionDto(
+    int Year,
+    int Month,
+    string MonthLabel,
+    int MissedScanOutDays,
+    int DeductionPercent,
+    decimal MonthEarnings,
+    decimal DeductionAmount,
+    string Reason);
+
+/// <summary>The admin's own switch for the missed-scan-out deduction.</summary>
+public record PayrollSettingsDto(bool MissedScanOutDeductionEnabled, string? ModifiedBy, DateTime? ModifiedOn);
+
+public record UpdatePayrollSettingsRequest(bool MissedScanOutDeductionEnabled);
 
 /* ===================================================== students by teacher */
 
@@ -340,10 +579,32 @@ public interface IReportService
 
     Task<Result<DuesReportDto>> GetDuesAsync(DuesReportQuery query, CancellationToken ct = default);
 
+    /// <summary>
+    /// Every student who owes money, branch by branch, split into those who have
+    /// never paid a monthly fee and those who have fallen behind.
+    /// </summary>
+    Task<Result<PendingPaymentsReportDto>> GetPendingPaymentsAsync(
+        PendingPaymentsQuery query, CancellationToken ct = default);
+
+    /// <summary>
+    /// Every fee payment in a date range — a monthly installment or an admission fee
+    /// — with how it arrived (cash or bank) and who recorded it, so a receptionist's
+    /// counter can be reconciled at month end.
+    /// </summary>
+    Task<Result<FeeCollectionsReportDto>> GetFeeCollectionsAsync(
+        FeeCollectionsQuery query, CancellationToken ct = default);
+
     Task<Result<ExpenseReportDto>> GetExpensesAsync(ExpenseReportQuery query, CancellationToken ct = default);
 
     Task<Result<TeacherEarningsReportDto>> GetTeacherEarningsAsync(
         int teacherId, DateOnly from, DateOnly to, CancellationToken ct = default);
+
+    /// <summary>Whether the missed-scan-out deduction is currently switched on.</summary>
+    Task<PayrollSettingsDto> GetPayrollSettingsAsync(CancellationToken ct = default);
+
+    /// <summary>Admin-only: switches the missed-scan-out deduction on or off.</summary>
+    Task<Result<PayrollSettingsDto>> UpdatePayrollSettingsAsync(
+        bool missedScanOutDeductionEnabled, string? actor, CancellationToken ct = default);
 
     Task<Result<StudentsByTeacherReportDto>> GetStudentsByTeacherAsync(
         StudentsByTeacherQuery query, CancellationToken ct = default);

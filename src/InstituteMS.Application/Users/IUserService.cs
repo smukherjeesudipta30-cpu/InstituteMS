@@ -28,4 +28,7 @@ public interface IUserService
 
     /// <summary>Distinct role values present in the data, for the dropdown.</summary>
     Task<IReadOnlyList<string>> GetRoleOptionsAsync(CancellationToken ct = default);
+
+    /// <summary>How many accounts hold each of the fixed roles, for the role-wise grid.</summary>
+    Task<IReadOnlyList<RoleCountDto>> GetRoleCountsAsync(CancellationToken ct = default);
 }

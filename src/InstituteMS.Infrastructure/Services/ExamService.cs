@@ -718,6 +718,51 @@ public class ExamService : IExamService
     }
 
     /// <summary>
+    /// Saves the paper part-way through, so the deadline can be enforced without a
+    /// dropped connection costing the student their answers.
+    /// </summary>
+    /// <remarks>
+    /// Nothing is marked here and no score is written — this only records what has
+    /// been chosen so far. A save that arrives after the deadline is refused, since
+    /// accepting it would reopen the very hole the deadline is there to close.
+    /// </remarks>
+    public async Task<Result<bool>> SaveProgressAsync(
+        string email, SaveExamProgressRequest request, CancellationToken ct = default)
+    {
+        var own = await _reports.ResolveOwnRegistrationIdAsync(email, ct);
+
+        if (!own.Succeeded)
+            return Result<bool>.Failure(own.Error!, own.Status);
+
+        var attempt = await _db.ExamAttempts
+            .FirstOrDefaultAsync(a => a.AttemptId == request.AttemptId, ct);
+
+        if (attempt is null)
+            return Result<bool>.Failure("That attempt no longer exists.", ResultStatus.NotFound);
+
+        if (!string.Equals(attempt.StudentRegistrationId, own.Value!, StringComparison.OrdinalIgnoreCase))
+            return Result<bool>.Failure("That attempt belongs to someone else.", ResultStatus.Forbidden);
+
+        if (attempt.SubmittedOn is not null)
+            return Result<bool>.Failure("This paper has already been submitted.", ResultStatus.Conflict);
+
+        if (DateTime.Now > attempt.DueOn + SubmitGrace)
+            return Result<bool>.Failure("Your time on this paper has ended.", ResultStatus.Conflict);
+
+        var valid = await _db.ExamQuestions
+            .AsNoTracking()
+            .Where(q => q.ExamId == attempt.ExamId)
+            .Select(q => q.QuestionId)
+            .ToListAsync(ct);
+
+        attempt.Answers = FormatAnswers(
+            request.Answers ?? new Dictionary<int, char>(), valid.ToHashSet());
+
+        await _db.SaveChangesAsync(ct);
+        return Result<bool>.Success(true);
+    }
+
+    /// <summary>
     /// Marks the paper and stores the result. Answers are checked against the
     /// database, never against anything the browser sent about correctness.
     /// </summary>
@@ -756,7 +801,17 @@ public class ExamService : IExamService
             .Where(q => q.ExamId == attempt.ExamId)
             .ToListAsync(ct);
 
-        var answers = request.Answers ?? new Dictionary<int, char>();
+        /* Past the deadline, the answers in the request are not accepted: the clock
+           is the server's, and a browser that kept the page open past time up must
+           not be able to keep answering. What is marked instead is the last copy
+           autosaved while the paper was still open, so a student whose connection
+           dropped at the last minute keeps everything they had actually chosen.
+
+           The paper is then stamped as submitted at the deadline rather than now —
+           it closed when the time ran out, whatever hour this request arrived. */
+        var answers = late
+            ? ParseAnswers(attempt.Answers)
+            : request.Answers ?? new Dictionary<int, char>();
 
         var score = 0;
         var correctCount = 0;
@@ -774,7 +829,7 @@ public class ExamService : IExamService
         }
 
         attempt.Answers = FormatAnswers(answers, questions.Select(q => q.QuestionId).ToHashSet());
-        attempt.SubmittedOn = now;
+        attempt.SubmittedOn = late ? attempt.DueOn : now;
         attempt.Score = score;
         attempt.TotalMarks = questions.Sum(q => q.Marks);
         attempt.CorrectCount = correctCount;
@@ -1134,6 +1189,28 @@ public class ExamService : IExamService
 
         var students = await StudentsForPaperAsync(paper, ct, pinned);
 
+        // On a Practical's own sheet, the office needs to see at a glance who has
+        // actually finished Theory yet — SaveScheduleAsync enforces it, this is
+        // what lets the sheet show it before anyone tries.
+        Dictionary<string, DateTime>? theorySubmitted = null;
+
+        if (!string.Equals(paper.PaperType, "Theory", StringComparison.OrdinalIgnoreCase))
+        {
+            var theoryPaper = await _db.ExamPapers.AsNoTracking()
+                .FirstOrDefaultAsync(p => p.CourseId == paper.CourseId
+                                          && p.TermNumber == paper.TermNumber
+                                          && p.PaperType == "Theory", ct);
+
+            if (theoryPaper is not null)
+            {
+                theorySubmitted = await _db.ExamAttempts.AsNoTracking()
+                    .Where(a => a.ExamId == theoryPaper.ExamId && a.SubmittedOn != null)
+                    .ToDictionaryAsync(
+                        a => a.StudentRegistrationId, a => a.SubmittedOn!.Value,
+                        StringComparer.OrdinalIgnoreCase, ct);
+            }
+        }
+
         var rows = students.Select(s =>
         {
             var schedule = schedules.FirstOrDefault(x =>
@@ -1142,12 +1219,16 @@ public class ExamService : IExamService
             var attempt = attempts.FirstOrDefault(a =>
                 string.Equals(a.StudentRegistrationId, s.RegistrationId, StringComparison.OrdinalIgnoreCase));
 
+            DateTime theoryOn = default;
+            theorySubmitted?.TryGetValue(s.RegistrationId!, out theoryOn);
+
             return new ExamScheduleRowDto(
                 s.RegistrationId!, s.Name, s.GuardianName,
                 schedule?.ScheduleId, schedule?.ScheduledOn, schedule?.AccessCode,
                 schedule?.CodeIssuedOn, schedule?.CodeIssuedBy,
                 attempt is not null, attempt?.SubmittedOn,
-                s.IsActive == true, s.IsComplete == true);
+                s.IsActive == true, s.IsComplete == true,
+                theorySubmitted is null ? null : (theoryOn == default ? null : theoryOn));
         }).ToList();
 
         return Result<IReadOnlyList<ExamScheduleRowDto>>.Success(rows);
@@ -1222,6 +1303,29 @@ public class ExamService : IExamService
         }
 
         var isTheory = string.Equals(paper.PaperType, "Theory", StringComparison.OrdinalIgnoreCase);
+
+        // The Practical date is the office's call to make once Theory is behind
+        // the student, not before — sitting a practical for a paper someone has
+        // not yet been examined on in theory is not a sequence this puts a date on.
+        if (!isTheory)
+        {
+            var theoryPaper = await _db.ExamPapers.AsNoTracking()
+                .FirstOrDefaultAsync(p => p.CourseId == paper.CourseId
+                                          && p.TermNumber == paper.TermNumber
+                                          && p.PaperType == "Theory", ct);
+
+            var theorySubmitted = theoryPaper is not null && await _db.ExamAttempts.AsNoTracking()
+                .AnyAsync(a => a.ExamId == theoryPaper.ExamId
+                              && a.StudentRegistrationId == regId
+                              && a.SubmittedOn != null, ct);
+
+            if (!theorySubmitted)
+            {
+                return Result<ExamScheduleRowDto>.Failure(
+                    $"{student.Name} has not completed the Theory paper for this examination yet. " +
+                    "The Practical date can only be set once Theory is submitted.");
+            }
+        }
 
         if (schedule is null)
         {
@@ -1313,9 +1417,30 @@ public class ExamService : IExamService
         var isTheory = string.Equals(paper.PaperType, "Theory", StringComparison.OrdinalIgnoreCase);
         var now = DateTime.Now;
 
+        // Same rule as the single-student save: a Practical batch can only pick up
+        // students who have actually submitted Theory for this course and term.
+        HashSet<string>? theoryDone = null;
+
+        if (!isTheory)
+        {
+            var theoryPaper = await _db.ExamPapers.AsNoTracking()
+                .FirstOrDefaultAsync(p => p.CourseId == paper.CourseId
+                                          && p.TermNumber == paper.TermNumber
+                                          && p.PaperType == "Theory", ct);
+
+            theoryDone = theoryPaper is null
+                ? []
+                : (await _db.ExamAttempts.AsNoTracking()
+                    .Where(a => a.ExamId == theoryPaper.ExamId && a.SubmittedOn != null)
+                    .Select(a => a.StudentRegistrationId)
+                    .ToListAsync(ct))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
         var scheduled = 0;
         var skippedScheduled = 0;
         var skippedSat = 0;
+        var skippedTheoryNotDone = 0;
 
         foreach (var student in students)
         {
@@ -1325,6 +1450,12 @@ public class ExamService : IExamService
             if (satSet.Contains(regId))
             {
                 skippedSat++;
+                continue;
+            }
+
+            if (theoryDone is not null && !theoryDone.Contains(regId))
+            {
+                skippedTheoryNotDone++;
                 continue;
             }
 
@@ -1371,7 +1502,7 @@ public class ExamService : IExamService
         await _db.SaveChangesAsync(ct);
 
         return Result<ExamScheduleBulkResultDto>.Success(
-            new ExamScheduleBulkResultDto(scheduled, skippedScheduled, skippedSat));
+            new ExamScheduleBulkResultDto(scheduled, skippedScheduled, skippedSat, skippedTheoryNotDone));
     }
 
     public async Task<Result<ExamScheduleRowDto>> RegenerateAccessCodeAsync(

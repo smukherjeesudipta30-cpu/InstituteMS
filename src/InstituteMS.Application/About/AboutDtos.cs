@@ -10,6 +10,9 @@ public record AboutPageDto(
     IReadOnlyList<AboutCourseDto> Courses,
     ContactDetailsDto Contact,
 
+    /// <summary>The owner's message. Null when no photograph is configured.</summary>
+    OwnerDeskDto? OwnerDesk,
+
     /// <summary>Notice board text, newest first - the front page marquee.</summary>
     IReadOnlyList<AboutNoticeDto> Notices,
 
@@ -31,7 +34,20 @@ public record RoutineRowDto(
 
 public record AboutStatDto(string Label, string Value, string Icon);
 
-public record AboutCourseDto(int CourseId, string Name, int? DurationMonths);
+/// <summary>
+/// One course on the public course list, with how many active students are on it —
+/// real enrolment for the front page's "popular courses" chart, not an invented
+/// number.
+/// </summary>
+public record AboutCourseDto(int CourseId, string Name, int? DurationMonths, int EnrolledCount);
+
+/// <summary>"From the Owner's Desk" — a photograph and a signed message.</summary>
+public record OwnerDeskDto(
+    string Name,
+    string Designation,
+    string Photo,
+    IReadOnlyList<string> Message,
+    string Since);
 
 public record ContactDetailsDto(
     string AddressLine1,

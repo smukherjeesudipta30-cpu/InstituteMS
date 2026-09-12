@@ -50,6 +50,19 @@ public interface IStudentService
         string registrationId, PhotoUpload upload, string? actor, CancellationToken ct = default);
 
     Task<Result<bool>> DeletePhotoAsync(string registrationId, CancellationToken ct = default);
+
+    /// <summary>
+    /// What a student still owes on their admission fee, with the receipts taken
+    /// against it so far.
+    /// </summary>
+    Task<Result<AdmissionDueDto>> GetAdmissionDueAsync(int studentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Takes an instalment against an outstanding admission fee: writes the receipt
+    /// and moves the running total, in one transaction.
+    /// </summary>
+    Task<Result<AdmissionDueDto>> CollectAdmissionDueAsync(
+        int studentId, AdmissionDueCollectRequest request, string? actor, CancellationToken ct = default);
 }
 
 /// <summary>An uploaded file, decoupled from ASP.NET's IFormFile.</summary>

@@ -15,9 +15,11 @@ namespace InstituteMS.Api.Controllers.v1;
 /// endpoint. It feeds the "Other income" line of the income report, so without a
 /// way to add to it that line could only shrink into history.
 /// </remarks>
+// The front desk takes this money over the counter, so entering it is theirs.
+// Deleting a recorded income stays with the administrator, below.
 [Route("api/v1/other-income")]
 [Tags("Other income")]
-[Authorize(Roles = UserRoles.BackOffice)]
+[Authorize(Roles = UserRoles.MasterData)]
 public class OtherIncomeController : ApiControllerBase
 {
     private readonly IOtherIncomeService _income;

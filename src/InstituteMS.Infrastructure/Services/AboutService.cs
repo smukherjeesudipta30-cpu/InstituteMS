@@ -34,18 +34,25 @@ public class AboutService : IAboutService
         var courses = await _db.Courses
             .AsNoTracking()
             .OrderBy(c => c.Name)
-            .Select(c => new AboutCourseDto(c.Cid, c.Name ?? "(unnamed)", c.Duration))
+            .Select(c => new AboutCourseDto(
+                c.Cid,
+                c.Name ?? "(unnamed)",
+                c.Duration,
+                // Active students only, so a course nobody is currently taking does
+                // not read as popular because of people who finished it years ago.
+                c.Students.Count(s => s.IsActive == true)))
             .ToListAsync(ct);
 
         var activeStudents = await _db.Students.CountAsync(s => s.IsActive == true, ct);
-        var teachers = await _db.Teachers.CountAsync(ct);
-        var earliestJoin = await _db.Students
-            .Where(s => s.DateOfJoining != null)
-            .MinAsync(s => (DateOnly?)s.DateOfJoining, ct);
 
-        var yearsRunning = earliestJoin is null
-            ? 1
-            : Math.Max(1, DateTime.Today.Year - earliestJoin.Value.Year);
+        // Active teachers only, so somebody who has left stops being counted as
+        // faculty the moment they are marked inactive.
+        var teachers = await _db.Teachers.CountAsync(t => t.IsActive, ct);
+
+        /* Counted from the configured founding year rather than the earliest student
+           on file. The records only reach back to 2016, so deriving it gave "10+"
+           for a centre teaching since 2008 — see InstituteProfileOptions.FoundedYear. */
+        var yearsRunning = Math.Max(1, DateTime.Today.Year - _profile.FoundedYear);
 
         var stats = new List<AboutStatDto>
         {
@@ -54,6 +61,17 @@ public class AboutService : IAboutService
             new("Faculty members", teachers.ToString(CultureInfo.InvariantCulture), "pi pi-id-card"),
             new("Years of teaching", $"{yearsRunning}+", "pi pi-calendar")
         };
+
+        // No photograph means the panel is not ready to show; the front page then
+        // renders nothing rather than an empty frame with a missing image in it.
+        var desk = string.IsNullOrWhiteSpace(_profile.OwnerDesk.Photo)
+            ? null
+            : new OwnerDeskDto(
+                _profile.OwnerDesk.Name,
+                _profile.OwnerDesk.Designation,
+                _profile.OwnerDesk.Photo,
+                _profile.OwnerDesk.Message,
+                _profile.OwnerDesk.Since);
 
         var contact = new ContactDetailsDto(
             _profile.Contact.AddressLine1,
@@ -91,6 +109,7 @@ public class AboutService : IAboutService
             stats,
             courses,
             contact,
+            desk,
             notices,
             routine);
     }

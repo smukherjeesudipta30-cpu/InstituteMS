@@ -94,6 +94,30 @@ public class StudentsController : ApiControllerBase
     public async Task<IActionResult> Receipt(int id, CancellationToken ct)
         => Envelope(await _students.GetReceiptAsync(id, ct));
 
+    /// <summary>
+    /// What is still owed on this student's admission fee, and the receipts taken
+    /// against it.
+    /// </summary>
+    [HttpGet("{id:int}/admission-due")]
+    [ProducesResponseType(typeof(ApiResponse<AdmissionDueDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> AdmissionDue(int id, CancellationToken ct)
+        => Envelope(await _students.GetAdmissionDueAsync(id, ct));
+
+    /// <summary>
+    /// Takes an instalment against an outstanding admission fee. Open to the same
+    /// roles that take a monthly fee — this is the same counter doing the same job.
+    /// </summary>
+    [HttpPost("{id:int}/admission-due/collect")]
+    [ProducesResponseType(typeof(ApiResponse<AdmissionDueDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<AdmissionDueDto>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> CollectAdmissionDue(
+        int id, [FromBody] AdmissionDueCollectRequest request, CancellationToken ct)
+        => Envelope(
+            await _students.CollectAdmissionDueAsync(id, request, CurrentUserName, ct),
+            "Admission fee instalment recorded.");
+
     /// <summary>Student photo, decoded from the Base64 blob the legacy uploader stored.</summary>
     [HttpGet("photo")]
     [ProducesResponseType(StatusCodes.Status200OK)]

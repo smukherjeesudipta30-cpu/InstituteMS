@@ -16,6 +16,15 @@ public class MonthlyFee
     /// <see cref="Installment"/> is composed: agreed fee + late fine.
     /// </summary>
     public decimal? AgreedMonthlyFee { get; set; }
+    /// <summary>
+    /// The branch that took this payment, copied from the student when it was
+    /// recorded. Stamped for the same reason as <see cref="AgreedMonthlyFee"/>:
+    /// deriving it from the student's current branch would move every past payment
+    /// the day a student transfers, silently rewriting last quarter's branch
+    /// performance. Null on rows written before migration 030.
+    /// </summary>
+    public string? Branch { get; set; }
+
     /// <summary>The date the money was actually taken.</summary>
     public DateOnly? PaymentDate { get; set; }
     public decimal? Installment { get; set; }
@@ -30,6 +39,15 @@ public class MonthlyFee
     /// online payment is told apart from an offline one.
     /// </summary>
     public string? TransactionId { get; set; }
+
+    /// <summary>
+    /// <c>Cash</c> or <c>Bank</c> — how the money physically arrived. Independent of
+    /// <see cref="TransactionId"/>: a receptionist recording a UPI payment shown to
+    /// them at the counter is still "Bank" even though no reference is captured for
+    /// it the way a student's own online payment is. Null on rows written before
+    /// migration 044, which predates the distinction.
+    /// </summary>
+    public string? PaymentMode { get; set; }
 
     /// <summary>
     /// When someone checked the reference against the Paytm account. Null means

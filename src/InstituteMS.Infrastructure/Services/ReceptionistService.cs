@@ -58,7 +58,8 @@ public class ReceptionistService : IReceptionistService
             .Skip((query.Page - 1) * query.PageSize)
             .Take(query.PageSize)
             .Select(r => new ReceptionistListItemDto(
-                r.Id, r.Name, r.LoginId, r.Phone, r.Branch, r.IsActive,
+                r.Id, r.Name, r.LoginId, r.Phone, r.PersonalEmail, r.Branch, r.IsActive,
+                r.Designation, r.Qualification, r.ComputerTraining, r.IsTechnical,
                 r.Payments.Count,
                 r.Payments.Sum(p => (decimal?)p.Amount) ?? 0m,
                 r.Payments.Max(p => (DateOnly?)p.PayMonth)))
@@ -89,6 +90,9 @@ public class ReceptionistService : IReceptionistService
             : Result<string>.Success(known);
     }
 
+    private static string? RecBlank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     public async Task<Result<int>> CreateAsync(
         ReceptionistSaveRequest request, string? actor, CancellationToken ct = default)
     {
@@ -109,6 +113,11 @@ public class ReceptionistService : IReceptionistService
             Phone = string.IsNullOrWhiteSpace(request.Phone) ? null : request.Phone.Trim(),
             Branch = branch.Value,
             IsActive = request.IsActive,
+            PersonalEmail = string.IsNullOrWhiteSpace(request.PersonalEmail) ? null : request.PersonalEmail.Trim(),
+            Designation = RecBlank(request.Designation),
+            Qualification = RecBlank(request.Qualification),
+            ComputerTraining = RecBlank(request.ComputerTraining),
+            IsTechnical = request.IsTechnical,
             CreatedBy = actor,
             CreatedOn = DateTime.Now
         };
@@ -143,6 +152,11 @@ public class ReceptionistService : IReceptionistService
         person.Name = request.Name!.Trim();
         person.LoginId = loginId;
         person.Phone = string.IsNullOrWhiteSpace(request.Phone) ? null : request.Phone.Trim();
+        person.PersonalEmail = string.IsNullOrWhiteSpace(request.PersonalEmail) ? null : request.PersonalEmail.Trim();
+        person.Designation = RecBlank(request.Designation);
+        person.Qualification = RecBlank(request.Qualification);
+        person.ComputerTraining = RecBlank(request.ComputerTraining);
+        person.IsTechnical = request.IsTechnical;
         person.Branch = branch.Value;
         person.IsActive = request.IsActive;
         person.ModifiedBy = actor;

@@ -10,34 +10,51 @@ namespace InstituteMS.Api.Controllers.v1;
 /// Exam papers and their question bank — the administrator's side of the
 /// examination portal.
 /// </summary>
+/// <remarks>
+/// The class-level policy is the loosest role any action here accepts
+/// (<see cref="UserRoles.MasterData"/>, which adds Receptionist to the usual
+/// Admin/Editor pair) — NOT the default. Stacking a second <c>[Authorize(Roles=...)]</c>
+/// on an action ANDs it with this one rather than replacing it, so every action
+/// that must stay Admin/Editor-only carries its own narrower
+/// <c>[Authorize(Roles = UserRoles.BackOffice)]</c> below; only the schedule
+/// endpoints Receptionist actually needs rely on the class-level policy alone.
+/// </remarks>
 [Route("api/v1/exams")]
 [Tags("Exams")]
-[Authorize(Roles = UserRoles.BackOffice)]
+[Authorize(Roles = UserRoles.MasterData)]
 public class ExamsController : ApiControllerBase
 {
     private readonly IExamService _exams;
 
     public ExamsController(IExamService exams) => _exams = exams;
 
-    /// <summary>Paged list of papers with their question and attempt counts.</summary>
+    /// <summary>
+    /// Paged list of papers with their question and attempt counts. Open to
+    /// Receptionist too — the only door onto this whole page is the papers grid,
+    /// and their one job past it is the schedule dialog on a Practical row; every
+    /// other action stays hidden client-side and refused here.
+    /// </summary>
     [HttpGet]
     [ProducesResponseType(typeof(ApiResponse<PagedResult<ExamPaperDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> List([FromQuery] ExamPaperQuery query, CancellationToken ct)
         => Envelope(await _exams.GetPapersAsync(query, ct));
 
     [HttpGet("{examId:int}")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<ExamPaperDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetById(int examId, CancellationToken ct)
         => Envelope(await _exams.GetPaperAsync(examId, ct));
 
     [HttpPost]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Create([FromBody] ExamPaperSaveRequest request, CancellationToken ct)
         => Envelope(await _exams.CreatePaperAsync(request, CurrentUserName, ct), "Exam paper created.");
 
     [HttpPut("{examId:int}")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Update(
@@ -57,6 +74,7 @@ public class ExamsController : ApiControllerBase
     /// marks add up to the paper's total.
     /// </summary>
     [HttpPatch("{examId:int}/published")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> SetPublished(
@@ -67,6 +85,7 @@ public class ExamsController : ApiControllerBase
 
     /// <summary>The question bank, with the answer key. Back office only.</summary>
     [HttpGet("{examId:int}/questions")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ExamQuestionDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Questions(int examId, CancellationToken ct)
         => Envelope(await _exams.GetQuestionsAsync(examId, ct));
@@ -80,6 +99,7 @@ public class ExamsController : ApiControllerBase
     /// in one pass rather than one error at a time.
     /// </remarks>
     [HttpPost("{examId:int}/questions/upload")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [RequestSizeLimit(10 * 1024 * 1024)]
     [ProducesResponseType(typeof(ApiResponse<ExamUploadResultDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<ExamUploadResultDto>), StatusCodes.Status400BadRequest)]
@@ -110,6 +130,7 @@ public class ExamsController : ApiControllerBase
     /// whatever score has been entered so far.
     /// </summary>
     [HttpGet("{examId:int}/practical/roster")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<PracticalRosterRowDto>>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<PracticalRosterRowDto>>), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> PracticalRoster(int examId, CancellationToken ct)
@@ -120,6 +141,7 @@ public class ExamsController : ApiControllerBase
     /// the room, so its marks are typed in rather than sat online.
     /// </summary>
     [HttpPost("practical/marks")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> SavePracticalMark(
@@ -140,7 +162,12 @@ public class ExamsController : ApiControllerBase
     public async Task<IActionResult> Schedule(int examId, CancellationToken ct)
         => Envelope(await _exams.GetScheduleAsync(examId, ct));
 
-    /// <summary>Schedules one student and issues their code, or moves a sitting.</summary>
+    /// <summary>
+    /// Schedules one student and issues their code, or moves a sitting. Open to
+    /// Receptionist for a Practical row — the service itself refuses a Practical
+    /// date until that student has submitted Theory, so the role grant alone does
+    /// not let a Practical get ahead of its Theory.
+    /// </summary>
     [HttpPost("schedule")]
     [ProducesResponseType(typeof(ApiResponse<ExamScheduleRowDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<ExamScheduleRowDto>), StatusCodes.Status409Conflict)]
@@ -153,30 +180,38 @@ public class ExamsController : ApiControllerBase
     /// code, so one number cannot open the whole room.
     /// </summary>
     [HttpPost("schedule/batch")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<ExamScheduleBulkResultDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> ScheduleBatch(
         [FromBody] ExamScheduleBulkRequest request, CancellationToken ct)
         => Envelope(await _exams.ScheduleBatchAsync(request, CurrentUserName, ct), "Batch scheduled.");
 
+    /* A registration id is "AVI/Raj/4998/26" — it contains slashes, so it cannot be
+       a path segment. Carrying it in the query string instead is what every other
+       endpoint here already does; as a route parameter both of these returned "that
+       student has not been scheduled" for every student at the institute. */
+
     /// <summary>Issues a fresh code, retiring the one already given out.</summary>
-    [HttpPost("{examId:int}/schedule/{registrationId}/regenerate-code")]
+    [HttpPost("{examId:int}/schedule/regenerate-code")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<ExamScheduleRowDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> RegenerateCode(
-        int examId, string registrationId, CancellationToken ct)
+        int examId, [FromQuery] string registrationId, CancellationToken ct)
         => Envelope(
             await _exams.RegenerateAccessCodeAsync(examId, registrationId, CurrentUserName, ct),
             "New code issued. The previous one no longer works.");
 
     /// <summary>Withdraws a sitting. Refused once the student has opened the paper.</summary>
-    [HttpDelete("{examId:int}/schedule/{registrationId}")]
+    [HttpDelete("{examId:int}/schedule")]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> RemoveSchedule(
-        int examId, string registrationId, CancellationToken ct)
+        int examId, [FromQuery] string registrationId, CancellationToken ct)
         => Envelope(await _exams.RemoveScheduleAsync(examId, registrationId, ct), "Sitting withdrawn.");
 
     /// <summary>The blank workbook to fill in, with one example row.</summary>
     [HttpGet("questions/template")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public IActionResult QuestionTemplate()
         => File(
@@ -242,6 +277,17 @@ public class MyExamsController : ApiControllerBase
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<AdmitCardDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> AdmitCards(CancellationToken ct)
         => Envelope(await _exams.GetAdmitCardsAsync(CurrentUserName ?? string.Empty, ct));
+
+    /// <summary>
+    /// Saves the answers chosen so far. Called as the student works, so the server
+    /// can close the paper on time without losing what they had already picked.
+    /// </summary>
+    [HttpPost("progress")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> SaveProgress(
+        [FromBody] SaveExamProgressRequest request, CancellationToken ct)
+        => Envelope(await _exams.SaveProgressAsync(CurrentUserName ?? string.Empty, request, ct));
 
     /// <summary>Submits the paper and returns the marked result immediately.</summary>
     [HttpPost("submit")]

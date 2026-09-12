@@ -300,18 +300,90 @@ public class DashboardService : IDashboardService
     /// <c>StuRegId</c>, and because the legacy data has duplicate registration ids
     /// the first match is taken rather than assuming one.
     /// </summary>
-    public async Task<Result<bool>> MarkEnquiryHandledAsync(int id, CancellationToken ct = default)
+    public async Task<Result<bool>> MarkEnquiryHandledAsync(
+        int id, bool handled, CancellationToken ct = default)
     {
-        var enquiry = await _db.ContactMessages.FirstOrDefaultAsync(m => m.Id == id, ct);
+        var enquiry = await _db.ContactMessages
+            .Include(m => m.Ext)
+            .FirstOrDefaultAsync(m => m.Id == id, ct);
 
         if (enquiry is null)
             return Result<bool>.Failure("That enquiry no longer exists.", ResultStatus.NotFound);
 
-        // Marked, never deleted: the enquiry is still a record of who got in touch.
-        enquiry.IsHandled = true;
+        /* The flag has to be written to the side table.
+
+           dbo.CusMessage cannot gain a column — the legacy application inserts into
+           it positionally — so ContactMessage.IsHandled is deliberately NOT mapped,
+           and setting it wrote nothing at all. SaveChanges then reported success
+           over an empty change set, so every "mark handled" since this shipped
+           appeared to work and did nothing: the same enquiries from 2019 came back
+           on the next page load.
+
+           Marked, never deleted — the enquiry stays a record of who got in touch,
+           and GetEnquiriesAsync finds it again. */
+        if (enquiry.Ext is null)
+        {
+            _db.ContactMessageExts.Add(new InstituteMS.Domain.Entities.ContactMessageExt
+            {
+                MessageId = id,
+                IsHandled = handled,
+                HandledOn = handled ? DateTime.Now : null
+            });
+        }
+        else
+        {
+            enquiry.Ext.IsHandled = handled;
+            enquiry.Ext.HandledOn = handled ? DateTime.Now : null;
+        }
+
+        // Kept in step so anything still reading the unmapped property agrees.
+        enquiry.IsHandled = handled;
+
         await _db.SaveChangesAsync(ct);
 
         return Result<bool>.Success(true);
+    }
+
+    /// <summary>
+    /// Enquiries from the public contact form, filtered by whether they have been
+    /// read.
+    /// </summary>
+    /// <remarks>
+    /// The dashboard panel deliberately shows only the unread ones, so that it is a
+    /// list of work outstanding rather than an archive. This is the other half of
+    /// that bargain: without it, marking a message read put it permanently out of
+    /// reach, which is not what "read" should mean.
+    /// </remarks>
+    public async Task<EnquiryListDto> GetEnquiriesAsync(
+        EnquiryFilter filter, int page, int pageSize, CancellationToken ct = default)
+    {
+        var all = _db.ContactMessages.AsNoTracking();
+
+        // Ext is null for every message that predates the coexistence script, and an
+        // absent row means nobody has marked it — so null counts as unread.
+        var newCount = await all.CountAsync(m => m.Ext == null || !m.Ext.IsHandled, ct);
+        var readCount = await all.CountAsync(m => m.Ext != null && m.Ext.IsHandled, ct);
+
+        var q = filter switch
+        {
+            EnquiryFilter.New => all.Where(m => m.Ext == null || !m.Ext.IsHandled),
+            EnquiryFilter.Read => all.Where(m => m.Ext != null && m.Ext.IsHandled),
+            _ => all
+        };
+
+        var totalCount = await q.CountAsync(ct);
+
+        var items = await q
+            .OrderByDescending(m => m.SubmittedOn)
+            .ThenByDescending(m => m.Id)
+            .Skip((Math.Max(1, page) - 1) * pageSize)
+            .Take(pageSize)
+            .Select(m => new EnquiryDto(
+                m.Id, m.Name, m.Email, m.Phone, m.Body, m.SubmittedOn,
+                m.Ext != null && m.Ext.IsHandled))
+            .ToListAsync(ct);
+
+        return new EnquiryListDto(items, totalCount, newCount, readCount);
     }
 
     /// <summary>
@@ -332,7 +404,7 @@ public class DashboardService : IDashboardService
             .ThenByDescending(m => m.Id)
             .Take(25)
             .Select(m => new EnquiryDto(
-                m.Id, m.Name, m.Email, m.Phone, m.Body, m.SubmittedOn))
+                m.Id, m.Name, m.Email, m.Phone, m.Body, m.SubmittedOn, false))
             .ToListAsync(ct);
     }
 

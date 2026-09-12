@@ -1,7 +1,9 @@
 using InstituteMS.Application.About;
 using InstituteMS.Application.Academics;
+using InstituteMS.Application.Attendance;
 using InstituteMS.Application.Auth;
 using InstituteMS.Application.Common.Interfaces;
+using InstituteMS.Application.Competitions;
 using InstituteMS.Application.Dashboard;
 using InstituteMS.Application.Documents;
 using InstituteMS.Application.Fees;
@@ -9,6 +11,7 @@ using InstituteMS.Application.Income;
 using InstituteMS.Application.Lookups;
 using InstituteMS.Application.Masters;
 using InstituteMS.Application.Notifications;
+using InstituteMS.Application.Org;
 using InstituteMS.Application.Enquiries;
 using InstituteMS.Application.Expenses;
 using InstituteMS.Application.Exams;
@@ -47,6 +50,10 @@ public static class DependencyInjection
         services.Configure<InstituteProfileOptions>(configuration.GetSection(InstituteProfileOptions.SectionName));
         services.Configure<PaymentSettings>(configuration.GetSection(PaymentSettings.SectionName));
         services.Configure<MailOptions>(configuration.GetSection(MailOptions.SectionName));
+        services.Configure<AttendanceOptions>(configuration.GetSection(AttendanceOptions.SectionName));
+        services.Configure<OrgOptions>(configuration.GetSection(OrgOptions.SectionName));
+
+        services.Configure<CompetitionOptions>(configuration.GetSection(CompetitionOptions.SectionName));
 
         services.AddSingleton<IPasswordHasher, BCryptPasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
@@ -73,6 +80,12 @@ public static class DependencyInjection
         services.AddScoped<IReportService, ReportService>();
         services.AddScoped<IExpenseService, ExpenseService>();
         services.AddScoped<IExamService, ExamService>();
+        services.AddSingleton<AttendanceTokenService>();
+        services.AddScoped<IAttendanceService, AttendanceService>();
+        services.AddScoped<IOrgService, OrgService>();
+
+        services.AddScoped<ICompetitionService, CompetitionService>();
+        services.AddSingleton<IChestCardPdfGenerator, ChestCardPdfGenerator>();
         services.AddScoped<RegistrationNumberService>();
         services.AddScoped<StudentLoginGenerator>();
 

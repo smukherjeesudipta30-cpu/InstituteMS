@@ -333,6 +333,23 @@ public class UserService : IUserService
             .ToList();
     }
 
+    public async Task<IReadOnlyList<RoleCountDto>> GetRoleCountsAsync(CancellationToken ct = default)
+    {
+        var roles = await _db.Users
+            .AsNoTracking()
+            .Where(u => u.Roles != null && u.Roles != "")
+            .Select(u => u.Roles!)
+            .ToListAsync(ct);
+
+        // A combined value such as "Receptionist & Teacher" is counted under both
+        // names, matching the substring match GetListAsync already filters by — so
+        // clicking a count on the grid returns exactly that many rows.
+        return UserRoles.All
+            .Select(role => new RoleCountDto(
+                role, roles.Count(r => r.Contains(role, StringComparison.OrdinalIgnoreCase))))
+            .ToList();
+    }
+
     private static DateOnly SafeAnniversary(DateOnly dateOfBirth, int year)
     {
         var day = Math.Min(dateOfBirth.Day, DateTime.DaysInMonth(year, dateOfBirth.Month));

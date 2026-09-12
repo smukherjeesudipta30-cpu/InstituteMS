@@ -10,6 +10,17 @@ public record TeacherListItemDto(
     string? Name,
     string? LoginId,
     string? Phone,
+    /// <summary>Real mailbox, for attendance codes. Blank means they cannot mark attendance.</summary>
+    string? PersonalEmail,
+
+    /// <summary>The position the administrator typed, which is what puts them on the chart.</summary>
+    string? Designation,
+    string? Qualification,
+    string? ComputerTraining,
+
+    /// <summary>Technical staff are excused qualification and computer training.</summary>
+    bool IsTechnical,
+
     /// <summary>Active students currently assigned to this teacher, in any of the three slots.</summary>
     int ActiveStudents,
     int TotalStudents,
@@ -29,6 +40,24 @@ public record TeacherSaveRequest
     public string? Name { get; init; }
     public string? LoginId { get; init; }
     public string? Phone { get; init; }
+
+    /// <summary>Real mailbox, for attendance confirmation codes.</summary>
+    public string? PersonalEmail { get; init; }
+
+    /// <summary>
+    /// The position, free text. Nothing else sets it, and a teacher with no
+    /// position does not appear on the staff hierarchy chart.
+    /// </summary>
+    public string? Designation { get; init; }
+
+    /// <summary>Required unless <see cref="IsTechnical"/>.</summary>
+    public string? Qualification { get; init; }
+
+    /// <summary>Required unless <see cref="IsTechnical"/>.</summary>
+    public string? ComputerTraining { get; init; }
+
+    /// <summary>Technical staff are excused qualification and computer training.</summary>
+    public bool IsTechnical { get; init; }
 }
 
 /// <summary>One line of a teacher's earnings (legacy <c>Teacher/Profits</c>, §4.4 T7).</summary>
@@ -58,13 +87,32 @@ public record BranchListItemDto(
     /// <summary>Students recorded against this branch.</summary>
     int StudentCount,
     /// <summary>Registration ids already issued with this code; the code is then frozen.</summary>
-    int IssuedRegistrations);
+    int IssuedRegistrations,
+
+    /* Where this centre is, for staff attendance. Null means no fence has been set,
+       and attendance cannot be taken there — deliberately, since an unfenced branch
+       would accept a scan from anywhere in the world. */
+    decimal? Latitude = null,
+    decimal? Longitude = null,
+    int GeofenceMetres = 150);
 
 public record BranchSaveRequest
 {
     public string? Name { get; init; }
     public string? Code { get; init; }
     public bool IsActive { get; init; } = true;
+
+    /// <summary>
+    /// The centre's own position, taken at its door. Six decimal places is about a
+    /// tenth of a metre; two is over a kilometre, which is why the form asks for the
+    /// figures copied from a maps app rather than typed from memory.
+    /// </summary>
+    public decimal? Latitude { get; init; }
+
+    public decimal? Longitude { get; init; }
+
+    /// <summary>How far from that point still counts as being at the centre.</summary>
+    public int GeofenceMetres { get; init; } = 150;
 }
 
 /* ----------------------------------------------------------------- contracts */

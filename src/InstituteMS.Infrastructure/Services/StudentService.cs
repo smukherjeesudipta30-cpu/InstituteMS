@@ -308,6 +308,192 @@ public class StudentService : IStudentService
         return Result<bool>.Success(true);
     }
 
+    /* ======================================== admission fee, part payment */
+
+    public async Task<Result<AdmissionDueDto>> GetAdmissionDueAsync(
+        int studentId, CancellationToken ct = default)
+    {
+        var student = await _db.Students.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == studentId, ct);
+
+        if (student is null)
+            return Result<AdmissionDueDto>.Failure("Student not found.", ResultStatus.NotFound);
+
+        return Result<AdmissionDueDto>.Success(await BuildAdmissionDueAsync(student, ct));
+    }
+
+    public async Task<Result<AdmissionDueDto>> CollectAdmissionDueAsync(
+        int studentId, AdmissionDueCollectRequest request, string? actor, CancellationToken ct = default)
+    {
+        if (request.Amount <= 0m)
+            return Result<AdmissionDueDto>.Failure("Enter an amount greater than zero.");
+
+        if (request.PaymentMode is not ("Cash" or "Bank"))
+            return Result<AdmissionDueDto>.Failure("Payment mode must be Cash or Bank.");
+
+        var student = await _db.Students.FirstOrDefaultAsync(s => s.Id == studentId, ct);
+
+        if (student is null)
+            return Result<AdmissionDueDto>.Failure("Student not found.", ResultStatus.NotFound);
+
+        var fee = student.AdmissionFees ?? 0m;
+
+        // Null on a student admitted before migration 051 means paid in full, the
+        // same reading the backfill took — not zero received.
+        var paid = student.AdmissionFeesPaid ?? fee;
+        var due = fee - paid;
+
+        if (due <= 0m)
+            return Result<AdmissionDueDto>.Failure("This admission fee is already settled.");
+
+        /* Refused rather than silently capped. Taking 400 against a 300 balance is a
+           mistyped figure or the wrong student, and quietly booking 300 of it would
+           leave the counter's cash drawer disagreeing with the receipt. */
+        if (request.Amount > due)
+        {
+            return Result<AdmissionDueDto>.Failure(
+                $"That is more than the outstanding admission fee of {due:0.##}.");
+        }
+
+        _db.AdmissionFeePayments.Add(new AdmissionFeePayment
+        {
+            StudentId = student.Id,
+            RegistrationId = student.RegistrationId,
+            Amount = request.Amount,
+            PaymentMode = request.PaymentMode,
+            PaidOn = request.PaidOn ?? DateOnly.FromDateTime(DateTime.Today),
+            IsAtAdmission = false,
+            Note = request.Note?.Trim(),
+            CreatedBy = actor,
+            CreatedOn = DateTime.Now
+        });
+
+        // The receipt and the running total move together or not at all.
+        student.AdmissionFeesPaid = paid + request.Amount;
+        student.ModifiedBy = actor;
+        student.ModifiedOn = DateTime.Now;
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "Admission due {Amount} collected for student {StudentId} ({RegistrationId}) by {Actor}",
+            request.Amount, student.Id, student.RegistrationId, actor ?? "(unknown)");
+
+        return Result<AdmissionDueDto>.Success(await BuildAdmissionDueAsync(student, ct));
+    }
+
+    /// <summary>
+    /// Applies an edit to "admission fee received" on an existing student — a
+    /// correction of what was recorded, not new money. New money goes through
+    /// <see cref="CollectAdmissionDueAsync"/>.
+    /// </summary>
+    /// <returns>An error message, or null when the edit was applied (or there was none).</returns>
+    /// <remarks>
+    /// <para>The case this exists for: 250 was typed at admission when 750 was in fact
+    /// taken. The office corrects the fee to 750 and the received figure to 750, and
+    /// nothing should be left reading as owing. Leaving the figure read-only made
+    /// that impossible without a database edit.</para>
+    ///
+    /// <para>The receipt ledger has to move with it or the two disagree. The
+    /// difference is applied to the receipt written at admission — that is the
+    /// receipt being corrected, since later instalments were each taken deliberately.
+    /// A student admitted before receipts existed has none to correct, and only the
+    /// running total moves, which is the same stance the backfill took.</para>
+    /// </remarks>
+    private async Task<string?> CorrectAdmissionReceivedAsync(
+        Student student, StudentSaveRequest request, string? actor, CancellationToken ct)
+    {
+        var atAdmission = await _db.AdmissionFeePayments
+            .Where(p => p.StudentId == student.Id && p.IsAtAdmission)
+            .OrderBy(p => p.Id)
+            .FirstOrDefaultAsync(ct);
+
+        /* The payment-mode radio on the form is the mode of the admission-day money.
+           Apply() has already moved Student.AdmissionPaymentMode; the receipt for
+           that day has to follow, or the collections report would count a
+           corrected Cash-to-Bank admission under the old mode. Independent of
+           whether the amount changed: switching the mode alone is a real correction. */
+        if (atAdmission is not null
+            && !string.IsNullOrWhiteSpace(request.AdmissionPaymentMode)
+            && atAdmission.PaymentMode != request.AdmissionPaymentMode)
+        {
+            atAdmission.PaymentMode = request.AdmissionPaymentMode;
+        }
+
+        // Null on an update means "not touched", so the ordinary edit of a name or a
+        // phone number never reaches into the amount.
+        if (request.AdmissionFeesPaid is not { } newPaid)
+            return null;
+
+        var fee = student.AdmissionFees ?? 0m;
+        var oldPaid = student.AdmissionFeesPaid ?? fee;
+
+        if (newPaid == oldPaid)
+            return null;
+
+        if (newPaid < 0m)
+            return "Amount received cannot be negative.";
+
+        if (newPaid > fee)
+            return "Amount received cannot be more than the admission fee.";
+
+        var delta = newPaid - oldPaid;
+
+        if (atAdmission is not null)
+        {
+            var corrected = atAdmission.Amount + delta;
+
+            /* The correction is to the admission receipt alone; it cannot be pushed
+               below zero by pretending money taken later was never taken. Anything
+               that large is not a typo being fixed. */
+            if (corrected < 0m)
+            {
+                return "That would take the admission-day receipt below zero. " +
+                       "Reduce or remove the later instalment instead.";
+            }
+
+            var original = atAdmission.Amount;
+            atAdmission.Amount = corrected;
+
+            // Leaves a trace on the receipt itself, so a later reader can see the
+            // figure was corrected rather than wonder why it differs from memory.
+            if (string.IsNullOrWhiteSpace(atAdmission.Note))
+                atAdmission.Note = $"Corrected from {original:0.##} by {actor ?? "(unknown)"}";
+        }
+
+        student.AdmissionFeesPaid = newPaid;
+
+        _logger.LogInformation(
+            "Admission received corrected {Old} -> {New} for student {StudentId} by {Actor}",
+            oldPaid, newPaid, student.Id, actor ?? "(unknown)");
+
+        return null;
+    }
+
+    private async Task<AdmissionDueDto> BuildAdmissionDueAsync(Student student, CancellationToken ct)
+    {
+        var receipts = await _db.AdmissionFeePayments.AsNoTracking()
+            .Where(p => p.StudentId == student.Id)
+            .OrderBy(p => p.PaidOn)
+            .ThenBy(p => p.Id)
+            .Select(p => new AdmissionFeeReceiptDto(
+                p.Id, p.Amount, p.PaymentMode, p.PaidOn, p.IsAtAdmission, p.Note, p.CreatedBy))
+            .ToListAsync(ct);
+
+        var fee = student.AdmissionFees ?? 0m;
+        var paid = student.AdmissionFeesPaid ?? fee;
+        var due = fee - paid;
+
+        return new AdmissionDueDto(
+            student.Id,
+            student.RegistrationId,
+            student.Name,
+            fee,
+            paid,
+            due > 0m ? due : 0m,
+            receipts);
+    }
+
     /// <summary>Identifies an image from its magic bytes, ignoring the file name.</summary>
     private static string? SniffImageType(ReadOnlySpan<byte> bytes)
     {
@@ -371,11 +557,35 @@ public class StudentService : IStudentService
             Apply(request, entity);
             entity.Branch = branch?.Name;
 
+            /* Null means "paying the whole thing", which is what every admission did
+               before part payment existed — so a client that does not send the field
+               still books a fully-paid admission rather than quietly opening a due. */
+            var paidNow = request.AdmissionFeesPaid ?? request.AdmissionFees ?? 0m;
+            entity.AdmissionFeesPaid = paidNow;
+
             // The legacy usp_StudentSaveData set DOE only when IsComplete was ticked.
             entity.DateOfExit = request.IsComplete ? DateOnly.FromDateTime(DateTime.Today) : null;
 
             _db.Students.Add(entity);
             await _db.SaveChangesAsync(ct);
+
+            /* The receipt for whatever was actually handed over at the counter. Only
+               when there was something: an admission taken entirely on credit is a
+               real case, and a zero-rupee receipt would just be noise in the ledger. */
+            if (paidNow > 0m)
+            {
+                _db.AdmissionFeePayments.Add(new AdmissionFeePayment
+                {
+                    StudentId = entity.Id,
+                    RegistrationId = entity.RegistrationId,
+                    Amount = paidNow,
+                    PaymentMode = request.AdmissionPaymentMode,
+                    PaidOn = request.DateOfJoining ?? DateOnly.FromDateTime(DateTime.Today),
+                    IsAtAdmission = true,
+                    CreatedBy = actor,
+                    CreatedOn = DateTime.Now
+                });
+            }
 
             // Legacy Replica_id is the row's own id.
             entity.ReplicaId = entity.Id;
@@ -521,6 +731,10 @@ public class StudentService : IStudentService
 
         Apply(request, student);
 
+        var correction = await CorrectAdmissionReceivedAsync(student, request, actor, ct);
+        if (correction is not null)
+            return Result<bool>.Failure(correction);
+
         // The registration id is immutable, so changing branch on an existing student
         // updates only the stored branch name, never the already-issued number.
         var branch = await ResolveBranchAsync(request.BranchId, ct);
@@ -559,6 +773,19 @@ public class StudentService : IStudentService
         student.ModifiedBy = actor;
         student.ModifiedOn = DateTime.UtcNow;
 
+        /* The portal sign-in (dbo.Users, matched on AvijanLoginEmail -- the only
+           reliable link, since LoginId carries a placeholder value on thousands of
+           legacy rows) used to mirror Student.IsActive only once, at the moment the
+           login was first issued. Deactivating a student months or years later left
+           that sign-in untouched, so a student who left could still sign in and use
+           the portal indefinitely. The owner's rule: "Only active account will be
+           there, inactive account will not take any active action." */
+        if (!string.IsNullOrWhiteSpace(student.AvijanLoginEmail))
+        {
+            var login = await _db.Users.FirstOrDefaultAsync(u => u.Email == student.AvijanLoginEmail, ct);
+            if (login is not null) login.IsActive = false;
+        }
+
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation("Student {StudentId} deactivated by {Actor}", id, actor);
@@ -580,6 +807,12 @@ public class StudentService : IStudentService
             student.DateOfExit = null;
             student.ModifiedBy = actor;
             student.ModifiedOn = DateTime.UtcNow;
+
+            if (!string.IsNullOrWhiteSpace(student.AvijanLoginEmail))
+            {
+                var login = await _db.Users.FirstOrDefaultAsync(u => u.Email == student.AvijanLoginEmail, ct);
+                if (login is not null) login.IsActive = true;
+            }
         }
 
         await _db.SaveChangesAsync(ct);
@@ -709,6 +942,7 @@ public class StudentService : IStudentService
             s.ThirdTeacherId,
             s.ThirdTeacher != null ? s.ThirdTeacher.Name : null,
             s.AdmissionFees,
+            s.AdmissionPaymentMode,
             s.MonthlyFees,
             s.DateOfJoining,
             s.DateOfBirth,
@@ -717,7 +951,13 @@ public class StudentService : IStudentService
             s.IsComplete == true,
             null,      // BranchId  } both filled in by MaterialiseAsync
             s.Branch,
-            false));   // HasPhoto  }
+            false,     // HasPhoto  }
+            s.AdmissionFeesPaid,
+            /* Floored at zero: a fee later reduced below what was already taken
+               reads as settled, not as the institute owing the student money. */
+            (s.AdmissionFees ?? 0m) - (s.AdmissionFeesPaid ?? s.AdmissionFees ?? 0m) > 0m
+                ? (s.AdmissionFees ?? 0m) - (s.AdmissionFeesPaid ?? s.AdmissionFees ?? 0m)
+                : 0m));
 
     /// <summary>Copies the request onto the entity. Shared by create and update.</summary>
     private static void Apply(StudentSaveRequest request, Student student)
@@ -732,6 +972,7 @@ public class StudentService : IStudentService
         student.DateOfJoining = request.DateOfJoining;
         student.MonthlyFees = request.MonthlyFees;
         student.AdmissionFees = request.AdmissionFees;
+        student.AdmissionPaymentMode = request.AdmissionPaymentMode;
         student.CourseId = request.CourseId;
         student.TechniqueCount = request.TeacherCount;
         student.IsActive = request.IsActive;

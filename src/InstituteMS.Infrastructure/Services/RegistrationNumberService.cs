@@ -60,14 +60,39 @@ public class RegistrationNumberService
     /// <summary>Read-only preview for the form. Not a reservation — the real number is taken on save.</summary>
     public async Task<NextRegistrationDto> PeekAsync(string? branchCode = null, CancellationToken ct = default)
     {
-        // Reads the sequence's current position without consuming a value.
+        // Reads the sequence's current position without consuming a value. current_value
+        // is the *last number actually produced* by NEXT VALUE FOR -- except right after
+        // CREATE/ALTER...RESTART, when nothing has been produced yet and it already holds
+        // the number the *next* call will return. Both states look identical here, so
+        // current_value alone cannot say which case applies. Deciding by whether that
+        // number is already on a real student resolves it correctly either way: in the
+        // ordinary case it belongs to whoever got it last, so the free one is next; right
+        // after a restart nobody has it yet, so it is itself the free one.
+        var year = DateTime.Today.ToString("yy");
+
         var current = await _db.Database
             .SqlQuery<int?>(
-                $"SELECT CONVERT(int, current_value) + 1 AS Value FROM sys.sequences WHERE name = 'StudentRegistrationNumber'")
+                $"SELECT CONVERT(int, current_value) AS Value FROM sys.sequences WHERE name = 'StudentRegistrationNumber'")
             .FirstOrDefaultAsync(ct);
 
-        var next = current ?? (await _db.Students.AsNoTracking().MaxAsync(s => (int?)s.Id, ct) ?? 0) + 1;
-        var year = DateTime.Today.ToString("yy");
+        int next;
+        if (current is { } cv)
+        {
+            next = await IsNumberTakenAsync(cv, year, ct) ? cv + 1 : cv;
+
+            var guard = 0;
+            while (await IsNumberTakenAsync(next, year, ct))
+            {
+                next++;
+
+                if (++guard > 1000)
+                    throw new InvalidOperationException("Could not find a free registration number after 1000 attempts.");
+            }
+        }
+        else
+        {
+            next = (await _db.Students.AsNoTracking().MaxAsync(s => (int?)s.Id, ct) ?? 0) + 1;
+        }
 
         return new NextRegistrationDto(Format(next, year, branchCode), FormatBill(next, year));
     }

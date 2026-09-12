@@ -80,6 +80,10 @@ public class FeeSaveRequestValidator : AbstractValidator<FeeSaveRequest>
             .InclusiveBetween(0m, 100m)
             .WithMessage("The teacher percentage must be between 0 and 100.");
 
+        RuleFor(x => x.PaymentMode)
+            .Must(m => m is "Cash" or "Bank")
+            .WithMessage("Payment mode must be Cash or Bank.");
+
         /* Somewhere in the row there has to be money, or the receipt records
            nothing. This is what a zero-everything payload trips on. */
         RuleFor(x => x)

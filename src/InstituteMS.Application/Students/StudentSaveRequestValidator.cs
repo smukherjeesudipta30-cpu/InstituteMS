@@ -69,6 +69,21 @@ public class StudentSaveRequestValidator : AbstractValidator<StudentSaveRequest>
             .NotNull().WithMessage("Admission Fees must be a valid number.")
             .GreaterThanOrEqualTo(0).WithMessage("Admission Fees cannot be negative.");
 
+        RuleFor(x => x.AdmissionPaymentMode)
+            .Must(m => m is "Cash" or "Bank")
+            .WithMessage("Payment mode must be Cash or Bank.");
+
+        // Null is "paying the whole thing", so only a supplied figure is checked.
+        // The upper bound matters: taking more than the fee would leave a negative
+        // balance that the dues report would read as a credit nobody granted.
+        When(x => x.AdmissionFeesPaid is not null, () =>
+        {
+            RuleFor(x => x.AdmissionFeesPaid)
+                .GreaterThanOrEqualTo(0).WithMessage("Amount paid cannot be negative.")
+                .LessThanOrEqualTo(x => x.AdmissionFees ?? 0m)
+                .WithMessage("Amount paid now cannot be more than the admission fee.");
+        });
+
         RuleFor(x => x.CourseId)
             .NotNull().WithMessage("Please select a Course.")
             .GreaterThan(0).WithMessage("Please select a Course.");

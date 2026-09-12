@@ -138,6 +138,14 @@ public class Branch
     public string? Code { get; set; }
     public bool IsActive { get; set; }
 
+    /* Where this centre physically is, and how far from it still counts as being
+       there. Staff attendance is fenced to this point (db/migrations/031). Null
+       coordinates mean the branch has no fence set and cannot take attendance —
+       which is deliberate: an unfenced branch would accept a scan from anywhere. */
+    public decimal? Latitude { get; set; }
+    public decimal? Longitude { get; set; }
+    public int GeofenceMetres { get; set; } = 750;
+
     public string? CreatedBy { get; set; }
     /// <summary>
     /// Nullable: the audit columns were added to the legacy tables by the

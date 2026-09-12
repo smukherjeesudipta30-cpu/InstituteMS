@@ -15,9 +15,13 @@ namespace InstituteMS.Api.Controllers.v1;
 /// Registration ids contain slashes, so every endpoint keyed by one takes it as a
 /// query parameter rather than a route segment.
 /// </remarks>
+/* Taking the monthly fee at the counter is the receptionist's job, so the whole
+   controller is MasterData — except confirming an ONLINE payment, which is a
+   different act: it means someone has checked the institute's Paytm account and
+   agreed the money arrived. That stays with the back office below. */
 [Route("api/v1/fees")]
 [Tags("Fees")]
-[Authorize(Roles = UserRoles.BackOffice)]
+[Authorize(Roles = UserRoles.MasterData)]
 public class FeesController : ApiControllerBase
 {
     private readonly IFeeService _fees;
@@ -84,12 +88,14 @@ public class FeesController : ApiControllerBase
     /// institute's Paytm account — the dashboard's notification list.
     /// </summary>
     [HttpGet("online/unverified")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<OnlinePaymentNoticeDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> UnverifiedOnline([FromQuery] int take, CancellationToken ct)
         => Envelope(await _fees.GetUnverifiedOnlinePaymentsAsync(take <= 0 ? 25 : take, ct));
 
     /// <summary>Marks an online payment as checked and confirmed.</summary>
     [HttpPost("online/{feeId:int}/verify")]
+    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> VerifyOnline(int feeId, CancellationToken ct)

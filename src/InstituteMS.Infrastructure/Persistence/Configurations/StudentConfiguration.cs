@@ -21,6 +21,8 @@ public class StudentConfiguration : IEntityTypeConfiguration<Student>
         b.Property(x => x.BillNo).HasColumnName("BillNo").HasMaxLength(50);
         b.Property(x => x.TechniqueCount).HasColumnName("NoTech");
         b.Property(x => x.AdmissionFees).HasColumnName("StuAdFees").HasPrecision(18, 2);
+        b.Property(x => x.AdmissionPaymentMode).HasColumnName("AdmissionPaymentMode").HasMaxLength(10);
+        b.Property(x => x.AdmissionFeesPaid).HasColumnName("AdmissionFeesPaid").HasPrecision(18, 2);
         // Stu_monthly_fees is varchar(250) in the legacy schema, not a number.
         b.Property(x => x.MonthlyFees).HasColumnName("Stu_monthly_fees")
             .HasConversion<DecimalOverTextConverter>().HasMaxLength(250);
@@ -35,7 +37,7 @@ public class StudentConfiguration : IEntityTypeConfiguration<Student>
         // nullable to match - see Student.IsActive.
         b.Property(x => x.IsActive).HasColumnName("IsActive");
         b.Property(x => x.IsComplete).HasColumnName("IsComplete");
-        b.Property(x => x.LoginId).HasColumnName("loginId").HasMaxLength(20);
+        b.Property(x => x.LoginId).HasColumnName("loginId").HasMaxLength(100);
         b.Property(x => x.Branch).HasColumnName("Branch").HasMaxLength(50);
         b.Property(x => x.PersonalEmail).HasColumnName("Personal_mail_id").HasMaxLength(150);
         b.Property(x => x.AvijanLoginEmail).HasColumnName("Avijan_login_mail_id").HasMaxLength(150);

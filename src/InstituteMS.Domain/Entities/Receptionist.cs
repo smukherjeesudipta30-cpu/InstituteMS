@@ -20,11 +20,37 @@ public class Receptionist
 
     public string? Phone { get; set; }
 
+    /// <summary>Real mailbox for attendance codes; the LoginId is not one.</summary>
+    public string? PersonalEmail { get; set; }
+
+    /* Shown on the staff hierarchy chart -- free text, as for a teacher. */
+    public string? Designation { get; set; }
+    public string? Qualification { get; set; }
+
+    /// <summary>What computer training this person holds.</summary>
+    /// <remarks>
+    /// Kept apart from <see cref="Qualification"/> deliberately: an institute that
+    /// teaches computing has reason to record what somebody studied and what computer
+    /// training they hold as two different answers. Required of everyone except
+    /// technical staff -- see <see cref="IsTechnical"/>.
+    /// </remarks>
+    public string? ComputerTraining { get; set; }
+
+    /// <summary>
+    /// Technical staff, who are excused the qualification and computer-training
+    /// requirement. A tick the administrator sets, not a job title this code
+    /// recognises -- "IT Support" and "Systems" are the same role by another name.
+    /// </summary>
+    public bool IsTechnical { get; set; }
+
     /// <summary>
     /// Which branch they work at. Free text matching <c>Student.Branch</c> and
     /// <c>Expense.Branch</c>, so all three group together in a branch report.
     /// </summary>
     public string? Branch { get; set; }
+
+    /// <summary>
+
 
     public bool IsActive { get; set; } = true;
 

@@ -12,15 +12,21 @@ namespace InstituteMS.Api.Controllers.v1;
 /// (MIGRATION_PLAN §5.10).
 /// </summary>
 /// <remarks>
-/// The legacy actions were reachable by any signed-in user: only <c>Index</c> and
-/// <c>ExpenseReport</c> carried <c>[Authorize(Roles = "Editor,Admin")]</c>, while
+/// <para>The legacy actions were reachable by any signed-in user: only <c>Index</c>
+/// and <c>ExpenseReport</c> carried <c>[Authorize(Roles = "Editor,Admin")]</c>, while
 /// <c>InserExpenses</c>, <c>Updatechanges</c> and <c>Deletechanges</c> - the three
 /// that actually change money records - had no attribute at all. The roles are
-/// enforced on the operations here, not on the page that renders them.
+/// enforced on the operations here, not on the page that renders them.</para>
+///
+/// <para><c>MasterData</c> rather than <c>BackOffice</c>: the owner asked that the
+/// receptionist be able to enter expenses and read the report, the same as they
+/// already can for fees. Deleting stays Admin-only below, and the report endpoint
+/// (ReportsController) already carried Receptionist for the same reason - "the
+/// front desk is asked about spending as well as fees."</para>
 /// </remarks>
 [Route("api/v1/expenses")]
 [Tags("Expenses")]
-[Authorize(Roles = UserRoles.BackOffice)]
+[Authorize(Roles = UserRoles.MasterData)]
 public class ExpensesController : ApiControllerBase
 {
     private readonly IExpenseService _expenses;

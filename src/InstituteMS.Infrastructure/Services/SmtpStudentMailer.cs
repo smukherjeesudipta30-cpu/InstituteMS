@@ -5,6 +5,7 @@ using System.Text;
 using InstituteMS.Application.Notifications;
 using InstituteMS.Domain.Entities;
 using InstituteMS.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -90,13 +91,109 @@ public class SmtpStudentMailer : IStudentMailer
             actor: actor,
             ct: ct);
 
+    /// <summary>
+    /// The attendance code. Unlike every other message here, the caller needs to
+    /// know whether it actually went — a person waiting at the door for a code that
+    /// silently failed has no way to mark their attendance.
+    /// </summary>
+    public async Task<bool> SendAttendanceCodeAsync(
+        AttendanceCodeMailRequest r, string? actor, CancellationToken ct = default)
+    {
+        if (!_options.Enabled) return false;
+        if (string.IsNullOrWhiteSpace(r.ToEmail)) return false;
+
+        try
+        {
+            await SendAsync(
+                /* The code is deliberately absent from the subject and from what is
+                   written to the mail log. Putting it in the subject was convenient
+                   for testing and quietly wrong: the log is readable by anyone with
+                   database access, and a live code there is enough to mark a
+                   colleague present. */
+                to: r.ToEmail,
+                subject: "Avijan attendance code",
+                html: AttendanceCodeHtml(r),
+                text: AttendanceCodeText(r),
+                logReference: r.ToEmail,
+                what: $"attendance code for {r.StaffName}",
+                pdf: null,
+                pdfFileName: null,
+                actor: actor,
+                ct: ct,
+                logBody: $"Attendance code for {r.StaffName} — code not recorded.");
+
+            /* SendAsync never throws — it logs and moves on, which is right for a
+               receipt but not here. The log row it wrote is the only record of
+               success, so it is read back rather than assumed. */
+            var sent = await _db.MailLog
+                .AsNoTracking()
+                .Where(m => m.ToEmail == r.ToEmail)
+                .OrderByDescending(m => m.Id)
+                .Select(m => m.Status)
+                .FirstOrDefaultAsync(ct);
+
+            return string.Equals(sent, "SENT", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Attendance code could not be sent to {Email}.", r.ToEmail);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The password reset code. Same shape as <see cref="SendAttendanceCodeAsync"/> —
+    /// the caller needs to know whether it actually went, and the code itself is kept
+    /// out of the mail log for the same reason an attendance code is.
+    /// </summary>
+    public async Task<bool> SendPasswordResetCodeAsync(
+        PasswordResetCodeMailRequest r, string? actor, CancellationToken ct = default)
+    {
+        if (!_options.Enabled) return false;
+        if (string.IsNullOrWhiteSpace(r.ToEmail)) return false;
+
+        try
+        {
+            await SendAsync(
+                to: r.ToEmail,
+                subject: "Avijan password reset code",
+                html: PasswordResetCodeHtml(r),
+                text: PasswordResetCodeText(r),
+                logReference: r.ToEmail,
+                what: $"password reset code for {r.Name}",
+                pdf: null,
+                pdfFileName: null,
+                actor: actor,
+                ct: ct,
+                logBody: $"Password reset code for {r.Name} — code not recorded.");
+
+            var sent = await _db.MailLog
+                .AsNoTracking()
+                .Where(m => m.ToEmail == r.ToEmail)
+                .OrderByDescending(m => m.Id)
+                .Select(m => m.Status)
+                .FirstOrDefaultAsync(ct);
+
+            return string.Equals(sent, "SENT", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Password reset code could not be sent to {Email}.", r.ToEmail);
+            return false;
+        }
+    }
+
     /* ---------------------------------------------------------------- send */
 
     private async Task SendAsync(
         string? to, string subject, string html, string text,
         string logReference, string what,
         byte[]? pdf, string? pdfFileName,
-        string? actor, CancellationToken ct)
+        string? actor, CancellationToken ct,
+        // What to keep in the mail log instead of the real body. An attendance code
+        // must not be readable from dbo.MailLog_registration_time: anyone with
+        // database access could then mark a colleague present.
+        string? logBody = null)
     {
         /* Disabled means DORMANT, not "log that nothing happened". Checked before
            anything else so a switched-off mailer writes no rows at all and an
@@ -111,7 +208,7 @@ public class SmtpStudentMailer : IStudentMailer
            now only appear for students admitted before that rule. */
         if (string.IsNullOrWhiteSpace(recipient))
         {
-            await LogAsync(logReference, string.Empty, subject, html, "SKIPPED",
+            await LogAsync(logReference, string.Empty, subject, logBody ?? html, "SKIPPED",
                 "No personal email on the student record.", actor, ct);
             return;
         }
@@ -161,7 +258,7 @@ public class SmtpStudentMailer : IStudentMailer
             if (attachment is not null) message.Attachments.Add(attachment);
 
             await client.SendMailAsync(message, ct);
-            await LogAsync(logReference, recipient, subject, html, "SENT", null, actor, ct);
+            await LogAsync(logReference, recipient, subject, logBody ?? html, "SENT", null, actor, ct);
 
             _logger.LogInformation("Mail sent to {Email} for {What}", recipient, what);
         }
@@ -171,7 +268,7 @@ public class SmtpStudentMailer : IStudentMailer
                socket, a refused relay, a malformed address - must not surface to
                the caller, because the caller has already committed the admission
                or the payment. */
-            await LogAsync(logReference, recipient, subject, html, "FAILED", Describe(ex), actor, ct);
+            await LogAsync(logReference, recipient, subject, logBody ?? html, "FAILED", Describe(ex), actor, ct);
 
             _logger.LogError(ex,
                 "Mail FAILED for {What} to {Email}. The underlying record was not affected.",
@@ -563,6 +660,122 @@ public class SmtpStudentMailer : IStudentMailer
             .AppendLine()
             .AppendLine("--")
             .AppendLine("Avijan Computer Center")
+            .AppendLine("53, Aghore Sarani, Rajpur, Kol-149 | Mob.: 7688045949")
+            .AppendLine("This message was sent automatically. Please do not reply to it.")
+            .ToString();
+    }
+
+    /* ------------------------------------------------- attendance code */
+
+    /// <summary>
+    /// Deliberately plain: the code has to be readable in a notification preview on
+    /// a locked phone, so it goes near the top and is set large.
+    /// </summary>
+    private static string AttendanceCodeHtml(AttendanceCodeMailRequest r)
+    {
+        var word = string.Equals(r.Direction, "In", StringComparison.OrdinalIgnoreCase)
+            ? "arrival"
+            : "departure";
+
+        // Formatted first: a ':' inside an interpolation hole in a raw string reads
+        // as a format specifier and breaks the surrounding literal.
+        var at = r.MarkedOn.ToString("h:mm tt", CultureInfo.InvariantCulture);
+        var on = r.MarkedOn.ToString("d MMM yyyy", CultureInfo.InvariantCulture);
+
+        return $$"""
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f6f9;padding:24px 0;">
+          <tr><td align="center">
+            <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;padding:28px;font-family:Arial,Helvetica,sans-serif;color:#212529;">
+              <tr><td style="font-size:12px;letter-spacing:.12em;color:#6b7280;text-transform:uppercase;">Avijan Computer Center</td></tr>
+              <tr><td style="padding-top:6px;font-size:18px;font-weight:bold;color:#1b5e8c;">Attendance code</td></tr>
+              <tr><td style="padding-top:16px;font-size:15px;">Hello {{r.StaffName}},</td></tr>
+              <tr><td style="padding-top:8px;font-size:15px;line-height:1.6;">
+                Type this code to confirm your <strong>{{word}}</strong> at
+                {{at}} on {{on}}.
+              </td></tr>
+              <tr><td align="center" style="padding:22px 0;">
+                <div style="display:inline-block;background:#0a283c;color:#ffffff;font-size:34px;letter-spacing:.28em;font-weight:bold;padding:14px 26px;border-radius:10px;">{{r.Code}}</div>
+              </td></tr>
+              <tr><td style="font-size:13px;color:#6b7280;line-height:1.6;">
+                The code is valid for {{r.ValidMinutes}} minutes and can be used once.
+                If you did not mark your attendance just now, tell the office — somebody
+                may be using your sign-in.
+              </td></tr>
+              <tr><td style="padding-top:18px;border-top:1px solid #e3e8ee;font-size:12px;color:#6b7280;">
+                53, Aghore Sarani, Rajpur, Kol-149 &nbsp;|&nbsp; Mob.: 7688045949<br />
+                This message was sent automatically. Please do not reply to it.
+              </td></tr>
+            </table>
+          </td></tr>
+        </table>
+        """;
+    }
+
+    /* ------------------------------------------------- password reset code */
+
+    private static string PasswordResetCodeHtml(PasswordResetCodeMailRequest r) => $$"""
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f6f9;padding:24px 0;">
+          <tr><td align="center">
+            <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;padding:28px;font-family:Arial,Helvetica,sans-serif;color:#212529;">
+              <tr><td style="font-size:12px;letter-spacing:.12em;color:#6b7280;text-transform:uppercase;">Avijan Computer Center</td></tr>
+              <tr><td style="padding-top:6px;font-size:18px;font-weight:bold;color:#1b5e8c;">Password reset code</td></tr>
+              <tr><td style="padding-top:16px;font-size:15px;">Hello {{r.Name}},</td></tr>
+              <tr><td style="padding-top:8px;font-size:15px;line-height:1.6;">
+                Use this code to set a new password for your Avijan sign-in.
+              </td></tr>
+              <tr><td align="center" style="padding:22px 0;">
+                <div style="display:inline-block;background:#0a283c;color:#ffffff;font-size:34px;letter-spacing:.28em;font-weight:bold;padding:14px 26px;border-radius:10px;">{{r.Code}}</div>
+              </td></tr>
+              <tr><td style="font-size:13px;color:#6b7280;line-height:1.6;">
+                The code is valid for {{r.ValidMinutes}} minutes and can be used once.
+                If you did not ask to reset your password, ignore this message — your
+                password has not been changed.
+              </td></tr>
+              <tr><td style="padding-top:18px;border-top:1px solid #e3e8ee;font-size:12px;color:#6b7280;">
+                53, Aghore Sarani, Rajpur, Kol-149 &nbsp;|&nbsp; Mob.: 7688045949<br />
+                This message was sent automatically. Please do not reply to it.
+              </td></tr>
+            </table>
+          </td></tr>
+        </table>
+        """;
+
+    private static string PasswordResetCodeText(PasswordResetCodeMailRequest r) =>
+        new StringBuilder()
+            .AppendLine("AVIJAN COMPUTER CENTER")
+            .AppendLine("Password reset code")
+            .AppendLine()
+            .AppendLine($"Hello {r.Name},")
+            .AppendLine("Use this code to set a new password for your Avijan sign-in.")
+            .AppendLine()
+            .AppendLine($"    CODE: {r.Code}")
+            .AppendLine()
+            .AppendLine($"Valid for {r.ValidMinutes} minutes, and can be used once.")
+            .AppendLine("If you did not ask to reset your password, ignore this message —")
+            .AppendLine("your password has not been changed.")
+            .AppendLine()
+            .AppendLine("53, Aghore Sarani, Rajpur, Kol-149 | Mob.: 7688045949")
+            .AppendLine("This message was sent automatically. Please do not reply to it.")
+            .ToString();
+
+    private static string AttendanceCodeText(AttendanceCodeMailRequest r)
+    {
+        var word = string.Equals(r.Direction, "In", StringComparison.OrdinalIgnoreCase)
+            ? "arrival"
+            : "departure";
+
+        return new StringBuilder()
+            .AppendLine("AVIJAN COMPUTER CENTER")
+            .AppendLine("Attendance code")
+            .AppendLine()
+            .AppendLine($"Hello {r.StaffName},")
+            .AppendLine($"Confirm your {word} at {r.MarkedOn:h:mm tt} on {r.MarkedOn:d MMM yyyy}.")
+            .AppendLine()
+            .AppendLine($"    CODE: {r.Code}")
+            .AppendLine()
+            .AppendLine($"Valid for {r.ValidMinutes} minutes, and can be used once.")
+            .AppendLine("If you did not mark your attendance just now, tell the office.")
+            .AppendLine()
             .AppendLine("53, Aghore Sarani, Rajpur, Kol-149 | Mob.: 7688045949")
             .AppendLine("This message was sent automatically. Please do not reply to it.")
             .ToString();

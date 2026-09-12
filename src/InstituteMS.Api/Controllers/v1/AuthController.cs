@@ -74,4 +74,26 @@ public class AuthController : ApiControllerBase
 
         return Envelope(await _auth.ChangePasswordAsync(userId, request, ct), "Password changed.");
     }
+
+    /// <summary>
+    /// Emails a reset code to the account's personal address. Always reports success
+    /// — whether the address matched an account is not this response's to reveal.
+    /// </summary>
+    [HttpPost("forgot-password")]
+    [AllowAnonymous]
+    [EnableRateLimiting("auth")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request, CancellationToken ct)
+        => Envelope(
+            await _auth.ForgotPasswordAsync(request, ct),
+            "If that address matches an account, a reset code has been emailed to it.");
+
+    /// <summary>Spends the emailed code to set a new password without the old one.</summary>
+    [HttpPost("reset-password")]
+    [AllowAnonymous]
+    [EnableRateLimiting("auth")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request, CancellationToken ct)
+        => Envelope(await _auth.ResetPasswordAsync(request, ct), "Password reset. Please sign in.");
 }

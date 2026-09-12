@@ -250,6 +250,22 @@ public record SubmitExamRequest
     public IReadOnlyDictionary<int, char>? Answers { get; init; }
 }
 
+/// <summary>
+/// The paper as it stands part-way through, saved as the student works.
+/// </summary>
+/// <remarks>
+/// This exists so the deadline can be enforced on the server without a dropped
+/// connection costing a student their paper. Without a saved copy the only way to
+/// refuse a late submission is to award nothing, which punishes the student whose
+/// browser closed at the last minute exactly as hard as the one still typing.
+/// </remarks>
+public record SaveExamProgressRequest
+{
+    public int AttemptId { get; init; }
+
+    public IReadOnlyDictionary<int, char>? Answers { get; init; }
+}
+
 /// <summary>What the student is shown the moment they submit.</summary>
 public record ExamResultDto(
     int AttemptId,
@@ -338,7 +354,14 @@ public record ExamScheduleRowDto(
     bool IsActive,
 
     /// <summary>Has finished the course, and will not come in to sit anything.</summary>
-    bool IsComplete);
+    bool IsComplete,
+
+    /// <summary>
+    /// Null on a Theory paper's own sheet. On a Practical's, when this student has
+    /// submitted the Theory paper of the same course and term — the Practical date
+    /// cannot be set for them until then.
+    /// </summary>
+    DateTime? TheorySubmittedOn = null);
 
 /// <summary>Schedules one student, or corrects a sitting already set.</summary>
 public record ExamScheduleSaveRequest
@@ -396,7 +419,8 @@ public class ExamScheduleBulkRequestValidator : AbstractValidator<ExamScheduleBu
 public record ExamScheduleBulkResultDto(
     int Scheduled,
     int SkippedAlreadyScheduled,
-    int SkippedAlreadySat);
+    int SkippedAlreadySat,
+    int SkippedTheoryNotDone = 0);
 
 /* ================================================== the admit card (student) */
 
@@ -581,6 +605,8 @@ public interface IExamService
     /// </summary>
     Task<Result<IReadOnlyList<AdmitCardDto>>> GetAdmitCardsAsync(
         string email, CancellationToken ct = default);
+    Task<Result<bool>> SaveProgressAsync(string email, SaveExamProgressRequest request, CancellationToken ct = default);
+
     Task<Result<ExamResultDto>> SubmitAsync(string email, SubmitExamRequest request, CancellationToken ct = default);
     Task<Result<IReadOnlyList<ExamResultDto>>> GetMyResultsAsync(string email, CancellationToken ct = default);
 

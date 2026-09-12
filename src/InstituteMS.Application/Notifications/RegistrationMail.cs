@@ -183,8 +183,35 @@ public record FeeReceiptMailRequest(
 /// either way and the failure is recorded in <c>dbo.MailLog_registration_time</c>,
 /// exactly as the legacy application did.
 /// </remarks>
+/// <summary>The six-digit code a member of staff must type back to confirm a mark.</summary>
+public record AttendanceCodeMailRequest(
+    string StaffName,
+    string ToEmail,
+    string Code,
+    string Direction,
+    string? Branch,
+    DateTime MarkedOn,
+    int ValidMinutes);
+
+/// <summary>The six-digit code sent to someone who has forgotten their password.</summary>
+public record PasswordResetCodeMailRequest(
+    string Name,
+    string ToEmail,
+    string Code,
+    int ValidMinutes);
+
 public interface IStudentMailer
 {
+    /// <summary>
+    /// Sends an attendance confirmation code.
+    /// </summary>
+    /// <returns>
+    /// False when it could not be sent — the caller tells the person on screen
+    /// rather than leaving them waiting for an email that is not coming.
+    /// </returns>
+    Task<bool> SendAttendanceCodeAsync(
+        AttendanceCodeMailRequest request, string? actor, CancellationToken ct = default);
+
     /// <summary>
     /// The admission confirmation: the portal sign-in, and a copy of the admission
     /// receipt so the student has the bill without waiting for the printed one.
@@ -205,4 +232,15 @@ public interface IStudentMailer
     /// </summary>
     Task SendStudentPasswordChangeAsync(
         StudentPasswordChangeMailRequest request, string? actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sends the code that lets someone who cannot sign in set a new password
+    /// without the old one.
+    /// </summary>
+    /// <returns>
+    /// False when it could not be sent — the caller tells the person on screen
+    /// rather than leaving them waiting for an email that is not coming.
+    /// </returns>
+    Task<bool> SendPasswordResetCodeAsync(
+        PasswordResetCodeMailRequest request, string? actor, CancellationToken ct = default);
 }

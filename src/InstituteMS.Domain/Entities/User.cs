@@ -31,6 +31,21 @@ public class User
     public DateTime? LockoutEnd { get; set; }
     public DateTime? LastLoginOn { get; set; }
 
+    /// <summary>
+    /// Hashed the same way as <see cref="PasswordHash"/>, not stored in clear — the
+    /// six-digit code emailed by "forgot password". Cleared the moment it is spent
+    /// or replaced by a fresh request.
+    /// </summary>
+    public string? PasswordResetCodeHash { get; set; }
+    public DateTime? PasswordResetCodeExpiry { get; set; }
+
+    /// <summary>
+    /// Wrong-code attempts against the current code. Locked out the same way a
+    /// wrong-password run locks the account, so guessing a six-digit code by brute
+    /// force is not a shortcut around the password itself.
+    /// </summary>
+    public int PasswordResetAttempts { get; set; }
+
     public string? CreatedBy { get; set; }
     /// <summary>
     /// Nullable: the audit columns were added to the legacy tables by the

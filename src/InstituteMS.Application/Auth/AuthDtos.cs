@@ -6,6 +6,14 @@ public record RefreshRequest(string RefreshToken);
 
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 
+/// <summary>Step one of account recovery: which account has lost its password.</summary>
+public record ForgotPasswordRequest(string Email);
+
+/// <summary>
+/// Step two: the code just emailed, and the password to replace the forgotten one.
+/// </summary>
+public record ResetPasswordRequest(string Email, string Code, string NewPassword);
+
 /// <summary>The signed-in user as the client sees it. Never carries a hash.</summary>
 /// <param name="Role">
 /// The most privileged role held, which decides the landing page. Kept singular for

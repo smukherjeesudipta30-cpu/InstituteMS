@@ -123,4 +123,26 @@ public record EnquiryDto(
     string? Email,
     string? Phone,
     string? Message,
-    DateTime SubmittedOn);
+    DateTime SubmittedOn,
+
+    /// <summary>True once somebody has marked it read. Read ones leave the dashboard.</summary>
+    bool IsHandled = false);
+
+/// <summary>Which enquiries to list.</summary>
+public enum EnquiryFilter
+{
+    /// <summary>Not yet marked read -- what the dashboard panel shows.</summary>
+    New = 0,
+
+    /// <summary>Already marked read, so they can be found again afterwards.</summary>
+    Read = 1,
+
+    All = 2
+}
+
+/// <summary>A page of enquiries from the public contact form.</summary>
+public record EnquiryListDto(
+    IReadOnlyList<EnquiryDto> Items,
+    int TotalCount,
+    int NewCount,
+    int ReadCount);

@@ -46,4 +46,7 @@ public class AdminNotification
 public static class AdminNotificationTypes
 {
     public const string StudentPasswordChange = "StudentPasswordChange";
+    public const string StaffPasswordChange = "StaffPasswordChange";
+    public const string CompetitionDraftPasswordChange = "CompetitionDraftPasswordChange";
+    public const string CompetitionDraftStarted = "CompetitionDraftStarted";
 }

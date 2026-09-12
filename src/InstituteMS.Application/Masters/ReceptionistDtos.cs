@@ -22,8 +22,18 @@ public record ReceptionistListItemDto(
     string Name,
     string? LoginId,
     string? Phone,
+    /// <summary>Real mailbox, for attendance codes.</summary>
+    string? PersonalEmail,
     string? Branch,
     bool IsActive,
+
+    /// <summary>Shown on the staff hierarchy chart.</summary>
+    string? Designation,
+    string? Qualification,
+    string? ComputerTraining,
+
+    /// <summary>Technical staff are excused qualification and computer training.</summary>
+    bool IsTechnical,
 
     /// <summary>How many months have been paid, and the total.</summary>
     int PaymentCount,
@@ -35,8 +45,23 @@ public record ReceptionistSaveRequest
     public string? Name { get; init; }
     public string? LoginId { get; init; }
     public string? Phone { get; init; }
+
+    /// <summary>Real mailbox, for attendance confirmation codes.</summary>
+    public string? PersonalEmail { get; init; }
     public string? Branch { get; init; }
     public bool IsActive { get; init; } = true;
+
+    /// <summary>The position, free text. Also what puts them on the chart.</summary>
+    public string? Designation { get; init; }
+
+    /// <summary>Required unless <see cref="IsTechnical"/>.</summary>
+    public string? Qualification { get; init; }
+
+    /// <summary>Required unless <see cref="IsTechnical"/>.</summary>
+    public string? ComputerTraining { get; init; }
+
+    /// <summary>Technical staff are excused qualification and computer training.</summary>
+    public bool IsTechnical { get; init; }
 }
 
 public class ReceptionistSaveRequestValidator : AbstractValidator<ReceptionistSaveRequest>
@@ -61,6 +86,11 @@ public class ReceptionistSaveRequestValidator : AbstractValidator<ReceptionistSa
         RuleFor(x => x.Phone)
             .Matches("^[0-9]{10}$").WithMessage("Enter a valid 10-digit phone number.")
             .When(x => !string.IsNullOrWhiteSpace(x.Phone));
+
+        /* Not required here -- set from Staff Hierarchy instead, the same change made
+           to the teacher master. */
+        RuleFor(x => x.Qualification).MaximumLength(200);
+        RuleFor(x => x.ComputerTraining).MaximumLength(200);
     }
 }
 

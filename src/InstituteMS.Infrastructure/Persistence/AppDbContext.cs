@@ -13,6 +13,7 @@ public class AppDbContext : DbContext
     public DbSet<Student> Students => Set<Student>();
     public DbSet<StudentPhoto> StudentPhotos => Set<StudentPhoto>();
     public DbSet<MonthlyFee> MonthlyFees => Set<MonthlyFee>();
+    public DbSet<AdmissionFeePayment> AdmissionFeePayments => Set<AdmissionFeePayment>();
     public DbSet<Expense> Expenses => Set<Expense>();
     public DbSet<OtherIncome> OtherIncomes => Set<OtherIncome>();
 
@@ -23,6 +24,7 @@ public class AppDbContext : DbContext
     public DbSet<ContactMessageExt> ContactMessageExts => Set<ContactMessageExt>();
     public DbSet<MailLogEntry> MailLog => Set<MailLogEntry>();
     public DbSet<AdminNotification> AdminNotifications => Set<AdminNotification>();
+    public DbSet<PayrollSettings> PayrollSettings => Set<PayrollSettings>();
     public DbSet<CourseEnquiry> CourseEnquiries => Set<CourseEnquiry>();
     public DbSet<Notice> Notices => Set<Notice>();
     public DbSet<DailyRoutine> DailyRoutines => Set<DailyRoutine>();
@@ -39,6 +41,21 @@ public class AppDbContext : DbContext
     public DbSet<TeacherExpense> TeacherExpenses => Set<TeacherExpense>();
     public DbSet<Mark> Marks => Set<Mark>();
     public DbSet<Branch> Branches => Set<Branch>();
+    public DbSet<StaffAttendance> StaffAttendance => Set<StaffAttendance>();
+    public DbSet<AttendanceShift> AttendanceShifts => Set<AttendanceShift>();
+    public DbSet<AttendanceChallenge> AttendanceChallenges => Set<AttendanceChallenge>();
+    public DbSet<StaffShiftAssignment> StaffShiftAssignments => Set<StaffShiftAssignment>();
+    public DbSet<Competition> Competitions => Set<Competition>();
+    public DbSet<CompetitionGroup> CompetitionGroups => Set<CompetitionGroup>();
+    public DbSet<CompetitionOrganiser> CompetitionOrganisers => Set<CompetitionOrganiser>();
+    public DbSet<CompetitionApplicant> CompetitionApplicants => Set<CompetitionApplicant>();
+    public DbSet<CompetitionEntry> CompetitionEntries => Set<CompetitionEntry>();
+    public DbSet<CompetitionDocument> CompetitionDocuments => Set<CompetitionDocument>();
+    public DbSet<CompetitionAdvert> CompetitionAdverts => Set<CompetitionAdvert>();
+    public DbSet<CompetitionDraft> CompetitionDrafts => Set<CompetitionDraft>();
+
+    public DbSet<OrgNode> OrgNodes => Set<OrgNode>();
+    public DbSet<OrgEdge> OrgEdges => Set<OrgEdge>();
     public DbSet<FeeTotal> FeeTotals => Set<FeeTotal>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

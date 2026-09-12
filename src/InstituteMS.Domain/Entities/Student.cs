@@ -18,6 +18,31 @@ public class Student
     public string? BillNo { get; set; }
     public int? TechniqueCount { get; set; }
     public decimal? AdmissionFees { get; set; }
+
+    /// <summary>
+    /// <c>Cash</c> or <c>Bank</c> — how the admission fee was received. Same
+    /// distinction as <c>MonthlyFee.PaymentMode</c>, added for the same reason: a
+    /// month-end reconciliation by receptionist and branch needs to know how each
+    /// payment arrived, not only how much it was. Null on students admitted before
+    /// migration 044.
+    /// </summary>
+    public string? AdmissionPaymentMode { get; set; }
+
+    /// <summary>
+    /// How much of <see cref="AdmissionFees"/> has actually been received, across
+    /// the payment taken at admission and any later instalment. The balance owed is
+    /// <c>AdmissionFees - AdmissionFeesPaid</c>; <see cref="AdmissionFeePayment"/>
+    /// carries the receipt behind each part of it.
+    /// </summary>
+    /// <remarks>
+    /// Backfilled equal to <see cref="AdmissionFees"/> for every student admitted
+    /// before migration 051. Until then the admission fee was all-or-nothing — the
+    /// amount entered was the amount taken — so treating those as paid in full is
+    /// what the records actually mean. Leaving them null and calling the difference
+    /// a due would invent an unpaid balance for all 957 of them.
+    /// </remarks>
+    public decimal? AdmissionFeesPaid { get; set; }
+
     public decimal? MonthlyFees { get; set; }
     public DateOnly? DateOfJoining { get; set; }
     public DateOnly? DateOfBirth { get; set; }

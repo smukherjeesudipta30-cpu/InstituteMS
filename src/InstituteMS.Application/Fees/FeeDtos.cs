@@ -33,7 +33,21 @@ public record StudentFeeBillDto(
     /// The student's mobile number, so the fees screen can offer to send the
     /// receipt on WhatsApp without a second round trip to look the student up.
     /// </summary>
-    string? Phone = null);
+    string? Phone = null,
+
+    /// <summary>
+    /// Where the money receipt will be emailed. Blank on most migrated records, and
+    /// the receipt is then silently skipped — so the screen says so while the student
+    /// is still standing at the counter and can give the address.
+    /// </summary>
+    string? PersonalEmail = null,
+
+    /// <summary>
+    /// Still owed on the admission fee, so the counter can settle it in the same
+    /// visit rather than sending the student to another screen. Separate from
+    /// <see cref="OutstandingDue"/>, which is monthly fees only.
+    /// </summary>
+    decimal AdmissionDue = 0m);
 
 /// <summary>One row of the payment history (legacy <c>MonthlyDetail.MonthlyDetails</c>).</summary>
 public record FeePaymentDto(
@@ -49,7 +63,8 @@ public record FeePaymentDto(
     decimal? Percentage,
     decimal? OldDue,
     decimal? NewDue,
-    decimal? LateFine);
+    decimal? LateFine,
+    string? PaymentMode);
 
 /// <summary>What the client asks the server to work out, and what it gets back.</summary>
 public record FeeCalculationRequest(
@@ -70,6 +85,20 @@ public record FeeCalculationDto(
     /// <summary>(total + old due) − amount actually paid.</summary>
     decimal NewDue,
     DateOnly? ReferenceDate,
+
+    /// <summary>
+    /// Days between the fee date and the student's previous payment, for the desk
+    /// to read. This is NOT what the fine is worked out from — for anyone who joined
+    /// on or after Nov 2019 that is the average across the months owed, which is
+    /// what <see cref="DaysPerInstallment"/> and <see cref="Explanation"/> carry.
+    /// It is here because "200 days since joining" answers a question nobody at the
+    /// counter is asking when the student last paid a fortnight ago.
+    /// </summary>
+    int? DaysSinceLastPayment,
+
+    /// <summary>The previous payment those days are counted from. Null on a first payment.</summary>
+    DateOnly? LastPaymentDate,
+
     string Explanation);
 
 public record FeeSaveRequest
@@ -89,6 +118,14 @@ public record FeeSaveRequest
     public decimal AmountPaid { get; init; }
     public decimal OldDue { get; init; }
     public decimal NewDue { get; init; }
+
+    /// <summary>
+    /// <c>Cash</c> or <c>Bank</c> — how the receptionist actually received this
+    /// money at the counter. The owner: "capture payment has been done via cash or
+    /// bank... useful to calculate amount who has how many amount at month end."
+    /// Defaults to Cash, the overwhelmingly common counter payment.
+    /// </summary>
+    public string PaymentMode { get; init; } = "Cash";
 }
 
 public record FeeRecordedDto(int Id, string BillNo, decimal TeacherSalaryEach);

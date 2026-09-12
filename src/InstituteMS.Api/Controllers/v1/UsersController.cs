@@ -45,6 +45,12 @@ public class UsersController : ApiControllerBase
     public async Task<IActionResult> Roles(CancellationToken ct)
         => Envelope(await _users.GetRoleOptionsAsync(ct));
 
+    /// <summary>How many accounts hold each role, for the role-wise grid above the table.</summary>
+    [HttpGet("role-counts")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<RoleCountDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> RoleCounts(CancellationToken ct)
+        => Envelope(await _users.GetRoleCountsAsync(ct));
+
     /// <summary>Birthdays in the next N days (legacy U6). Defaults to 30.</summary>
     [HttpGet("birthdays/upcoming")]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<UpcomingBirthdayDto>>), StatusCodes.Status200OK)]
