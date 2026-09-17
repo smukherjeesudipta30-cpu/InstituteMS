@@ -106,6 +106,7 @@ public class ChatService : IChatService
     /// <summary>Whether two people, by the roles they each hold, are allowed to message each other directly.</summary>
     private static bool CanMessage(IReadOnlyCollection<string> rolesA, IReadOnlyCollection<string> rolesB)
     {
+        if (rolesA.Contains(UserRoles.SuperAdmin) || rolesB.Contains(UserRoles.SuperAdmin)) return true;
         if (rolesA.Contains(UserRoles.Admin) || rolesA.Contains(UserRoles.Editor)) return true;
         if (rolesB.Contains(UserRoles.Admin) || rolesB.Contains(UserRoles.Editor)) return true;
 
@@ -113,7 +114,8 @@ public class ChatService : IChatService
     }
 
     private static bool IsStaff(IReadOnlyCollection<string> roles) =>
-        roles.Contains(UserRoles.Admin) || roles.Contains(UserRoles.Editor) || roles.Contains(UserRoles.Receptionist);
+        roles.Contains(UserRoles.SuperAdmin) || roles.Contains(UserRoles.Admin) ||
+        roles.Contains(UserRoles.Editor) || roles.Contains(UserRoles.Receptionist);
 
     /// <summary>22 URL-safe characters from 16 random bytes — short enough for a browser to hold, long enough to stand in for a password.</summary>
     private static string NewGuestToken() =>

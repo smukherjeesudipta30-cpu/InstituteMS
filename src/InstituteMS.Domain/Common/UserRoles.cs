@@ -17,7 +17,17 @@ public static class UserRoles
     public const string Teacher = "Teacher";
     public const string Receptionist = "Receptionist";
 
-    public static readonly string[] All = [Admin, Editor, Student, Teacher, Receptionist];
+    /// <summary>
+    /// Above every screen's own role list, not inside one: a SuperAdmin bypasses
+    /// every <c>[Authorize(Roles=...)]</c> check globally (see
+    /// <see cref="InstituteMS.Api.Security.SuperAdminAuthorizationHandler"/>)
+    /// rather than being added to each of the ~27 controller role strings, so a
+    /// screen that later tightens its own roles can't accidentally lock a
+    /// SuperAdmin out by omission.
+    /// </summary>
+    public const string SuperAdmin = "SuperAdmin";
+
+    public static readonly string[] All = [SuperAdmin, Admin, Editor, Student, Teacher, Receptionist];
 
     /// <summary>Roles allowed into the back-office dashboard (legacy <c>[Authorize(Roles="Admin,Editor")]</c>).</summary>
     public const string BackOffice = $"{Admin},{Editor}";
@@ -45,7 +55,7 @@ public static class UserRoles
     /// Ranked most privileged first. Used to pick the landing page when a user
     /// holds several roles.
     /// </summary>
-    private static readonly string[] Precedence = [Admin, Editor, Receptionist, Teacher, Student];
+    private static readonly string[] Precedence = [SuperAdmin, Admin, Editor, Receptionist, Teacher, Student];
 
     public static bool IsKnown(string? role) =>
         role is not null && All.Contains(role.Trim(), StringComparer.OrdinalIgnoreCase);
@@ -88,7 +98,7 @@ public static class UserRoles
     /// </remarks>
     public static string LandingRoute(string? roles) => Primary(roles) switch
     {
-        Admin or Editor => "/dashboard",
+        SuperAdmin or Admin or Editor => "/dashboard",
         // The legacy Receptionist landed on Reception/Resignation_portal, which is
         // not migrated. Course progress is the one page they were authorised for.
         Receptionist => "/courses",
@@ -99,6 +109,7 @@ public static class UserRoles
 
     private static string? Canonicalise(string value) => value.Trim().ToLowerInvariant() switch
     {
+        "superadmin" or "super admin" or "super-admin" => SuperAdmin,
         "admin" => Admin,
         "editor" => Editor,
         "teacher" => Teacher,

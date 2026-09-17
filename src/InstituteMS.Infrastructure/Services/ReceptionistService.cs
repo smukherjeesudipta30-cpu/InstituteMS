@@ -1,4 +1,5 @@
 using System.Globalization;
+using InstituteMS.Application.Chat;
 using InstituteMS.Application.Common;
 using InstituteMS.Application.Masters;
 using InstituteMS.Domain.Entities;
@@ -20,8 +21,13 @@ namespace InstituteMS.Infrastructure.Services;
 public class ReceptionistService : IReceptionistService
 {
     private readonly AppDbContext _db;
+    private readonly IChatService _chat;
 
-    public ReceptionistService(AppDbContext db) => _db = db;
+    public ReceptionistService(AppDbContext db, IChatService chat)
+    {
+        _db = db;
+        _chat = chat;
+    }
 
     /// <summary>Any date inside a month, reduced to the first of it.</summary>
     private static DateOnly MonthStart(DateOnly date) => new(date.Year, date.Month, 1);
@@ -349,5 +355,252 @@ public class ReceptionistService : IReceptionistService
             branchTotals.Sum(t => t.TotalPaid),
             branches,
             DateTime.Now));
+    }
+
+    /* ------------------------------------------------------- leave & deduction */
+
+    private static (DateOnly Start, DateOnly End) PeriodRange(string periodType, DateOnly date) => periodType switch
+    {
+        "Weekly" => WeekRange(date),
+        "Yearly" => (new DateOnly(date.Year, 1, 1), new DateOnly(date.Year, 12, 31)),
+        _ => (MonthStart(date), new DateOnly(date.Year, date.Month, DateTime.DaysInMonth(date.Year, date.Month)))
+    };
+
+    /// <summary>Monday-start week containing the given date.</summary>
+    private static (DateOnly Start, DateOnly End) WeekRange(DateOnly date)
+    {
+        var dow = (int)date.DayOfWeek; // System.DayOfWeek: 0 = Sunday
+        var offsetToMonday = dow == 0 ? 6 : dow - 1;
+        var monday = date.AddDays(-offsetToMonday);
+        return (monday, monday.AddDays(6));
+    }
+
+    /// <summary>
+    /// Scales the monthly entitlement in <see cref="ReceptionistLeavePolicy"/> to
+    /// whatever period the report was asked for, on a straight months-per-year
+    /// basis — the policy only ever states a monthly figure.
+    /// </summary>
+    private static decimal EntitlementForPeriod(string periodType, int shiftsPerWeek)
+    {
+        var monthly = ReceptionistLeavePolicy.MonthlyEntitlementDays(shiftsPerWeek);
+        return periodType switch
+        {
+            "Weekly" => Math.Round(monthly * 12m / 52m, 2),
+            "Yearly" => monthly * 12m,
+            _ => monthly
+        };
+    }
+
+    /// <summary>
+    /// Leave taken against entitlement for every active, rostered receptionist in
+    /// one period. Taken days are never stored (same rule as attendance itself —
+    /// see <see cref="Domain.Entities.StaffAttendance"/>): they are the rostered
+    /// days in the period, from <see cref="StaffShiftAssignment"/>, minus the days
+    /// actually scanned in.
+    /// </summary>
+    public async Task<Result<ReceptionistLeaveReportDto>> GetLeaveReportAsync(
+        ReceptionistLeaveReportQuery query, CancellationToken ct = default)
+    {
+        var periodType = query.PeriodType is "Weekly" or "Yearly" ? query.PeriodType : "Monthly";
+        var anchor = query.Date == default ? DateOnly.FromDateTime(DateTime.Today) : query.Date;
+        var (start, end) = PeriodRange(periodType, anchor);
+
+        // A day that hasn't happened yet has no scan and no roster outcome either
+        // way — counting it as "leave" would flag every receptionist as over
+        // entitlement the moment a monthly or yearly report is run mid-period.
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var countEnd = end > today ? today : end;
+
+        var receptionistsQuery = _db.Receptionists.AsNoTracking().Where(r => r.IsActive);
+
+        if (!string.IsNullOrWhiteSpace(query.Branch))
+        {
+            var branch = query.Branch.Trim();
+            receptionistsQuery = receptionistsQuery.Where(r => r.Branch == branch);
+        }
+
+        var receptionists = await receptionistsQuery
+            .Select(r => new { r.Id, r.Name, r.Branch })
+            .ToListAsync(ct);
+
+        var receptionistIds = receptionists.Select(r => r.Id).ToList();
+
+        var assignments = await _db.StaffShiftAssignments.AsNoTracking()
+            .Where(a => a.StaffType == "Receptionist" && a.IsActive && receptionistIds.Contains(a.StaffId))
+            .Select(a => new { a.StaffId, a.DayOfWeek })
+            .ToListAsync(ct);
+
+        var assignmentsByReceptionist = assignments
+            .GroupBy(a => a.StaffId)
+            .ToDictionary(g => g.Key, g => g.Select(a => a.DayOfWeek).Distinct().ToHashSet());
+
+        // When countEnd < start (the whole period is still in the future),
+        // this legitimately returns no rows rather than needing a separate branch.
+        var presentDays = await _db.StaffAttendance.AsNoTracking()
+            .Where(a => a.StaffType == "Receptionist" && a.Direction == "In"
+                && a.OnDate >= start && a.OnDate <= countEnd && receptionistIds.Contains(a.StaffId))
+            .Select(a => new { a.StaffId, a.OnDate })
+            .Distinct()
+            .ToListAsync(ct);
+
+        var presentByReceptionist = presentDays
+            .GroupBy(p => p.StaffId)
+            .ToDictionary(g => g.Key, g => g.Select(p => p.OnDate).ToHashSet());
+
+        var existingDecisions = await _db.ReceptionistLeaveDeductions.AsNoTracking()
+            .Where(d => d.PeriodType == periodType && d.PeriodStart == start && receptionistIds.Contains(d.ReceptionistId))
+            .ToDictionaryAsync(d => d.ReceptionistId, ct);
+
+        // Nothing to count yet when the whole period is still in the future.
+        var calendarDayCount = countEnd < start ? 0 : countEnd.DayNumber - start.DayNumber + 1;
+        var calendarDays = Enumerable.Range(0, calendarDayCount)
+            .Select(offset => start.AddDays(offset))
+            .ToList();
+
+        var rows = new List<ReceptionistLeaveReportLineDto>();
+
+        foreach (var r in receptionists)
+        {
+            var rosteredDaysOfWeek = assignmentsByReceptionist.TryGetValue(r.Id, out var d)
+                ? d : new HashSet<byte>();
+            var shiftsPerWeek = rosteredDaysOfWeek.Count;
+
+            // Nobody rostered yet — nothing to compute leave against for this period.
+            if (shiftsPerWeek == 0) continue;
+
+            var present = presentByReceptionist.TryGetValue(r.Id, out var p) ? p : new HashSet<DateOnly>();
+
+            var rosteredCount = 0;
+            var presentCount = 0;
+            foreach (var day in calendarDays)
+            {
+                if (!rosteredDaysOfWeek.Contains((byte)day.DayOfWeek)) continue;
+                rosteredCount++;
+                if (present.Contains(day)) presentCount++;
+            }
+
+            var taken = Math.Max(0, rosteredCount - presentCount);
+            var entitlement = EntitlementForPeriod(periodType, shiftsPerWeek);
+
+            existingDecisions.TryGetValue(r.Id, out var decision);
+
+            rows.Add(new ReceptionistLeaveReportLineDto(
+                r.Id, r.Name, r.Branch, shiftsPerWeek,
+                entitlement, taken, taken > entitlement,
+                decision?.DeductionPercent ?? 0m,
+                decision?.Applied ?? false,
+                decision?.Notes));
+        }
+
+        return Result<ReceptionistLeaveReportDto>.Success(new ReceptionistLeaveReportDto(
+            periodType, start, end,
+            rows.OrderBy(r => r.Branch).ThenBy(r => r.ReceptionistName).ToList(),
+            DateTime.Now));
+    }
+
+    /// <summary>
+    /// Records the Admin's deduction decision for one receptionist's period.
+    /// Entitlement/taken are recomputed fresh rather than trusted from the
+    /// request, the same way an amount is never trusted from the browser
+    /// elsewhere in this service, so the stored row always reflects what was
+    /// actually true at the moment the decision was made.
+    /// </summary>
+    public async Task<Result<bool>> SetLeaveDeductionAsync(
+        ReceptionistLeaveDeductionRequest request, string? actor, CancellationToken ct = default)
+    {
+        var periodType = request.PeriodType is "Weekly" or "Yearly" ? request.PeriodType : "Monthly";
+        var (start, _) = PeriodRange(periodType, request.PeriodStart);
+
+        var report = await GetLeaveReportAsync(
+            new ReceptionistLeaveReportQuery { PeriodType = periodType, Date = start }, ct);
+
+        var line = report.Value?.Rows.FirstOrDefault(r => r.ReceptionistId == request.ReceptionistId);
+        if (line is null)
+        {
+            return Result<bool>.Failure(
+                "No active rota was found for this receptionist in this period.", ResultStatus.NotFound);
+        }
+
+        var existing = await _db.ReceptionistLeaveDeductions
+            .FirstOrDefaultAsync(x => x.ReceptionistId == request.ReceptionistId
+                && x.PeriodType == periodType && x.PeriodStart == start, ct);
+
+        // Only tell the receptionist when something about the decision actually
+        // changes — re-saving the same percentage every time the screen is
+        // reopened must not spam them with an identical message.
+        var wasApplied = existing?.Applied ?? false;
+        var previousPercent = existing?.DeductionPercent ?? 0m;
+        var changed = wasApplied != request.Applied || previousPercent != request.DeductionPercent;
+
+        if (existing is null)
+        {
+            _db.ReceptionistLeaveDeductions.Add(new ReceptionistLeaveDeduction
+            {
+                ReceptionistId = request.ReceptionistId,
+                PeriodType = periodType,
+                PeriodStart = start,
+                EntitlementDays = line.EntitlementDays,
+                TakenDays = line.TakenDays,
+                DeductionPercent = request.DeductionPercent,
+                Applied = request.Applied,
+                Notes = request.Notes,
+                CreatedBy = actor,
+                CreatedOn = DateTime.Now
+            });
+        }
+        else
+        {
+            existing.EntitlementDays = line.EntitlementDays;
+            existing.TakenDays = line.TakenDays;
+            existing.DeductionPercent = request.DeductionPercent;
+            existing.Applied = request.Applied;
+            existing.Notes = request.Notes;
+            existing.ModifiedBy = actor;
+            existing.ModifiedOn = DateTime.Now;
+        }
+
+        await _db.SaveChangesAsync(ct);
+
+        if (changed && request.Applied)
+        {
+            await NotifyDeductionAsync(request.ReceptionistId, periodType, start, line, request.DeductionPercent, actor, ct);
+        }
+
+        return Result<bool>.Success(true);
+    }
+
+    /// <summary>
+    /// Drops a chat message to the receptionist themselves so a salary deduction
+    /// is never something they only discover on payday — the same "don't let it
+    /// just vanish silently" reasoning behind <c>CallService.logCallOutcome</c> on
+    /// the Angular side. Best-effort: a receptionist with no login yet, or no chat
+    /// access, must never block the deduction itself from being recorded — the
+    /// decision above has already been saved by the time this runs.
+    /// </summary>
+    private async Task NotifyDeductionAsync(
+        int receptionistId, string periodType, DateOnly periodStart,
+        ReceptionistLeaveReportLineDto line, decimal deductionPercent, string? actor, CancellationToken ct)
+    {
+        var receptionist = await _db.Receptionists.AsNoTracking()
+            .Where(r => r.Id == receptionistId)
+            .Select(r => r.LoginId)
+            .FirstOrDefaultAsync(ct);
+
+        if (string.IsNullOrWhiteSpace(receptionist) || string.IsNullOrWhiteSpace(actor)) return;
+
+        var periodLabel = periodType switch
+        {
+            "Weekly" => $"the week of {periodStart:d MMM yyyy}",
+            "Yearly" => $"{periodStart.Year}",
+            _ => periodStart.ToString("MMMM yyyy", CultureInfo.InvariantCulture)
+        };
+
+        var text = $"A {deductionPercent}% salary deduction has been applied for {periodLabel} " +
+                   $"— {line.TakenDays} day(s) leave taken against a {line.EntitlementDays} day entitlement.";
+
+        var conversation = await _chat.StartOrGetDirectConversationAsync(actor, receptionist, ct);
+        if (!conversation.Succeeded) return;
+
+        await _chat.SendMessageAsync(actor, conversation.Value, new SendMessageRequest { Body = text }, ct);
     }
 }

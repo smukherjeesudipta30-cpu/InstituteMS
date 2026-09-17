@@ -178,6 +178,82 @@ public class ReceptionistReportQuery
     public string? Branch { get; set; }
 }
 
+/* ==================================================== leave & deduction */
+
+/// <summary>
+/// The paid-leave entitlement mapping the owner asked for, keyed by how many
+/// shifts/week the receptionist is rostered for — see <see cref="ReceptionistLeavePolicy.MonthlyEntitlementDays"/>.
+/// </summary>
+public static class ReceptionistLeavePolicy
+{
+    /// <summary>Days of paid leave per month, by weekly shift count. Any other shift count carries no entitlement.</summary>
+    public static decimal MonthlyEntitlementDays(int shiftsPerWeek) => shiftsPerWeek switch
+    {
+        6 => 1.5m,
+        4 => 1m,
+        3 => 0.8m,
+        2 => 0.5m,
+        _ => 0m
+    };
+}
+
+public record ReceptionistLeaveReportLineDto(
+    int ReceptionistId,
+    string ReceptionistName,
+    string? Branch,
+    int ShiftsPerWeek,
+    decimal EntitlementDays,
+    decimal TakenDays,
+    bool ExceedsEntitlement,
+    decimal DeductionPercent,
+    bool Applied,
+    string? Notes);
+
+public record ReceptionistLeaveReportDto(
+    string PeriodType,
+    DateOnly PeriodStart,
+    DateOnly PeriodEnd,
+    IReadOnlyList<ReceptionistLeaveReportLineDto> Rows,
+    DateTime GeneratedOn);
+
+public class ReceptionistLeaveReportQuery
+{
+    /// <summary><c>Weekly</c>, <c>Monthly</c> or <c>Yearly</c>.</summary>
+    public string PeriodType { get; set; } = "Monthly";
+
+    /// <summary>Any date inside the period; normalised to the start of the week/month/year.</summary>
+    public DateOnly Date { get; set; }
+
+    public string? Branch { get; set; }
+}
+
+public record ReceptionistLeaveDeductionRequest
+{
+    public int ReceptionistId { get; init; }
+    public string PeriodType { get; init; } = "Monthly";
+    public DateOnly PeriodStart { get; init; }
+    public decimal DeductionPercent { get; init; }
+    public bool Applied { get; init; }
+    public string? Notes { get; init; }
+}
+
+public class ReceptionistLeaveDeductionRequestValidator : AbstractValidator<ReceptionistLeaveDeductionRequest>
+{
+    public ReceptionistLeaveDeductionRequestValidator()
+    {
+        RuleFor(x => x.ReceptionistId).GreaterThan(0).WithMessage("Choose a receptionist.");
+
+        RuleFor(x => x.PeriodType)
+            .Must(p => p is "Weekly" or "Monthly" or "Yearly")
+            .WithMessage("Period must be Weekly, Monthly or Yearly.");
+
+        RuleFor(x => x.DeductionPercent)
+            .InclusiveBetween(0m, 100m).WithMessage("Deduction percentage must be between 0 and 100.");
+
+        RuleFor(x => x.Notes).MaximumLength(300);
+    }
+}
+
 /* ==================================================================== service */
 
 public interface IReceptionistService
@@ -206,4 +282,16 @@ public interface IReceptionistService
     /// <summary>Receptionist pay by branch and month.</summary>
     Task<Result<ReceptionistReportDto>> GetReportAsync(
         ReceptionistReportQuery query, CancellationToken ct = default);
+
+    /// <summary>
+    /// Leave taken against entitlement for every active receptionist in one
+    /// period, plus whatever deduction decision an Admin has already recorded
+    /// for that period.
+    /// </summary>
+    Task<Result<ReceptionistLeaveReportDto>> GetLeaveReportAsync(
+        ReceptionistLeaveReportQuery query, CancellationToken ct = default);
+
+    /// <summary>Records (or updates) the Admin's deduction decision for one receptionist's period.</summary>
+    Task<Result<bool>> SetLeaveDeductionAsync(
+        ReceptionistLeaveDeductionRequest request, string? actor, CancellationToken ct = default);
 }

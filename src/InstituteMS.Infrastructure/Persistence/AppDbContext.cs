@@ -35,6 +35,7 @@ public class AppDbContext : DbContext
     public DbSet<CertificateIssue> CertificateIssues => Set<CertificateIssue>();
     public DbSet<Receptionist> Receptionists => Set<Receptionist>();
     public DbSet<ReceptionistPayment> ReceptionistPayments => Set<ReceptionistPayment>();
+    public DbSet<ReceptionistLeaveDeduction> ReceptionistLeaveDeductions => Set<ReceptionistLeaveDeduction>();
     public DbSet<ContactMessage> ContactMessages => Set<ContactMessage>();
     public DbSet<LateFee> LateFees => Set<LateFee>();
     public DbSet<TeacherFee> TeacherFees => Set<TeacherFee>();

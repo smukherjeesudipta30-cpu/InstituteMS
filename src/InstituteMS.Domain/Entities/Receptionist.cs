@@ -94,3 +94,53 @@ public class ReceptionistPayment
 
     public Receptionist? Receptionist { get; set; }
 }
+
+/// <summary>
+/// Maps to <c>dbo.ReceptionistLeaveDeduction</c> — one row per receptionist per
+/// reporting period (week/month/year) once an Admin has looked at that period's
+/// leave and decided whether to dock pay for it.
+/// </summary>
+/// <remarks>
+/// Leave itself is never stored — same rule as attendance/absence in
+/// <see cref="StaffAttendance"/>: for a given period it is computed as rostered
+/// days (from <see cref="StaffShiftAssignment"/>) minus scanned-present days. Only
+/// the Admin's *decision* about that computed leave — the percentage to cut, and
+/// whether it was actually applied — needs a durable row, since a report re-run
+/// later must not silently forget what was already decided.
+/// </remarks>
+public class ReceptionistLeaveDeduction
+{
+    public int Id { get; set; }
+    public int ReceptionistId { get; set; }
+
+    /// <summary><c>Weekly</c>, <c>Monthly</c> or <c>Yearly</c> — matches the report period this decision was made against.</summary>
+    public string PeriodType { get; set; } = "Monthly";
+
+    /// <summary>First day of the period (the Monday of the week, the 1st of the month, or Jan 1 of the year).</summary>
+    public DateOnly PeriodStart { get; set; }
+
+    /// <summary>How many days' leave this person was entitled to for the period, at the time the decision was made.</summary>
+    public decimal EntitlementDays { get; set; }
+
+    /// <summary>How many days' leave they actually took, at the time the decision was made.</summary>
+    public decimal TakenDays { get; set; }
+
+    /// <summary>What percentage of salary the Admin has chosen to deduct. Zero unless a deduction was actually set.</summary>
+    public decimal DeductionPercent { get; set; }
+
+    /// <summary>
+    /// The Admin's actual decision, separate from the percentage: a percentage can
+    /// be entered and left un-applied while still deciding, or applied and later
+    /// reversed without losing the number that was typed in.
+    /// </summary>
+    public bool Applied { get; set; }
+
+    public string? Notes { get; set; }
+
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+    public string? ModifiedBy { get; set; }
+    public DateTime? ModifiedOn { get; set; }
+
+    public Receptionist? Receptionist { get; set; }
+}

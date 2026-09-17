@@ -99,6 +99,8 @@ builder.Services
     });
 
 builder.Services.AddAuthorization();
+builder.Services.AddSingleton<Microsoft.AspNetCore.Authorization.IAuthorizationHandler,
+    InstituteMS.Api.Security.SuperAdminAuthorizationHandler>();
 
 // ------------------------------------------------------------------- chat
 builder.Services.AddSignalR();

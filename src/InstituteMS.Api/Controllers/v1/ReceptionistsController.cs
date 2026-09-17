@@ -132,4 +132,33 @@ public class ReceptionistsController : ApiControllerBase
     public async Task<IActionResult> Report(
         [FromQuery] ReceptionistReportQuery query, CancellationToken ct)
         => Envelope(await _receptionists.GetReportAsync(query, ct));
+
+    /* ------------------------------------------------------ leave & deduction */
+
+    /// <summary>
+    /// Leave taken against entitlement for every rostered receptionist in one
+    /// period, with whatever deduction an Admin has already decided for it.
+    /// Back office only — Admin can act on it, Editor can see it.
+    /// </summary>
+    [HttpGet("leave-report")]
+    [Authorize(Roles = UserRoles.BackOffice)]
+    [ProducesResponseType(typeof(ApiResponse<ReceptionistLeaveReportDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> LeaveReport(
+        [FromQuery] ReceptionistLeaveReportQuery query, CancellationToken ct)
+        => Envelope(await _receptionists.GetLeaveReportAsync(query, ct));
+
+    /// <summary>
+    /// Sets (or clears) the deduction percentage for one receptionist's period,
+    /// and whether it has actually been applied. Administrator only — it decides
+    /// whether money is actually docked from pay.
+    /// </summary>
+    [HttpPost("leave-deduction")]
+    [Authorize(Roles = UserRoles.Admin)]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SetLeaveDeduction(
+        [FromBody] ReceptionistLeaveDeductionRequest request, CancellationToken ct)
+        => Envelope(
+            await _receptionists.SetLeaveDeductionAsync(request, CurrentUserName, ct),
+            "Deduction decision saved.");
 }
