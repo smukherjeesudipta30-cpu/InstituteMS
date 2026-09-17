@@ -1,19 +1,29 @@
 using InstituteMS.Application.About;
 using InstituteMS.Application.Academics;
+using InstituteMS.Application.Attendance;
 using InstituteMS.Application.Auth;
+using InstituteMS.Application.Chat;
 using InstituteMS.Application.Common.Interfaces;
+using InstituteMS.Application.Competitions;
 using InstituteMS.Application.Dashboard;
+using InstituteMS.Application.Documents;
 using InstituteMS.Application.Fees;
 using InstituteMS.Application.Income;
 using InstituteMS.Application.Lookups;
 using InstituteMS.Application.Masters;
+using InstituteMS.Application.Notifications;
+using InstituteMS.Application.Org;
+using InstituteMS.Application.Enquiries;
 using InstituteMS.Application.Expenses;
+using InstituteMS.Application.Exams;
 using InstituteMS.Application.Reports;
 using InstituteMS.Application.Students;
 using InstituteMS.Application.Users;
+using InstituteMS.Infrastructure.Documents;
 using InstituteMS.Infrastructure.Persistence;
 using InstituteMS.Infrastructure.Security;
 using InstituteMS.Infrastructure.Services;
+using InstituteMS.Infrastructure.Settings;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,6 +49,12 @@ public static class DependencyInjection
 
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
         services.Configure<InstituteProfileOptions>(configuration.GetSection(InstituteProfileOptions.SectionName));
+        services.Configure<PaymentSettings>(configuration.GetSection(PaymentSettings.SectionName));
+        services.Configure<MailOptions>(configuration.GetSection(MailOptions.SectionName));
+        services.Configure<AttendanceOptions>(configuration.GetSection(AttendanceOptions.SectionName));
+        services.Configure<OrgOptions>(configuration.GetSection(OrgOptions.SectionName));
+
+        services.Configure<CompetitionOptions>(configuration.GetSection(CompetitionOptions.SectionName));
 
         services.AddSingleton<IPasswordHasher, BCryptPasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
@@ -52,13 +68,28 @@ public static class DependencyInjection
         services.AddScoped<IFeeService, FeeService>();
         services.AddScoped<IIncomeService, IncomeService>();
         services.AddScoped<ITeacherService, TeacherService>();
+        services.AddScoped<IReceptionistService, ReceptionistService>();
+        services.AddScoped<IOtherIncomeService, OtherIncomeService>();
+        services.AddScoped<IStudentMailer, SmtpStudentMailer>();
         services.AddScoped<IBranchService, BranchService>();
         services.AddScoped<ICourseService, CourseService>();
         services.AddScoped<IMarkService, MarkService>();
         services.AddScoped<INoticeService, NoticeService>();
+        services.AddScoped<IEnquiryService, EnquiryService>();
+        services.AddSingleton<IReceiptPdfGenerator, ReceiptPdfGenerator>();
+        services.AddScoped<IReceiptLinkService, ReceiptLinkService>();
         services.AddScoped<IReportService, ReportService>();
         services.AddScoped<IExpenseService, ExpenseService>();
+        services.AddScoped<IExamService, ExamService>();
+        services.AddSingleton<AttendanceTokenService>();
+        services.AddScoped<IAttendanceService, AttendanceService>();
+        services.AddScoped<IOrgService, OrgService>();
+        services.AddScoped<IChatService, ChatService>();
+
+        services.AddScoped<ICompetitionService, CompetitionService>();
+        services.AddSingleton<IChestCardPdfGenerator, ChestCardPdfGenerator>();
         services.AddScoped<RegistrationNumberService>();
+        services.AddScoped<StudentLoginGenerator>();
 
         return services;
     }

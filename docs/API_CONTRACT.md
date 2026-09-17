@@ -114,9 +114,25 @@ generatedOn      UTC timestamp
 
 ### GET `/public/about`
 
-Static copy comes from the `InstituteProfile` section of `appsettings.json` — the
-About page text is editable without rebuilding the Angular app. `stats` and
-`courses` are computed live from the database.
+Everything the public front page needs, in one anonymous call.
+
+Static copy comes from the `InstituteProfile` section of `appsettings.json`, so the
+institute's description, address, phone and email are editable without rebuilding
+the Angular app. The rest is read live from the database:
+
+| Field | Source | Legacy origin |
+|---|---|---|
+| `courses` | `Course` | `Course/getDetails` |
+| `notices` | `Notice`, newest 10 | `Notice/getDetails` |
+| `routine` | `dailyRoutine` | `Notice/gettime` |
+| `stats` | live counts | none — added here |
+
+**The student roster is deliberately not exposed.** The legacy front page had a
+*Show Student Details* button calling `Notice/StudentData` (`usp_ShowData`), which
+published every active student's name, registration id, joining date, teacher and
+course to anonymous visitors — personal data on roughly 240 people, with no login.
+That panel is not reproduced. Staff read the same list from the student register,
+behind a sign-in.
 
 ### POST `/public/contact`
 
@@ -685,6 +701,308 @@ the expense to a different day and shift it between reporting periods.
 Nothing references `Expense`, so there is no orphan to create and the row is removed
 outright, as before. What is new is the confirmation dialog naming the entry and its
 amount — the legacy grid deleted on a single click with no prompt.
+
+---
+
+## Examination portal
+
+New in this system — the legacy application had no online examination. Two
+controllers, split by audience.
+
+### Administrator — `/exams`
+
+| Method | Path | Roles |
+|---|---|---|
+| GET | `/exams?search=&courseId=&page=&pageSize=` | `Admin`, `Editor` |
+| GET | `/exams/{examId}` | `Admin`, `Editor` |
+| POST | `/exams` | `Admin`, `Editor` |
+| PUT | `/exams/{examId}` | `Admin`, `Editor` |
+| DELETE | `/exams/{examId}` | **`Admin`** |
+| PATCH | `/exams/{examId}/published?isPublished=` | `Admin`, `Editor` |
+| GET | `/exams/{examId}/questions` | `Admin`, `Editor` |
+| POST | `/exams/{examId}/questions/upload` | `Admin`, `Editor` |
+| GET | `/exams/questions/template` | `Admin`, `Editor` |
+| GET | `/exams/{examId}/practical/roster` | `Admin`, `Editor` |
+| POST | `/exams/practical/marks` | `Admin`, `Editor` |
+| GET | `/exams/{examId}/schedule` | `Admin`, `Editor` |
+| POST | `/exams/schedule` | `Admin`, `Editor` |
+| POST | `/exams/schedule/batch` | `Admin`, `Editor` |
+| POST | `/exams/{examId}/schedule/{registrationId}/regenerate-code` | `Admin`, `Editor` |
+| DELETE | `/exams/{examId}/schedule/{registrationId}` | `Admin`, `Editor` |
+
+### Student — `/my-exams`
+
+| Method | Path | Roles |
+|---|---|---|
+| GET | `/my-exams` | **`Student`** |
+| POST | `/my-exams/{examId}/start` | **`Student`** |
+| POST | `/my-exams/submit` | **`Student`** |
+| GET | `/my-exams/results` | **`Student`** |
+| GET | `/my-exams/course-results` | **`Student`** |
+| GET | `/my-exams/admit-cards` | **`Student`** |
+
+Every `/my-exams` call resolves the student from the signed-in email rather than
+trusting an id from the browser, so one student cannot read or sit another's paper
+by changing a parameter.
+
+### A course is examined in terms of two papers
+
+Each examination of a course is a **term**, carrying one **theory** paper and one
+**practical**. The number of terms is not capped — `TermNumber` need only be
+positive, and the pair is keyed on `(StuRegId, Cid, TermNumber, PaperType)`, so a
+student sits each paper of each term once, course by course.
+
+Theory is sat in the portal and marked automatically. A practical is examined in the
+room, so it carries no questions and no clock — an administrator types the mark in
+from the paper's roster.
+
+A term's grade is withheld until **both** its papers are in. A grade struck on half
+an examination would misrepresent it, so the term reports `isComplete: false` and a
+null grade until the practical is entered.
+
+### A sitting is set per student, and the code is what opens the paper
+
+`ExamPaper.OpensOn`/`ClosesOn` bound the paper as a whole. Within that, the
+institute schedules **each student individually** — it sits them in batches, not
+all at once — and `dbo.ExamSchedule` holds one row per (paper, student) carrying
+the date and time and a six-digit `AccessCode`.
+
+Two things follow from that row, and neither is possible without it:
+
+- **The admit card.** `GET /my-exams/admit-cards` returns nothing until the
+  student is scheduled. There is no date to print before then.
+- **Opening a theory paper.** `POST /my-exams/{examId}/start` now takes
+  `{ accessCode }`. It refuses with **403** when the student has no schedule,
+  **400** before their scheduled time, and **403** when the digits are wrong.
+
+The code is deliberately a *second* factor, separate from the sign-in.
+Credentials say who you are; the code says the institute has you sitting here,
+now. Without it a student with a working password could open their paper early,
+from home, or someone holding a borrowed password could sit it for them.
+
+**The sitting sheet lists only students still enrolled.** Someone who has finished
+the course does not come back in to sit an examination, so listing them buries the
+people who do — on one real course the sheet ran to 43 names of which 5 were
+enrolled, and three finished students were scheduled by mistake because the roster
+made them look current. `schedule/batch` follows the same rule, so "schedule
+everyone" cannot sweep a finished student back in, and `POST /exams/schedule`
+refuses one outright.
+
+The one exception: a student who already has a sitting or a mark on that paper
+stays on the sheet whatever their status, flagged *Course completed*. Their row has
+to remain reachable so the sitting can be corrected or withdrawn — otherwise
+someone who completes the course mid-cycle would simply vanish along with their
+booking. Moving such a sitting is allowed for the same reason.
+
+Design points worth stating:
+
+- **One code per student, never one per room.** A shared code would be a single
+  number the whole room could pass along. `schedule/batch` sets one date for
+  everyone and still issues a distinct code to each.
+- **Codes come from `RandomNumberGenerator`, not `Random`.** The point of the
+  code is that it cannot be worked out ahead of the sitting, and `Random` seeded
+  from the clock can be. Stored as `char(6)` text so a leading zero survives.
+- **Compared in fixed time.** Six digits is a small enough space that a timing
+  signal is worth denying, so the check does not exit on the first differing
+  digit.
+- **Checked on resume, not only on first open.** Picking the paper up on another
+  machine needs the code again.
+- **Never sent to the student, and never printed on the admit card.** The codes
+  appear on the administrator's scheduling sheet and nowhere else; the
+  invigilator reads one out at the desk. `GET /my-exams` deliberately does not
+  select the column. If a code is overheard, `regenerate-code` issues a new one
+  and the old stops working immediately.
+- **A practical has no code.** It is examined in the room, so its schedule row
+  exists only to print the date beside the theory one on the admit card.
+- **A sitting cannot be moved once the student has opened the paper**, and
+  cannot be withdrawn either — the card they are holding would be wrong and the
+  rules would change under them mid-exam.
+
+### The answer key never leaves the server
+
+`ExamQuestionForStudentDto` has no correct-answer field at all — not a nulled one, an
+absent one — so the key cannot be read out of the browser's network tab mid-exam.
+Marking happens server-side, and the result is **stored** rather than recomputed, so
+editing the question bank afterwards cannot silently change a mark a student has
+already been told.
+
+### The clock is the server's
+
+The deadline is fixed when the attempt opens and written to the row. Reloading the
+page, or editing the countdown in the console, buys nothing; the on-screen timer is
+cosmetic. Resuming returns the same deadline, so closing the browser does not restart
+the clock. A submission arriving after the deadline is still marked — on the answers
+that arrived — and flagged `autoSubmitted`.
+
+### The question sheet reports every fault at once
+
+`POST /exams/{examId}/questions/upload` takes an `.xlsx` with the columns Question,
+Option A, Option B, Option C, Option D, Correct Option, Marks. Nothing is saved
+unless every row is valid, and the response lists **all** the problems rather than
+stopping at the first, so the sheet can be corrected in one pass. A workbook that
+cannot be opened at all is refused with plain advice, and the underlying exception is
+logged — otherwise a malformed sheet and a bug in the parser look identical.
+
+### Publishing checks the marks add up
+
+A theory paper publishes only once its uploaded question marks equal the paper's
+total, so a student can never sit a paper worth less than it claims. A practical has
+no questions and publishes straight away. A paper anyone has sat cannot be deleted or
+have its questions replaced — that is the evidence behind a result already given —
+and it cannot be edited while a sitting is in progress.
+
+### Questions live in one table
+
+`ExamQuestion` is deliberately denormalised — the four options and the key are
+columns on the row, mirroring the shape `dbo.Marks` already uses for its four subject
+slots. One table per concern keeps the eventual production migration a straight copy.
+
+### The three printed documents keep their legacy designs
+
+The money receipt, the certificate and the admit card are documents people
+already recognise across a counter, so they reproduce their legacy layouts
+exactly rather than being redesigned:
+
+| Document | Legacy view | Where it prints from |
+|---|---|---|
+| Money receipt | `Views/MonthlyCourseFees/PrintReport.cshtml` + `Content/style1.css` | Fees screen, and the student's own statement |
+| Certificate | `Views/Home/PrintCertificate.cshtml` | Student statement |
+| Exam admit card | `Views/Admit/PrintAdmit.cshtml` | Student examination portal |
+
+All three live in `core/printing/legacy-documents.ts` — three screens print them
+and three copies of the same markup would drift apart. The original artwork
+(`file_trans.png`, `SAVE_20191128_212413.jpeg`) is the same file the legacy site
+served.
+
+Two deliberate departures from the legacy pages, neither of which changes how the
+documents look:
+
+- **They print the markup instead of rasterising it.** The legacy pages pulled
+  `html2canvas`/`html2pdf`/`jsPDF` from a CDN and turned the page into a bitmap
+  at scale 3 — a large, soft image with no selectable text. Printing the markup
+  keeps the text sharp and fetches nothing from outside.
+- **The admit card's Date and Time cells now carry real values.** The legacy card
+  printed that table blank for someone to fill in by hand. It is filled from the
+  student's schedule, which is the reason the card is now issued per student at
+  all. It still prints two copies to a sheet with a cut line between them, as the
+  legacy PDF did.
+
+### Online fee payment — recorded on the student's word, confirmed afterwards
+
+A student pays their monthly fee from the portal against the institute's **static**
+UPI QR code. Static matters: there is no gateway and no callback, so **nothing tells
+the server the money arrived**. The student types the UPI reference from their own
+app and the payment is recorded on that.
+
+| Endpoint | Role | |
+|---|---|---|
+| `GET /my-fees/due` | Student | fee, late fine, total, UPI details for the next unpaid month |
+| `POST /my-fees/pay` | Student | records it — body is the reference only |
+| `GET /fees/online/unverified` | Back office | the dashboard notification list |
+| `POST /fees/online/{feeId}/verify` | Back office | marks it checked |
+
+Paying writes exactly what the counter writes — `MonthlyFees`, `Fees`, `LateFees`
+and one `TecFees` row per teacher — so the ledger and the teacher payout are right
+immediately. Three columns on `MonthlyFees` carry the rest:
+
+- **`TransactionId`** — the UPI reference. `NULL` on a payment taken at the
+  counter, which is how online and offline are told apart. Uniquely indexed, so the
+  same reference cannot be submitted twice.
+- **`VerifiedOn` / `VerifiedBy`** — `NULL` means recorded but not yet checked
+  against the Paytm account. That is precisely what the dashboard lists.
+
+Points worth stating:
+
+- **The amount never comes from the browser.** `POST /my-fees/pay` accepts only the
+  reference; the fee and fine are recomputed server-side by the same
+  `LateFineCalculator` the counter uses, so a student cannot choose what their
+  month costs.
+- **The teacher percentage is carried over from the student's previous payment** —
+  nothing else records what was agreed. A student with no previous payment is told
+  their first payment is taken at the centre, because there is no percentage to
+  carry and guessing one would mispay a teacher.
+- **One month at a time**, the next one due. The ledger advances a month per
+  payment, so offering several would need each dated and fined separately.
+- **`CreatedBy` is `portal:{registrationId}`**, so the ledger never suggests a
+  member of staff handled money they never touched.
+
+**The standing risk, by design.** A payment counts the moment the student submits
+it. Someone who types a plausible reference without paying clears their dues and
+credits a teacher's share until the office notices. That is the accepted trade-off
+for recording immediately rather than on confirmation; the verification columns are
+what make such a payment findable, and correcting one means amending the fee row on
+the Monthly Fees screen.
+
+### Results live in two stores, and the statement reads both
+
+There are two places a mark can exist, and they are not the same thing:
+
+| Store | Written by | Feeds |
+|---|---|---|
+| `dbo.Marks` | the **Marks** screen (legacy register) | student statement, certificate |
+| `ExamAttempt` | the **examination portal** — theory submitted, practical entered on the paper's mark sheet | My Exams |
+
+They are kept separate on purpose: a `dbo.Marks` row is free-text
+(`Sub1 = 'PRACTICAL'`, 49/50) with no link to a course, term or paper, so it cannot
+be matched to "the practical of examination 1" reliably.
+
+The consequence was a real defect. **My Statement and the certificate originally
+read `dbo.Marks` alone**, so a student who sat their whole course through the
+portal had an empty marks section and was refused a certificate outright — *"no
+exam result has been recorded"* — however many papers they had actually sat. The
+statement and certificate now read **both** stores:
+
+- **Statement** — legacy rows and portal examinations together, newest first, so
+  one screen shows the whole record.
+- **Certificate** — portal results win when the student has a finished examination
+  there, since that is the course they actually sat; `dbo.Marks` remains the
+  fallback for migrated students. Every finished examination counts, not just the
+  latest, because the certificate states the course result rather than one term's.
+
+**An examination contributes only once both its papers are in.** A half-finished
+term would otherwise show as a low percentage and drag the certificate grade down —
+the same reason the portal withholds a term grade until the practical is entered.
+
+The **Download Certificate** button is disabled until the student's record is
+marked complete, matching the server, which refuses a certificate to anyone still
+enrolled.
+
+### The first certificate is the original; every one after it is a duplicate
+
+`POST /reports/my-certificate` **issues** a certificate and records the copy in
+`dbo.CertificateIssue`. The first call returns the original. From the second call
+onwards the response carries `isDuplicate: true` and an `issueNo`, and the printed
+certificate shows a red **DUPLICATE COPY** watermark across the artwork plus a
+corner stamp reading the copy number, the running total, and the date the original
+was taken.
+
+| Call | `issueNo` | `isDuplicate` | Printed as |
+|---|---|---|---|
+| 1st | 1 | false | the original, unmarked |
+| 2nd | 2 | true | DUPLICATE COPY — No. 2 |
+| 3rd | 3 | true | DUPLICATE COPY — No. 3 |
+
+Three decisions worth stating:
+
+- **POST, not GET.** Issuing is not a read. A GET would be repeated by refreshes,
+  back buttons and caches, inflating the count without anyone asking for a copy.
+- **No non-recording variant.** A second endpoint returning the same document
+  without counting it would be the obvious way to obtain an unmarked second copy,
+  which is exactly what the marking exists to prevent.
+- **A log, not a counter column.** "When was the second copy taken, and by which
+  sign-in?" is the question the office actually gets asked, and a counter cannot
+  answer it. `IssueNo` is unique per student, so two copies can never share a
+  number.
+
+The eligibility rule is unchanged and still applies first: a student who has not
+completed the course gets no certificate at all, original or duplicate, so no
+issue is recorded.
+
+### The certificate rule is unchanged
+
+Sitting examinations does not unlock the certificate. As in the legacy application, it
+becomes available only once the course is completed and the institute marks the
+student's record complete; `GET /reports/student-certificate` refuses otherwise.
 
 ---
 

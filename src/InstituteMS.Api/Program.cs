@@ -4,8 +4,10 @@ using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using FluentValidation;
 using InstituteMS.Api.Filters;
+using InstituteMS.Api.Hubs;
 using InstituteMS.Api.Middleware;
 using InstituteMS.Application.Auth;
+using InstituteMS.Application.Chat;
 using InstituteMS.Application.Common;
 using InstituteMS.Infrastructure;
 using InstituteMS.Infrastructure.Persistence;
@@ -13,6 +15,7 @@ using InstituteMS.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Serilog;
@@ -75,15 +78,45 @@ builder.Services
             },
             OnForbidden = async ctx =>
                 await WriteEnvelopeAsync(ctx.HttpContext, StatusCodes.Status403Forbidden,
-                    "You do not have permission to view this page.")
+                    "You do not have permission to view this page."),
+
+            /* SignalR's browser client cannot set an Authorization header on the
+               WebSocket upgrade request itself, so it puts the access token on the
+               query string instead (?access_token=...) and this reads it from
+               there — scoped to the chat hub's own path only, so no other request
+               gains a second way to carry its token. */
+            OnMessageReceived = ctx =>
+            {
+                if (ctx.HttpContext.Request.Path.StartsWithSegments("/hubs/chat"))
+                {
+                    var token = ctx.Request.Query["access_token"];
+                    if (!string.IsNullOrEmpty(token)) ctx.Token = token;
+                }
+
+                return Task.CompletedTask;
+            }
         };
     });
 
 builder.Services.AddAuthorization();
 
+// ------------------------------------------------------------------- chat
+builder.Services.AddSignalR();
+builder.Services.AddScoped<IChatNotifier, ChatNotifier>();
+
+// Singleton: presence is one shared in-memory count per process, not a per-request thing.
+builder.Services.AddSingleton<IChatPresenceTracker, ChatPresenceTracker>();
+
 // ------------------------------------------------------------------- MVC
 builder.Services
-    .AddControllers(options => options.Filters.Add<ValidationFilter>())
+    .AddControllers(options =>
+    {
+        options.Filters.Add<ValidationFilter>();
+
+        // Global, so a new controller is covered the moment it is written rather
+        // than when someone remembers to annotate it.
+        options.Filters.Add<PasswordResetFilter>();
+    })
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
@@ -221,12 +254,104 @@ else
 }
 
 app.UseCors(CorsPolicy);
+
+/* Angular's build fingerprints every JS/CSS filename with a content hash
+   (main-XXXXXXXX.js) - a changed file always gets a new name, so those are
+   safe to cache forever. index.html is the one file that keeps its name
+   across every deploy while what it points at changes underneath it, so it
+   must never be cached at all: without this, a browser can go on serving a
+   stale index.html (and therefore stale bundle references) for as long as it
+   likes after a redeploy, with no way for the app to tell it otherwise -
+   exactly how a shipped feature can be invisible in one browser while working
+   in another until a hard refresh. Neither ever had an explicit Cache-Control
+   header before, which just left the browser's own heuristics
+   (Last-Modified-based) to decide, unpredictably. Shared between the static
+   file middleware below and the SPA fallback further down, so index.html gets
+   the same "no-cache" whichever of the two actually serves it. */
+var spaStaticFileOptions = new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        var isFingerprinted = System.Text.RegularExpressions.Regex.IsMatch(
+            ctx.File.Name, @"-[A-Za-z0-9_]{8,}\.(js|css)$");
+
+        ctx.Context.Response.Headers.CacheControl = isFingerprinted
+            ? "public,max-age=31536000,immutable"
+            : "no-cache";
+    }
+};
+
+/* Serves the built Angular application from wwwroot when it is present.
+   ---------------------------------------------------------------------
+   In production the Angular build sets apiBaseUrl to "/api/v1" - a relative
+   path - so the browser expects the site and the API on the SAME origin.
+   Without this the published site would need a reverse proxy (IIS ARR) in
+   front of two applications just to put them back on one host.
+
+   Guarded on the folder existing, so development is untouched: there is no
+   wwwroot in the repository and `ng serve` keeps proxying as before. */
+if (Directory.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot")))
+{
+    /* The ACME http-01 challenge, served for Let's Encrypt at issue and at every
+       renewal thereafter. It needs its own middleware because the challenge token
+       is an extensionless file with no registered MIME type, and the ordinary
+       static-file middleware refuses to serve those. Scoped to /.well-known so
+       ServeUnknownFileTypes cannot loosen anything else, and paired with the
+       ".well-known" exclusion in the SPA fallback below - without that exclusion
+       routing claims the request first and this never runs. */
+    var wellKnown = Path.Combine(app.Environment.WebRootPath, ".well-known");
+    Directory.CreateDirectory(wellKnown);
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = new PhysicalFileProvider(wellKnown),
+        RequestPath = "/.well-known",
+        ServeUnknownFileTypes = true,
+        DefaultContentType = "text/plain"
+    });
+
+    app.UseDefaultFiles();
+    app.UseStaticFiles(spaStaticFileOptions);
+}
+
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<ChatHub>("/hubs/chat");
 app.MapHealthChecks("/health").AllowAnonymous();
+
+/* Angular routes are client-side: a browser asked for /students directly - a
+   refresh, or a pasted link - must still be handed index.html rather than a
+   404. Registered after MapControllers so it can never shadow an API route,
+   and excluded for /api and /health so a genuine 404 there stays a 404
+   instead of returning HTML to something expecting JSON. */
+if (Directory.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot")))
+{
+    /* Two constraints, both load-bearing:
+
+       "nonfile" is the one MapFallbackToFile applies by default, and it has to be
+       put back by hand once a custom pattern replaces the default. WebApplication
+       inserts UseRouting at the TOP of the pipeline, so an endpoint is selected
+       before UseStaticFiles runs - and StaticFileMiddleware deliberately stands
+       down on any request that already has one. Without "nonfile" this fallback
+       matches /main.js and /styles.css as well, every asset is answered with
+       index.html at 200, and the application renders a blank page.
+
+       The regex excludes /api and /health. Without it an unknown API route
+       would return index.html with status 200, so a caller expecting JSON would
+       get a page of HTML and a "success" - the worst kind of 404.
+
+       It also excludes /.well-known, which carries the Let's Encrypt challenge.
+       Those tokens are extensionless, so "nonfile" does not cover them: without
+       this the certificate renewal is answered with index.html and fails.
+
+       And "r/", the receipt download links sent to students on WhatsApp. The
+       trailing slash is load-bearing: a bare "r" would also exclude /reports and
+       /receptionists, which are Angular routes and must keep falling through. */
+    app.MapFallbackToFile(
+        "{*path:nonfile:regex(^(?!api|health|[.]well-known|r/).*$)}", "index.html", spaStaticFileOptions);
+}
 
 // Creates the first Admin account when dbo.Users is empty.
 await DbSeeder.SeedAsync(app.Services);

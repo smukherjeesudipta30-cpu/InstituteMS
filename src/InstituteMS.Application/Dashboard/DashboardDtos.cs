@@ -9,7 +9,37 @@ public record DashboardSummaryDto(
     IReadOnlyList<NoticeDto> RecentNotices,
     IReadOnlyList<RecentStudentDto> RecentAdmissions,
     IReadOnlyList<RecentPaymentDto> RecentPayments,
+
+    /// <summary>Unhandled enquiries, newest first, so they can actually be read.</summary>
+    IReadOnlyList<EnquiryDto> PendingEnquiryList,
+
+    /// <summary>Unread first, then newest. Capped — the full list has its own page.</summary>
+    IReadOnlyList<AdminNotificationDto> Notifications,
+
+    /// <summary>Drives the badge, and counts every unread one, not just those shown.</summary>
+    int UnreadNotifications,
+
     DateTime GeneratedOn);
+
+/// <summary>One dashboard alert for the office.</summary>
+public record AdminNotificationDto(
+    int Id,
+    string Type,
+    string Title,
+    string? StudentName,
+    string? CourseName,
+    string? RegistrationId,
+    string? LoginId,
+
+    /// <summary>
+    /// For a password change, the student's chosen password in clear. Kept out of
+    /// sight in the UI behind a reveal, because a dashboard is a screen other people
+    /// can see.
+    /// </summary>
+    string? DetailValue,
+
+    DateTime CreatedOn,
+    bool IsRead);
 
 public record DashboardCountsDto(
     int ActiveStudents,
@@ -81,3 +111,38 @@ public record RecentPaymentDto(
     string? BillNo,
     decimal? Amount,
     DateOnly? PaidOn);
+
+/// <summary>
+/// One unhandled enquiry from the public front page's "Send Us Message" form
+/// (<c>dbo.CusMessage</c>). The dashboard counted these but never showed them, so
+/// the messages sat unread with only a badge to say they existed.
+/// </summary>
+public record EnquiryDto(
+    int Id,
+    string? Name,
+    string? Email,
+    string? Phone,
+    string? Message,
+    DateTime SubmittedOn,
+
+    /// <summary>True once somebody has marked it read. Read ones leave the dashboard.</summary>
+    bool IsHandled = false);
+
+/// <summary>Which enquiries to list.</summary>
+public enum EnquiryFilter
+{
+    /// <summary>Not yet marked read -- what the dashboard panel shows.</summary>
+    New = 0,
+
+    /// <summary>Already marked read, so they can be found again afterwards.</summary>
+    Read = 1,
+
+    All = 2
+}
+
+/// <summary>A page of enquiries from the public contact form.</summary>
+public record EnquiryListDto(
+    IReadOnlyList<EnquiryDto> Items,
+    int TotalCount,
+    int NewCount,
+    int ReadCount);

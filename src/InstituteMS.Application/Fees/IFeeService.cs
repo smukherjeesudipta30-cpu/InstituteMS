@@ -26,4 +26,36 @@ public interface IFeeService
         int id, FeeSaveRequest request, string? actor, CancellationToken ct = default);
 
     Task<Result<FeeReceiptDto>> GetReceiptAsync(int id, CancellationToken ct = default);
+
+    /* ----------------------------------- online payment from the portal */
+
+    /// <summary>
+    /// What the signed-in student owes for their next unpaid month, with the fine
+    /// already worked out, plus the institute's UPI details to pay against.
+    /// </summary>
+    Task<Result<MyFeeDueDto>> GetMyDueAsync(string email, CancellationToken ct = default);
+
+    /// <summary>
+    /// Records a fee the student has paid against the QR code.
+    /// </summary>
+    /// <remarks>
+    /// Writes the same rows as a payment taken at the counter — MonthlyFees, Fees,
+    /// LateFees and a TecFees row per teacher — so the ledger and the teacher payout
+    /// are correct immediately. The teacher percentage is carried over from the
+    /// student's previous payment, since nothing else records what was agreed.
+    ///
+    /// <para>The payment is stored <b>unverified</b>: the QR is static, so the
+    /// server has no way to know the money arrived and the office confirms it
+    /// afterwards from the dashboard.</para>
+    /// </remarks>
+    Task<Result<FeeRecordedDto>> PayOnlineAsync(
+        string email, OnlineFeePaymentRequest request, CancellationToken ct = default);
+
+    /// <summary>Online payments recorded but not yet checked against the Paytm account.</summary>
+    Task<Result<IReadOnlyList<OnlinePaymentNoticeDto>>> GetUnverifiedOnlinePaymentsAsync(
+        int take = 25, CancellationToken ct = default);
+
+    /// <summary>Marks an online payment as checked and confirmed.</summary>
+    Task<Result<bool>> VerifyOnlinePaymentAsync(
+        int feeId, string? actor, CancellationToken ct = default);
 }

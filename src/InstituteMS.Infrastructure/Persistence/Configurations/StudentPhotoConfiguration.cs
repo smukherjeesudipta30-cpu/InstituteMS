@@ -19,8 +19,18 @@ public class StudentPhotoConfiguration : IEntityTypeConfiguration<StudentPhoto>
         b.Property(x => x.IsInline).HasColumnName("IsInline");
         b.Property(x => x.FileSize).HasColumnName("FileSize");
         b.Property(x => x.ContentType).HasColumnName("ContentType").HasMaxLength(100);
-        b.Property(x => x.CreatedBy).HasColumnName("CreatedBy").HasMaxLength(50);
-        b.Property(x => x.CreatedOn).HasColumnName("CreatedOn");
+
+        // dbo.ImageUpload never actually got CreatedBy/CreatedOn — checked directly
+        // against the live table (8 columns, neither present), which is why every
+        // photo upload attempt was failing outright with "Invalid column name
+        // 'CreatedBy'": EF was building every SELECT against this entity, upload
+        // included, with two columns the real table doesn't have. Same fix already
+        // applied elsewhere in this file's siblings (Teacher, TeacherExpense) for
+        // the identical reason — the properties stay on the C# entity so nothing
+        // that reads them needs to change, they are just never sent to or read
+        // from the database.
+        b.Ignore(x => x.CreatedBy);
+        b.Ignore(x => x.CreatedOn);
 
         b.HasIndex(x => x.StudentRegistrationId);
     }

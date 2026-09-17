@@ -34,18 +34,25 @@ public class AboutService : IAboutService
         var courses = await _db.Courses
             .AsNoTracking()
             .OrderBy(c => c.Name)
-            .Select(c => new AboutCourseDto(c.Cid, c.Name ?? "(unnamed)", c.Duration))
+            .Select(c => new AboutCourseDto(
+                c.Cid,
+                c.Name ?? "(unnamed)",
+                c.Duration,
+                // Active students only, so a course nobody is currently taking does
+                // not read as popular because of people who finished it years ago.
+                c.Students.Count(s => s.IsActive == true)))
             .ToListAsync(ct);
 
-        var activeStudents = await _db.Students.CountAsync(s => s.IsActive, ct);
-        var teachers = await _db.Teachers.CountAsync(ct);
-        var earliestJoin = await _db.Students
-            .Where(s => s.DateOfJoining != null)
-            .MinAsync(s => (DateOnly?)s.DateOfJoining, ct);
+        var activeStudents = await _db.Students.CountAsync(s => s.IsActive == true, ct);
 
-        var yearsRunning = earliestJoin is null
-            ? 1
-            : Math.Max(1, DateTime.Today.Year - earliestJoin.Value.Year);
+        // Active teachers only, so somebody who has left stops being counted as
+        // faculty the moment they are marked inactive.
+        var teachers = await _db.Teachers.CountAsync(t => t.IsActive, ct);
+
+        /* Counted from the configured founding year rather than the earliest student
+           on file. The records only reach back to 2016, so deriving it gave "10+"
+           for a centre teaching since 2008 — see InstituteProfileOptions.FoundedYear. */
+        var yearsRunning = Math.Max(1, DateTime.Today.Year - _profile.FoundedYear);
 
         var stats = new List<AboutStatDto>
         {
@@ -55,12 +62,44 @@ public class AboutService : IAboutService
             new("Years of teaching", $"{yearsRunning}+", "pi pi-calendar")
         };
 
+        // No photograph means the panel is not ready to show; the front page then
+        // renders nothing rather than an empty frame with a missing image in it.
+        var desk = string.IsNullOrWhiteSpace(_profile.OwnerDesk.Photo)
+            ? null
+            : new OwnerDeskDto(
+                _profile.OwnerDesk.Name,
+                _profile.OwnerDesk.Designation,
+                _profile.OwnerDesk.Photo,
+                _profile.OwnerDesk.Message,
+                _profile.OwnerDesk.Since);
+
         var contact = new ContactDetailsDto(
             _profile.Contact.AddressLine1,
             _profile.Contact.AddressLine2,
             _profile.Contact.Phone,
             _profile.Contact.Email,
             _profile.Contact.OfficeHours);
+
+        // The front page scrolls the notice board (legacy Notice/getDetails, which
+        // the public page called with no authentication). Only the text and date
+        // are exposed - nothing identifies a student.
+        var notices = await _db.Notices
+            .AsNoTracking()
+            .Where(n => n.Text != null && n.Text != "")
+            .OrderByDescending(n => n.NoticeDate)
+            .ThenByDescending(n => n.Id)
+            .Take(10)
+            .Select(n => new AboutNoticeDto(n.Id, n.Text, n.NoticeDate))
+            .ToListAsync(ct);
+
+        // The "Show Timing" panel (legacy Notice/gettime -> dailyRoutine).
+        var routine = await _db.DailyRoutines
+            .AsNoTracking()
+            .OrderBy(r => r.Id)
+            .Select(r => new RoutineRowDto(
+                r.Id, r.Name, r.Sunday, r.Monday, r.Tuesday,
+                r.Wednesday, r.Thursday, r.Friday, r.Saturday))
+            .ToListAsync(ct);
 
         return new AboutPageDto(
             _profile.Name,
@@ -69,7 +108,10 @@ public class AboutService : IAboutService
             _profile.Highlights,
             stats,
             courses,
-            contact);
+            contact,
+            desk,
+            notices,
+            routine);
     }
 
     public async Task<Result<int>> SubmitContactAsync(

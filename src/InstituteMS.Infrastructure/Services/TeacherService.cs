@@ -14,7 +14,9 @@ namespace InstituteMS.Infrastructure.Services;
 public class TeacherService : ITeacherService
 {
     /// <summary>Marker the data migration used for stand-in teacher rows.</summary>
-    private const string PlaceholderMarker = "migration-004-orphan";
+    /* Placeholder teachers were created by migration 004 against the migrated
+       database. The legacy database has no such rows and dbo.Teacher has no
+       CreatedBy column to mark them with, so nothing is treated as a stand-in. */
 
     private readonly AppDbContext _db;
     private readonly ILogger<TeacherService> _logger;
@@ -30,8 +32,9 @@ public class TeacherService : ITeacherService
     {
         var teachers = _db.Teachers.AsNoTracking().AsQueryable();
 
-        if (!query.IncludePlaceholders)
-            teachers = teachers.Where(t => t.CreatedBy != PlaceholderMarker);
+        // Nothing to exclude: placeholder teachers came from migration 004, which
+        // never ran against the legacy database, and dbo.Teacher there has no
+        // CreatedBy column to identify them by.
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
@@ -45,8 +48,7 @@ public class TeacherService : ITeacherService
         var totalCount = await teachers.CountAsync(ct);
 
         var page = await teachers
-            .OrderBy(t => t.CreatedBy == PlaceholderMarker ? 1 : 0)   // stand-ins last
-            .ThenBy(t => t.Name)
+            .OrderBy(t => t.Name)
             .Skip((query.Page - 1) * query.PageSize)
             .Take(query.PageSize)
             .Select(t => new
@@ -55,12 +57,18 @@ public class TeacherService : ITeacherService
                 t.Name,
                 t.LoginId,
                 t.Phone,
-                IsPlaceholder = t.CreatedBy == PlaceholderMarker
+                t.PersonalEmail,
+                t.Designation,
+                t.Qualification,
+                t.ComputerTraining,
+                t.Branch,
+                t.IsTechnical,
+                IsPlaceholder = false
             })
             .ToListAsync(ct);
 
         var items = await DecorateAsync(page.Select(t =>
-            (t.Id, t.Name, t.LoginId, t.Phone, t.IsPlaceholder)).ToList(), ct);
+            (t.Id, t.Name, t.LoginId, t.Phone, t.PersonalEmail, t.Designation, t.Qualification, t.ComputerTraining, t.Branch, t.IsTechnical, t.IsPlaceholder)).ToList(), ct);
 
         return PagedResult<TeacherListItemDto>.Create(items, query.Page, query.PageSize, totalCount);
     }
@@ -76,7 +84,13 @@ public class TeacherService : ITeacherService
                 t.Name,
                 t.LoginId,
                 t.Phone,
-                IsPlaceholder = t.CreatedBy == PlaceholderMarker
+                t.PersonalEmail,
+                t.Designation,
+                t.Qualification,
+                t.ComputerTraining,
+                t.Branch,
+                t.IsTechnical,
+                IsPlaceholder = false
             })
             .FirstOrDefaultAsync(ct);
 
@@ -84,7 +98,7 @@ public class TeacherService : ITeacherService
             return Result<TeacherListItemDto>.Failure("Teacher not found.", ResultStatus.NotFound);
 
         var decorated = await DecorateAsync(
-            [(teacher.Id, teacher.Name, teacher.LoginId, teacher.Phone, teacher.IsPlaceholder)], ct);
+            [(teacher.Id, teacher.Name, teacher.LoginId, teacher.Phone, teacher.PersonalEmail, teacher.Designation, teacher.Qualification, teacher.ComputerTraining, teacher.Branch, teacher.IsTechnical, teacher.IsPlaceholder)], ct);
 
         return Result<TeacherListItemDto>.Success(decorated[0]);
     }
@@ -97,6 +111,9 @@ public class TeacherService : ITeacherService
         return await _db.Teachers.AnyAsync(
             t => t.LoginId == value && (excludingTeacherId == null || t.Id != excludingTeacherId), ct);
     }
+
+    private static string? Blank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     public async Task<Result<int>> CreateAsync(
         TeacherSaveRequest request, string? actor, CancellationToken ct = default)
@@ -111,6 +128,12 @@ public class TeacherService : ITeacherService
             Name = request.Name?.Trim(),
             LoginId = loginId,
             Phone = request.Phone?.Trim(),
+            PersonalEmail = string.IsNullOrWhiteSpace(request.PersonalEmail) ? null : request.PersonalEmail.Trim(),
+            Designation = Blank(request.Designation),
+            Qualification = Blank(request.Qualification),
+            ComputerTraining = Blank(request.ComputerTraining),
+            Branch = Blank(request.Branch),
+            IsTechnical = request.IsTechnical,
             CreatedBy = actor,
             CreatedOn = DateTime.UtcNow
         };
@@ -137,17 +160,18 @@ public class TeacherService : ITeacherService
         teacher.Name = request.Name?.Trim();
         teacher.LoginId = loginId;
         teacher.Phone = request.Phone?.Trim();
+        teacher.PersonalEmail = string.IsNullOrWhiteSpace(request.PersonalEmail) ? null : request.PersonalEmail.Trim();
+        teacher.Designation = Blank(request.Designation);
+        teacher.Qualification = Blank(request.Qualification);
+        teacher.ComputerTraining = Blank(request.ComputerTraining);
+        teacher.Branch = Blank(request.Branch);
+        teacher.IsTechnical = request.IsTechnical;
         teacher.ModifiedBy = actor;
         teacher.ModifiedOn = DateTime.UtcNow;
 
-        // Editing a stand-in row is how it becomes a real teacher again, so clear the
-        // marker once someone has given it a proper name.
-        if (teacher.CreatedBy == PlaceholderMarker)
-        {
-            teacher.CreatedBy = actor;
-            _logger.LogInformation(
-                "Placeholder teacher {TeacherId} identified as {Name} by {Actor}", id, teacher.Name, actor);
-        }
+        // NOTE: Teacher.CreatedBy/ModifiedBy are mapped with Ignore() because
+        // dbo.Teacher cannot gain audit columns, so the assignments above are
+        // deliberate no-ops kept for the day the schema can hold them.
 
         await _db.SaveChangesAsync(ct);
         return Result<bool>.Success(true);
@@ -226,8 +250,17 @@ public class TeacherService : ITeacherService
 
         var items = rows.Select(r =>
         {
-            // Registration ids are not unique in the migrated data, so take the first.
-            var student = students.FirstOrDefault(s => s.RegistrationId == r.StudentRegistrationId);
+            /* Case-INSENSITIVE, and that is not a nicety: dbo.TecFees holds ids in
+               mixed case beside the uppercase ones in dbo.student - 3,953 "Avi/..."
+               against 3,011 "AVI/...". SQL Server matched them anyway under a CI
+               collation; C# string equality is ordinal and does not, so 8,653 of
+               11,670 payout rows showed a blank student and course.
+
+               Registration ids are also not unique in the migrated data, so this
+               deliberately takes the first match. */
+            var student = students.FirstOrDefault(
+                s => string.Equals(s.RegistrationId, r.StudentRegistrationId,
+                                   StringComparison.OrdinalIgnoreCase));
 
             return new TeacherEarningDto(
                 r.Id, r.PaidOn, r.BillNo, student?.Name, r.StudentRegistrationId,
@@ -243,7 +276,9 @@ public class TeacherService : ITeacherService
     /// three separate columns on Student, so the counting is done in memory.
     /// </summary>
     private async Task<List<TeacherListItemDto>> DecorateAsync(
-        List<(int Id, string? Name, string? LoginId, string? Phone, bool IsPlaceholder)> teachers,
+        List<(int Id, string? Name, string? LoginId, string? Phone, string? PersonalEmail,
+              string? Designation, string? Qualification, string? ComputerTraining, string? Branch,
+              bool IsTechnical, bool IsPlaceholder)> teachers,
         CancellationToken ct)
     {
         if (teachers.Count == 0) return [];
@@ -255,7 +290,7 @@ public class TeacherService : ITeacherService
             .Where(s => (s.PrimaryTeacherId != null && ids.Contains(s.PrimaryTeacherId.Value))
                      || (s.SecondTeacherId != null && ids.Contains(s.SecondTeacherId.Value))
                      || (s.ThirdTeacherId != null && ids.Contains(s.ThirdTeacherId.Value)))
-            .Select(s => new { s.PrimaryTeacherId, s.SecondTeacherId, s.ThirdTeacherId, s.IsActive })
+            .Select(s => new { s.PrimaryTeacherId, s.SecondTeacherId, s.ThirdTeacherId, IsActive = s.IsActive == true })
             .ToListAsync(ct);
 
         var earnings = await _db.TeacherFees
@@ -279,13 +314,129 @@ public class TeacherService : ITeacherService
             var money = earnings.FirstOrDefault(e => e.TeacherId == t.Id);
 
             return new TeacherListItemDto(
-                t.Id, t.Name, t.LoginId, t.Phone,
-                assigned.Count(s => s.IsActive),
+                t.Id, t.Name, t.LoginId, t.Phone, t.PersonalEmail,
+                t.Designation, t.Qualification, t.ComputerTraining, t.Branch, t.IsTechnical,
+                assigned.Count(s => s.IsActive == true),
                 assigned.Count,
                 money?.Total ?? 0m,
                 money?.LastPaid,
                 t.IsPlaceholder,
                 assigned.Count > 0 || money is not null);
         }).ToList();
+    }
+
+    /* ============================= payments made to a teacher (TecExpense) */
+
+    /// <summary>
+    /// Records money handed to a teacher.
+    /// </summary>
+    /// <remarks>
+    /// The teacher account report reads earned from <c>TecFees</c> — the teacher's
+    /// share of every fee collected — and paid from <c>TecExpense</c>. Only the
+    /// earned side was ever written by this application, so a teacher's pending
+    /// balance could only grow. This writes the other side.
+    /// </remarks>
+    public async Task<Result<int>> RecordPaymentAsync(
+        TeacherPaymentRequest request, string? actor, CancellationToken ct = default)
+    {
+        var teacher = await _db.Teachers
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Id == request.TeacherId, ct);
+
+        if (teacher is null)
+            return Result<int>.Failure("That teacher no longer exists.", ResultStatus.NotFound);
+
+        var payment = new TeacherExpense
+        {
+            TeacherId = request.TeacherId,
+            // An omitted date means today, the way the fee form defaults its picker.
+            ExpenseDate = request.PaidOn ?? DateOnly.FromDateTime(DateTime.Now),
+            Amount = request.Amount,
+            CreatedBy = actor,
+            CreatedOn = DateTime.Now
+        };
+
+        _db.TeacherExpenses.Add(payment);
+        await _db.SaveChangesAsync(ct);
+
+        return Result<int>.Success(payment.Id);
+    }
+
+    public async Task<Result<IReadOnlyList<TeacherPaymentDto>>> GetPaymentsAsync(
+        int teacherId, DateOnly? from, DateOnly? to, CancellationToken ct = default)
+    {
+        var q = _db.TeacherExpenses.AsNoTracking().Where(t => t.TeacherId == teacherId);
+
+        if (from.HasValue) q = q.Where(t => t.ExpenseDate >= from);
+        if (to.HasValue) q = q.Where(t => t.ExpenseDate <= to);
+
+        var rows = await q
+            .OrderByDescending(t => t.ExpenseDate)
+            .ThenByDescending(t => t.Id)
+            // dbo.TecExpense cannot carry audit columns - the legacy application
+            // bare-inserts into it - so who recorded the payment is not known. The
+            // date it was paid, which is what anyone actually asks, is ExpenseDate.
+            .Select(t => new TeacherPaymentDto(
+                t.Id, t.ExpenseDate, t.Amount ?? 0m, null, default))
+            .ToListAsync(ct);
+
+        return Result<IReadOnlyList<TeacherPaymentDto>>.Success(rows);
+    }
+
+    /// <summary>
+    /// Earned, paid and pending for one teacher over a date range.
+    /// </summary>
+    /// <remarks>
+    /// Scoped to the same dates as the earnings list beneath it. Showing all-time
+    /// figures above a filtered list invites the two to be read together — "earned
+    /// ₹5.3 lakh" over a heading that says August — and the pending figure would be
+    /// the lifetime balance rather than anything to do with the month on screen.
+    /// </remarks>
+    public async Task<Result<TeacherAccountDto>> GetAccountAsync(
+        int teacherId, DateOnly? from, DateOnly? to, CancellationToken ct = default)
+    {
+        var teacher = await _db.Teachers
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Id == teacherId, ct);
+
+        if (teacher is null)
+            return Result<TeacherAccountDto>.Failure("That teacher no longer exists.", ResultStatus.NotFound);
+
+        // Summed in SQL, so the figures do not depend on how many rows a screen
+        // happens to have drawn.
+        var earnedQuery = _db.TeacherFees.AsNoTracking().Where(t => t.TeacherId == teacherId);
+        var paidQuery = _db.TeacherExpenses.AsNoTracking().Where(t => t.TeacherId == teacherId);
+
+        if (from.HasValue)
+        {
+            earnedQuery = earnedQuery.Where(t => t.PaidOn >= from);
+            paidQuery = paidQuery.Where(t => t.ExpenseDate >= from);
+        }
+
+        if (to.HasValue)
+        {
+            earnedQuery = earnedQuery.Where(t => t.PaidOn <= to);
+            paidQuery = paidQuery.Where(t => t.ExpenseDate <= to);
+        }
+
+        var earned = await earnedQuery.SumAsync(t => (decimal?)t.Salary ?? 0m, ct);
+        var paid = await paidQuery.SumAsync(t => (decimal?)t.Amount ?? 0m, ct);
+
+        return Result<TeacherAccountDto>.Success(new TeacherAccountDto(
+            teacherId, teacher.Name, earned, paid, earned - paid,
+            from, to, from.HasValue || to.HasValue));
+    }
+
+    public async Task<Result<bool>> DeletePaymentAsync(int paymentId, CancellationToken ct = default)
+    {
+        var payment = await _db.TeacherExpenses.FirstOrDefaultAsync(t => t.Id == paymentId, ct);
+
+        if (payment is null)
+            return Result<bool>.Failure("That payment no longer exists.", ResultStatus.NotFound);
+
+        _db.TeacherExpenses.Remove(payment);
+        await _db.SaveChangesAsync(ct);
+
+        return Result<bool>.Success(true);
     }
 }

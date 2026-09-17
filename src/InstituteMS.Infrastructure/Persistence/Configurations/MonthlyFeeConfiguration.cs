@@ -16,6 +16,10 @@ public class MonthlyFeeConfiguration : IEntityTypeConfiguration<MonthlyFee>
         b.Property(x => x.BillNo).HasColumnName("BillNo").HasMaxLength(50);
         b.Property(x => x.FeeDate).HasColumnName("Date1");
         b.Property(x => x.AgreedMonthlyFee).HasColumnName("stu_actual_monthly_fees").HasPrecision(18, 2);
+        b.Property(x => x.TransactionId).HasColumnName("TransactionId").HasMaxLength(64);
+        b.Property(x => x.VerifiedOn).HasColumnName("VerifiedOn");
+        b.Property(x => x.VerifiedBy).HasColumnName("VerifiedBy").HasMaxLength(50);
+        b.Property(x => x.Branch).HasColumnName("Branch").HasMaxLength(100);
         b.Property(x => x.PaymentDate).HasColumnName("PDate");
         b.Property(x => x.Installment).HasColumnName("Installment").HasPrecision(18, 2);
         b.Property(x => x.OtherInstallment).HasColumnName("OInstallment").HasPrecision(18, 2);

@@ -40,6 +40,12 @@ public class JwtTokenService : IJwtTokenService
         if (!string.IsNullOrWhiteSpace(user.LoginId))
             claims.Add(new Claim("loginId", user.LoginId));
 
+        // Carried in the token so the hold survives without a database read on every
+        // request. It is cleared by issuing a fresh token, which change-password does
+        // by revoking the refresh token and forcing a new sign-in.
+        if (user.MustChangePassword)
+            claims.Add(new Claim(PasswordResetClaims.MustChangePassword, "true"));
+
         var token = new JwtSecurityToken(
             issuer: _settings.Issuer,
             audience: _settings.Audience,

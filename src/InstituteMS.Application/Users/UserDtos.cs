@@ -18,7 +18,15 @@ public record UserListItemDto(
     DateOnly? EndDate,
     bool IsActive,
     DateTime? LastLoginOn,
-    bool HasPassword);
+    bool HasPassword,
+
+    /// <summary>
+    /// For a student account only: the portal password as issued, read from
+    /// <c>Student.Avijan_login_Password</c> where production keeps it in clear so
+    /// the office can read it back. Null for staff - their password is a BCrypt
+    /// hash and there is nothing to show.
+    /// </summary>
+    string? StudentPassword);
 
 public record UserSaveRequest
 {
@@ -36,6 +44,17 @@ public record UserSaveRequest
 
     public bool IsActive { get; init; } = true;
 }
+
+/// <summary>
+/// How many accounts hold each role, for the role-wise grid above the table.
+/// </summary>
+/// <remarks>
+/// A user with a combined role such as "Receptionist &amp; Teacher" is counted
+/// under both — the same substring rule <see cref="UserQuery.Role"/> already
+/// filters by — so the two numbers stay consistent with each other: clicking a
+/// count and getting that many rows back is what makes the grid trustworthy.
+/// </remarks>
+public record RoleCountDto(string Role, int Count);
 
 /// <summary>Legacy <c>Birthday_wise_next30_days_Users</c> (U6).</summary>
 public record UpcomingBirthdayDto(

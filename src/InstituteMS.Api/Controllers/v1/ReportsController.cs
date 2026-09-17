@@ -46,16 +46,62 @@ public class ReportsController : ApiControllerBase
     /// Unlike the legacy <c>usp_NotPaidData</c>, students who have never paid at all
     /// are included. Pass <c>includeNeverPaid=false</c> for the legacy row set.
     /// </remarks>
+    /* The receptionist is included: chasing unpaid fees is their job, and they take
+       the payment at the counter when it comes in. Withholding the list of who owes
+       what would leave them following up from memory. The CSV download is this same
+       endpoint with a larger page size, so it follows automatically.
+
+       This is the one money report they get. Expenses, income, branch performance
+       and teacher pay stay with the back office — those are the institute's
+       finances, not the front desk's work. */
     [HttpGet("dues")]
-    [Authorize(Roles = UserRoles.BackOffice)]
+    [Authorize(Roles = UserRoles.MasterData)]
     [ProducesResponseType(typeof(ApiResponse<DuesReportDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<DuesReportDto>), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Dues([FromQuery] DuesReportQuery query, CancellationToken ct)
         => Envelope(await _reports.GetDuesAsync(query, ct));
 
+    /// <summary>
+    /// Branch-wise pending payments, split into students who have never paid a
+    /// monthly fee and those who have fallen behind.
+    /// </summary>
+    /// <remarks>
+    /// Admin and the front desk only, at the owner's instruction — chasing arrears
+    /// is the receptionist's daily work. Deliberately not <c>MasterData</c>: that
+    /// would include Editor, and this names every student's outstanding balance.
+    /// </remarks>
+    [HttpGet("pending-payments")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist}")]
+    [ProducesResponseType(typeof(ApiResponse<PendingPaymentsReportDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<PendingPaymentsReportDto>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> PendingPayments(
+        [FromQuery] PendingPaymentsQuery query, CancellationToken ct)
+        => Envelope(await _reports.GetPendingPaymentsAsync(query, ct));
+
+    /// <summary>
+    /// Every fee payment in a date range — monthly installments and admission fees —
+    /// with cash-versus-bank and who recorded it, branch-wise, for a receptionist's
+    /// month-end reconciliation.
+    /// </summary>
+    /// <remarks>
+    /// Admin and the front desk only, the same rule as pending-payments: this names
+    /// who collected what, which is receptionist-facing information, not a teaching
+    /// or editorial one.
+    /// </remarks>
+    [HttpGet("fee-collections")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist}")]
+    [ProducesResponseType(typeof(ApiResponse<FeeCollectionsReportDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<FeeCollectionsReportDto>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> FeeCollections(
+        [FromQuery] FeeCollectionsQuery query, CancellationToken ct)
+        => Envelope(await _reports.GetFeeCollectionsAsync(query, ct));
+
     /// <summary>Institute expenses between two dates, with the period total.</summary>
+    // Receptionist included at the owner's instruction: the front desk is asked
+    // about spending as well as fees. Reading only — entering and deleting an
+    // expense stays on the Expenses screen, which is back office.
     [HttpGet("expenses")]
-    [Authorize(Roles = UserRoles.BackOffice)]
+    [Authorize(Roles = UserRoles.MasterData)]
     [ProducesResponseType(typeof(ApiResponse<ExpenseReportDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Expenses([FromQuery] ExpenseReportQuery query, CancellationToken ct)
         => Envelope(await _reports.GetExpensesAsync(query, ct));
@@ -72,7 +118,8 @@ public class ReportsController : ApiControllerBase
     /// <c>LoginId</c> matches their sign-in and gets 403 for anyone else's.
     /// </remarks>
     [HttpGet("teacher-earnings")]
-    [Authorize(Roles = $"{UserRoles.BackOffice},{UserRoles.Teacher}")]
+    // Admin, the receptionist at the front desk, and the teacher themselves.
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist},{UserRoles.Teacher}")]
     [ProducesResponseType(typeof(ApiResponse<TeacherEarningsReportDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<TeacherEarningsReportDto>), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ApiResponse<TeacherEarningsReportDto>), StatusCodes.Status404NotFound)]
@@ -82,7 +129,18 @@ public class ReportsController : ApiControllerBase
         [FromQuery] DateOnly to,
         CancellationToken ct)
     {
-        if (!IsBackOffice)
+        /* Who may look up any teacher, rather than only their own record. Admin and
+           Receptionist by name — deliberately not IsBackOffice, so an Editor who is
+           also a Teacher cannot read every colleague's account through the Editor
+           half of their sign-in.
+
+           Note the legacy data holds combined "Receptionist & Teacher" accounts, and
+           such a person now sees every teacher's earnings, not just their own. That
+           follows directly from the front desk being given this report. */
+        var mayViewAnyTeacher =
+            User.IsInRole(UserRoles.Admin) || User.IsInRole(UserRoles.Receptionist);
+
+        if (!mayViewAnyTeacher)
         {
             var own = await _reports.ResolveOwnTeacherIdAsync(CurrentUserName ?? string.Empty, ct);
 
@@ -102,6 +160,83 @@ public class ReportsController : ApiControllerBase
     }
 
     /// <summary>
+    /// One teacher's honorarium pay slip for a single calendar month, built from
+    /// whatever was actually recorded paid that month.
+    /// </summary>
+    /// <remarks>
+    /// Same visibility as <see cref="TeacherEarnings"/>: office staff may request
+    /// any teacher, a signed-in teacher only their own.
+    /// </remarks>
+    [HttpGet("teachers/{teacherId:int}/payslip")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist},{UserRoles.Teacher}")]
+    [ProducesResponseType(typeof(ApiResponse<HonorariumPayslipDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<HonorariumPayslipDto>), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ApiResponse<HonorariumPayslipDto>), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> TeacherPayslip(
+        int teacherId, [FromQuery] DateOnly month, CancellationToken ct)
+    {
+        var mayViewAnyTeacher =
+            User.IsInRole(UserRoles.Admin) || User.IsInRole(UserRoles.Receptionist);
+
+        if (!mayViewAnyTeacher)
+        {
+            var own = await _reports.ResolveOwnTeacherIdAsync(CurrentUserName ?? string.Empty, ct);
+
+            if (!own.Succeeded)
+                return Envelope(Result<HonorariumPayslipDto>.Failure(own.Error!, own.Status));
+
+            if (teacherId != own.Value)
+            {
+                return Envelope(Result<HonorariumPayslipDto>.Failure(
+                    "You can only download your own pay slip.", ResultStatus.Forbidden));
+            }
+        }
+
+        return Envelope(await _reports.GetTeacherPayslipAsync(teacherId, month, ct));
+    }
+
+    /// <summary>One receptionist's honorarium pay slip for a single calendar month.</summary>
+    /// <remarks>
+    /// Back office may request anyone's, the same rule as the receptionist
+    /// payments list — this names one person's pay, and a receptionist must not
+    /// be able to read a colleague's through this. A signed-in Receptionist may
+    /// still download their own: the class-level policy already lets them in, so
+    /// this checks the id against their own record rather than the endpoint
+    /// being closed to them outright.
+    /// </remarks>
+    [HttpGet("receptionists/{receptionistId:int}/payslip")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Editor},{UserRoles.Receptionist}")]
+    [ProducesResponseType(typeof(ApiResponse<HonorariumPayslipDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<HonorariumPayslipDto>), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ApiResponse<HonorariumPayslipDto>), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ReceptionistPayslip(
+        int receptionistId, [FromQuery] DateOnly month, CancellationToken ct)
+    {
+        var mayViewAnyReceptionist =
+            User.IsInRole(UserRoles.Admin) || User.IsInRole(UserRoles.Editor);
+
+        if (!mayViewAnyReceptionist)
+        {
+            if (!User.IsInRole(UserRoles.Receptionist))
+                return Envelope(Result<HonorariumPayslipDto>.Failure(
+                    "You do not have access to pay slips.", ResultStatus.Forbidden));
+
+            var own = await _reports.ResolveOwnReceptionistIdAsync(CurrentUserName ?? string.Empty, ct);
+
+            if (!own.Succeeded)
+                return Envelope(Result<HonorariumPayslipDto>.Failure(own.Error!, own.Status));
+
+            if (receptionistId != own.Value)
+            {
+                return Envelope(Result<HonorariumPayslipDto>.Failure(
+                    "You can only download your own pay slip.", ResultStatus.Forbidden));
+            }
+        }
+
+        return Envelope(await _reports.GetReceptionistPayslipAsync(receptionistId, month, ct));
+    }
+
+    /// <summary>
     /// The signed-in teacher's own teacher id, resolved from their sign-in the way
     /// the legacy page resolved it from <c>Session["UserID"]</c>.
     /// </summary>
@@ -112,14 +247,63 @@ public class ReportsController : ApiControllerBase
     public async Task<IActionResult> MyTeacherId(CancellationToken ct)
         => Envelope(await _reports.ResolveOwnTeacherIdAsync(CurrentUserName ?? string.Empty, ct));
 
-    /// <summary>Every student assigned to one teacher, in any of their three slots.</summary>
+    /// <summary>
+    /// Every student assigned to one teacher, in any of their three slots. A teacher
+    /// may only ever request their own list -- the same self-only rule
+    /// <see cref="TeacherEarnings"/> already applies, so "My students" on a teacher's
+    /// own dashboard can call this endpoint directly rather than needing one of
+    /// its own.
+    /// </summary>
     [HttpGet("students-by-teacher")]
-    [Authorize(Roles = UserRoles.BackOffice)]
+    [Authorize(Roles = $"{UserRoles.BackOffice},{UserRoles.Teacher}")]
     [ProducesResponseType(typeof(ApiResponse<StudentsByTeacherReportDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<StudentsByTeacherReportDto>), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> StudentsByTeacher(
         [FromQuery] StudentsByTeacherQuery query, CancellationToken ct)
-        => Envelope(await _reports.GetStudentsByTeacherAsync(query, ct));
+    {
+        if (!User.IsInRole(UserRoles.Admin) && !User.IsInRole(UserRoles.Receptionist))
+        {
+            var own = await _reports.ResolveOwnTeacherIdAsync(CurrentUserName ?? string.Empty, ct);
+
+            if (!own.Succeeded)
+                return Envelope(Result<StudentsByTeacherReportDto>.Failure(own.Error!, own.Status));
+
+            if (query.TeacherId > 0 && query.TeacherId != own.Value)
+            {
+                return Envelope(Result<StudentsByTeacherReportDto>.Failure(
+                    "You can only view your own students.", ResultStatus.Forbidden));
+            }
+
+            query.TeacherId = own.Value;
+        }
+
+        return Envelope(await _reports.GetStudentsByTeacherAsync(query, ct));
+    }
+
+    /// <summary>
+    /// Whether the missed-scan-out deduction is currently switched on. Readable by
+    /// anyone who can see a Teacher Account report, so the setting the report is
+    /// obeying is never a mystery -- a teacher seeing no deduction line should be
+    /// able to tell whether that is because they had no misses or because the rule
+    /// is simply off for everyone right now.
+    /// </summary>
+    [HttpGet("payroll-settings")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist},{UserRoles.Teacher}")]
+    [ProducesResponseType(typeof(ApiResponse<PayrollSettingsDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> PayrollSettings(CancellationToken ct)
+        => Envelope(Result<PayrollSettingsDto>.Success(await _reports.GetPayrollSettingsAsync(ct)));
+
+    /// <summary>
+    /// Switches the missed-scan-out deduction on or off for every teacher's report.
+    /// Admin only -- the owner: "always it should depends on Admin."
+    /// </summary>
+    [HttpPut("payroll-settings")]
+    [Authorize(Roles = UserRoles.Admin)]
+    [ProducesResponseType(typeof(ApiResponse<PayrollSettingsDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> UpdatePayrollSettings(
+        [FromBody] UpdatePayrollSettingsRequest request, CancellationToken ct)
+        => Envelope(await _reports.UpdatePayrollSettingsAsync(
+            request.MissedScanOutDeductionEnabled, CurrentUserName, ct), "Setting saved.");
 
     /// <summary>
     /// The signed-in student's own profile, fee ledger and marks.
@@ -154,6 +338,25 @@ public class ReportsController : ApiControllerBase
     }
 
     /// <summary>
+    /// Admissions, fee payments and expenses by branch, bucketed by month,
+    /// quarter or year.
+    /// </summary>
+    /// <remarks>
+    /// An admission and a payment reach a branch through the student; an expense
+    /// through the branch recorded on the expense itself. Anything with no branch
+    /// is reported as <c>Unassigned</c> rather than dropped, so these totals
+    /// reconcile against the unfiltered admission, income and expense reports.
+    /// </remarks>
+    [HttpGet("branch")]
+    // Whole-institute money. The class-level [Authorize] alone would let any
+    // signed-in student read it.
+    [Authorize(Roles = UserRoles.BackOffice)]
+    [ProducesResponseType(typeof(ApiResponse<BranchReportDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<BranchReportDto>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Branch([FromQuery] BranchReportQuery query, CancellationToken ct)
+        => Envelope(await _reports.GetBranchReportAsync(query, ct));
+
+    /// <summary>
     /// The signed-in student's own registration id, resolved from their email the
     /// way the legacy page resolved it from <c>Session["UserID"]</c>.
     /// </summary>
@@ -167,13 +370,42 @@ public class ReportsController : ApiControllerBase
     /// to a printable view. Anyone could edit that URL and print a certificate
     /// naming any person, course and grade they liked. Nothing is passed in here:
     /// every field is read server-side from the signed-in student's own record.
+    ///
+    /// <para><b>POST, because issuing a certificate is not a read.</b> The first
+    /// call returns the original; every call after it returns the next numbered
+    /// DUPLICATE COPY, and each is recorded in <c>dbo.CertificateIssue</c>. A GET
+    /// would be re-fetched by browsers, caches and refreshes, quietly inflating the
+    /// count — and a non-recording variant would be the obvious way to take an
+    /// unmarked second copy, so there isn't one.</para>
     /// </remarks>
-    [HttpGet("my-certificate")]
+    [HttpPost("my-certificate")]
     [Authorize(Roles = UserRoles.Student)]
     [ProducesResponseType(typeof(ApiResponse<StudentCertificateDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<StudentCertificateDto>), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ApiResponse<StudentCertificateDto>), StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> MyCertificate(CancellationToken ct)
-        => Envelope(await _reports.GetOwnCertificateAsync(CurrentUserName ?? string.Empty, ct));
+    public async Task<IActionResult> IssueMyCertificate(CancellationToken ct)
+        => Envelope(await _reports.IssueOwnCertificateAsync(CurrentUserName ?? string.Empty, ct));
+
+    /// <summary>
+    /// The office's side of the same button — issuing a certificate for a student
+    /// who is standing at the counter rather than signed in themselves. Same
+    /// eligibility (course marked complete, a result on file), same numbering,
+    /// same <c>dbo.CertificateIssue</c> log; only who is recorded as having taken
+    /// the copy differs.
+    /// </summary>
+    /// <remarks>
+    /// The registration id is carried in the query string, not the route — it is
+    /// "AVI/4861/26", and a slash inside a route segment does not match the way a
+    /// literal one does.
+    /// </remarks>
+    [HttpPost("students/certificate")]
+    [Authorize(Roles = UserRoles.MasterData)]
+    [ProducesResponseType(typeof(ApiResponse<StudentCertificateDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<StudentCertificateDto>), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ApiResponse<StudentCertificateDto>), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> IssueCertificateForStudent(
+        [FromQuery] string registrationId, CancellationToken ct)
+        => Envelope(await _reports.IssueCertificateForStudentAsync(registrationId, CurrentUserName, ct));
 
     /// <summary>
     /// Money receipt for one of the signed-in student's own payments — the per-row

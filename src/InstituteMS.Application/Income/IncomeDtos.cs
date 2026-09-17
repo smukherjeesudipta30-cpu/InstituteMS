@@ -11,7 +11,7 @@ public enum IncomeSection
     Admissions = 1,
     /// <summary>Non-fee income (<c>OIncome</c>).</summary>
     OtherIncome = 2,
-    /// <summary>Late fines (<c>LateFees</c>) — a breakdown of <see cref="Fees"/>, not extra income.</summary>
+    /// <summary>Late fines (<c>LateFees</c>) - a breakdown of <see cref="Fees"/>, not extra income.</summary>
     LateFines = 3,
     /// <summary>Institute running costs (<c>Expense</c>).</summary>
     Expenses = 4,
@@ -19,8 +19,10 @@ public enum IncomeSection
     TeacherPayouts = 5,
     /// <summary>Ad-hoc payments to teachers (<c>TecExpense</c>).</summary>
     TeacherExpenses = 6,
-    /// <summary>Movement in student dues over the range (<c>NewDue − OldDue</c>).</summary>
-    Dues = 7
+    /// <summary>Movement in student dues over the range (<c>NewDue minus OldDue</c>).</summary>
+    Dues = 7,
+    /// <summary>Receptionists' monthly pay (<c>ReceptionistPayment</c>).</summary>
+    ReceptionistPay = 8
 }
 
 /// <summary>
@@ -48,6 +50,10 @@ public record IncomeReportDto(
     decimal Expenses,
     decimal TeacherPayouts,
     decimal TeacherExpenses,
+
+    /// <summary>Receptionists’ monthly pay, a cost like any other salary.</summary>
+    decimal ReceptionistPay,
+
     decimal TotalCost,
 
     decimal NetProfit,
@@ -59,7 +65,18 @@ public record IncomeReportDto(
 
     IReadOnlyList<IncomeSectionTotalDto> Sections,
     IReadOnlyList<IncomeTrendPointDto> Monthly,
-    DateTime GeneratedOn);
+    DateTime GeneratedOn,
+
+    /// <summary>The branch this report is scoped to, or null for the whole institute.</summary>
+    string? Branch = null,
+
+    /// <summary>
+    /// True when a branch filter is applied. Other income and teacher expenses are
+    /// then excluded, because neither records a branch and neither can borrow one
+    /// from a student â folding institute-wide figures into a single branch would
+    /// understate that branch every time.
+    /// </summary>
+    bool BranchScoped = false);
 
 public record IncomeSectionTotalDto(
     IncomeSection Section,
@@ -96,11 +113,15 @@ public class IncomeDetailQuery : PagedQuery
     public IncomeSection Section { get; set; } = IncomeSection.Fees;
     public DateOnly From { get; set; }
     public DateOnly To { get; set; }
+
+    /// <summary>Empty for the whole institute.</summary>
+    public string? Branch { get; set; }
 }
 
 public interface IIncomeService
 {
-    Task<Result<IncomeReportDto>> GetReportAsync(DateOnly from, DateOnly to, CancellationToken ct = default);
+    Task<Result<IncomeReportDto>> GetReportAsync(
+        DateOnly from, DateOnly to, string? branch = null, CancellationToken ct = default);
 
     Task<PagedResult<IncomeDetailDto>> GetDetailAsync(IncomeDetailQuery query, CancellationToken ct = default);
 }

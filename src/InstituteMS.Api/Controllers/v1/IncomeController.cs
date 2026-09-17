@@ -30,15 +30,24 @@ public class IncomeController : ApiControllerBase
     /// per-section totals and a monthly trend.
     /// </summary>
     /// <remarks>
-    /// Late fines are reported as an "of which" breakdown of fee collections rather
-    /// than as separate income — <c>MonthlyFees.Installment</c> already includes them.
+    /// <para>Two figures are shown as "of which" breakdowns rather than as separate
+    /// lines, because in both cases adding them would count the same money twice:
+    /// late fines are already inside <c>MonthlyFees.Installment</c>, and cash paid
+    /// to teachers settles the payout already counted when the fee was collected.</para>
+    ///
+    /// <para><c>branch</c> scopes every figure to one branch; omit it for the whole
+    /// institute. Teacher expenses are recorded against a teacher rather than a
+    /// branch, so they are the one line a branch-scoped report leaves out.</para>
     /// </remarks>
     [HttpGet("report")]
     [ProducesResponseType(typeof(ApiResponse<IncomeReportDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<IncomeReportDto>), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Report(
-        [FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken ct)
-        => Envelope(await _income.GetReportAsync(from, to, ct));
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] string? branch,
+        CancellationToken ct)
+        => Envelope(await _income.GetReportAsync(from, to, branch, ct));
 
     /// <summary>Paged detail rows behind one section of the report.</summary>
     [HttpGet("detail")]

@@ -56,7 +56,11 @@ public class ExpenseService : IExpenseService
             .ThenByDescending(e => e.Id)
             .Skip((query.Page - 1) * query.PageSize)
             .Take(query.PageSize)
-            .Select(e => new ExpenseListItemDto(e.Id, e.Details, e.ExpenseDate, e.Amount ?? 0m))
+            // Ext is null for expenses the legacy application recorded, so the
+            // branch is read defensively and reported as unattributed.
+            .Select(e => new ExpenseListItemDto(
+                e.Id, e.Details, e.ExpenseDate, e.Amount ?? 0m,
+                e.Ext != null ? e.Ext.Branch : null))
             .ToListAsync(ct);
 
         var rows = PagedResult<ExpenseListItemDto>.Create(items, query.Page, query.PageSize, entryCount);
@@ -65,9 +69,42 @@ public class ExpenseService : IExpenseService
             rows, new ExpenseSummaryDto(entryCount, total, query.From, query.To)));
     }
 
+    /// <summary>
+    /// Matches the submitted branch against the branch register.
+    /// </summary>
+    /// <remarks>
+    /// The column is free text and the screen offers a dropdown, but the API takes
+    /// whatever it is sent. Since the branch now decides which column of the branch
+    /// report an expense lands in, a typo would create a phantom branch that quietly
+    /// splits the figures. Matched case-insensitively and stored in the register's
+    /// own spelling, so "rajpur" and "Rajpur" cannot become two branches.
+    /// </remarks>
+    private async Task<Result<string>> ResolveBranchAsync(string? branch, CancellationToken ct)
+    {
+        var name = branch?.Trim();
+
+        if (string.IsNullOrWhiteSpace(name))
+            return Result<string>.Failure("Choose the branch this expense belongs to.");
+
+        var known = await _db.Branches
+            .AsNoTracking()
+            .Where(b => b.Name != null && b.Name.ToLower() == name.ToLower())
+            .Select(b => b.Name!)
+            .FirstOrDefaultAsync(ct);
+
+        return known is null
+            ? Result<string>.Failure($"'{name}' is not a branch on record.")
+            : Result<string>.Success(known);
+    }
+
     public async Task<Result<int>> CreateAsync(
         ExpenseSaveRequest request, string? actor, CancellationToken ct = default)
     {
+        var branch = await ResolveBranchAsync(request.Branch, ct);
+
+        if (!branch.Succeeded)
+            return Result<int>.Failure(branch.Error!, branch.Status);
+
         var expense = new Expense
         {
             Details = request.Details.Trim(),
@@ -75,8 +112,16 @@ public class ExpenseService : IExpenseService
             // the same thing rather than a null row.
             ExpenseDate = request.ExpenseDate ?? DateOnly.FromDateTime(DateTime.Now),
             Amount = request.Amount,
-            CreatedBy = actor,
-            CreatedOn = DateTime.Now
+
+            // Branch and audit cannot live on dbo.Expense - the legacy
+            // application bare-inserts into it - so they go to the side row,
+            // which EF writes in the same transaction.
+            Ext = new ExpenseExt
+            {
+                Branch = branch.Value,
+                CreatedBy = actor,
+                CreatedOn = DateTime.Now
+            }
         };
 
         _db.Expenses.Add(expense);
@@ -88,13 +133,25 @@ public class ExpenseService : IExpenseService
     public async Task<Result<bool>> UpdateAsync(
         int expenseId, ExpenseSaveRequest request, string? actor, CancellationToken ct = default)
     {
-        var expense = await _db.Expenses.FirstOrDefaultAsync(e => e.Id == expenseId, ct);
+        var expense = await _db.Expenses
+            .Include(e => e.Ext)
+            .FirstOrDefaultAsync(e => e.Id == expenseId, ct);
 
         if (expense is null)
             return Result<bool>.Failure("That expense no longer exists.", ResultStatus.NotFound);
 
+        var branch = await ResolveBranchAsync(request.Branch, ct);
+
+        if (!branch.Succeeded)
+            return Result<bool>.Failure(branch.Error!, branch.Status);
+
         expense.Details = request.Details.Trim();
         expense.Amount = request.Amount;
+
+        // An expense the legacy application recorded has no side row yet; the
+        // first edit here creates one.
+        expense.Ext ??= new ExpenseExt { ExpenseId = expense.Id, CreatedOn = DateTime.Now };
+        expense.Ext.Branch = branch.Value;
 
         // On update an omitted date keeps the stored one. The legacy update wrote
         // whatever the form held, so re-saving a row after only fixing a typo in the
@@ -102,8 +159,8 @@ public class ExpenseService : IExpenseService
         if (request.ExpenseDate.HasValue)
             expense.ExpenseDate = request.ExpenseDate;
 
-        expense.ModifiedBy = actor;
-        expense.ModifiedOn = DateTime.Now;
+        expense.Ext.ModifiedBy = actor;
+        expense.Ext.ModifiedOn = DateTime.Now;
 
         await _db.SaveChangesAsync(ct);
 

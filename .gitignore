@@ -192,6 +192,10 @@ publish/
 # in these scripts will be unencrypted
 PublishScripts/
 
+# A real production database snapshot — real students' and staff's names,
+# phone numbers and email addresses. Never belongs in source control.
+db/deploy/backup/
+
 # NuGet Packages
 *.nupkg
 # NuGet Symbol Packages

@@ -12,7 +12,7 @@ namespace InstituteMS.Api.Controllers.v1;
 /// </summary>
 [Route("api/v1/teachers")]
 [Tags("Teachers")]
-[Authorize(Roles = UserRoles.BackOffice)]
+[Authorize(Roles = UserRoles.MasterData)]
 public class TeachersController : ApiControllerBase
 {
     private readonly ITeacherService _teachers;
@@ -76,6 +76,50 @@ public class TeachersController : ApiControllerBase
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
         => Envelope(await _teachers.DeleteAsync(id, ct), "Teacher deleted.");
+
+    /* ------------------------------- payments made to the teacher */
+
+    /// <summary>A teacher's account: earned from fees, paid out, and the balance.</summary>
+    [HttpGet("{id:int}/account")]
+    [ProducesResponseType(typeof(ApiResponse<TeacherAccountDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Account(
+        int id, [FromQuery] DateOnly? from, [FromQuery] DateOnly? to, CancellationToken ct)
+        => Envelope(await _teachers.GetAccountAsync(id, from, to, ct));
+
+    /// <summary>Payments already handed to this teacher.</summary>
+    [HttpGet("{id:int}/payments")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<TeacherPaymentDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Payments(
+        int id, [FromQuery] DateOnly? from, [FromQuery] DateOnly? to, CancellationToken ct)
+        => Envelope(await _teachers.GetPaymentsAsync(id, from, to, ct));
+
+    /// <summary>
+    /// Records money handed to a teacher — the "paid" side of their account.
+    /// </summary>
+    /// <remarks>
+    /// <b>Administrator only.</b> This moves money out of the institute and
+    /// straight onto a teacher's balance, so it is deliberately narrower than the
+    /// rest of the teacher master, which Editors may use.
+    /// </remarks>
+    [HttpPost("{id:int}/payments")]
+    [Authorize(Roles = UserRoles.Admin)]
+    [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> RecordPayment(
+        int id, [FromBody] TeacherPaymentRequest request, CancellationToken ct)
+        => Envelope(
+            await _teachers.RecordPaymentAsync(request with { TeacherId = id }, CurrentUserName, ct),
+            "Payment recorded.");
+
+    /// <summary>Removes a payment recorded in error. Administrator only.</summary>
+    [HttpDelete("payments/{paymentId:int}")]
+    [Authorize(Roles = UserRoles.Admin)]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeletePayment(int paymentId, CancellationToken ct)
+        => Envelope(await _teachers.DeletePaymentAsync(paymentId, ct), "Payment removed.");
 }
 
 /// <summary>
@@ -84,7 +128,7 @@ public class TeachersController : ApiControllerBase
 /// </summary>
 [Route("api/v1/branches")]
 [Tags("Branches")]
-[Authorize(Roles = UserRoles.BackOffice)]
+[Authorize(Roles = UserRoles.MasterData)]
 public class BranchesController : ApiControllerBase
 {
     private readonly IBranchService _branches;

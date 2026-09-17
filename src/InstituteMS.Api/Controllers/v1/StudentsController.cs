@@ -13,7 +13,7 @@ namespace InstituteMS.Api.Controllers.v1;
 /// </summary>
 [Route("api/v1/students")]
 [Tags("Students")]
-[Authorize(Roles = UserRoles.BackOffice)]
+[Authorize(Roles = UserRoles.MasterData)]
 public class StudentsController : ApiControllerBase
 {
     private readonly IStudentService _students;
@@ -72,12 +72,51 @@ public class StudentsController : ApiControllerBase
     public async Task<IActionResult> NextRegistrationNo([FromQuery] int? branchId, CancellationToken ct)
         => Envelope(await _students.PeekNextRegistrationAsync(branchId, ct));
 
+    /// <summary>
+    /// The Avijan portal sign-in that will be issued for a student name, so the
+    /// registration form can show it before saving.
+    /// </summary>
+    /// <remarks>
+    /// The legacy form built these in the browser and posted them to
+    /// <c>usp_StudentSaveData</c>. Generating them server-side means the uniqueness
+    /// check actually looks at the database rather than trusting the page.
+    /// </remarks>
+    [HttpGet("suggest-login")]
+    [ProducesResponseType(typeof(ApiResponse<SuggestedLoginDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SuggestLogin(
+        [FromQuery] string? name, [FromQuery] int? excludingStudentId, CancellationToken ct)
+        => Envelope(await _students.SuggestLoginAsync(name, excludingStudentId, ct));
+
     /// <summary>Admission receipt data — replaces <c>getPrint</c> / <c>PrintReport.cshtml</c>.</summary>
     [HttpGet("{id:int}/receipt")]
     [ProducesResponseType(typeof(ApiResponse<AdmissionReceiptDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Receipt(int id, CancellationToken ct)
         => Envelope(await _students.GetReceiptAsync(id, ct));
+
+    /// <summary>
+    /// What is still owed on this student's admission fee, and the receipts taken
+    /// against it.
+    /// </summary>
+    [HttpGet("{id:int}/admission-due")]
+    [ProducesResponseType(typeof(ApiResponse<AdmissionDueDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> AdmissionDue(int id, CancellationToken ct)
+        => Envelope(await _students.GetAdmissionDueAsync(id, ct));
+
+    /// <summary>
+    /// Takes an instalment against an outstanding admission fee. Open to the same
+    /// roles that take a monthly fee — this is the same counter doing the same job.
+    /// </summary>
+    [HttpPost("{id:int}/admission-due/collect")]
+    [ProducesResponseType(typeof(ApiResponse<AdmissionDueDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<AdmissionDueDto>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> CollectAdmissionDue(
+        int id, [FromBody] AdmissionDueCollectRequest request, CancellationToken ct)
+        => Envelope(
+            await _students.CollectAdmissionDueAsync(id, request, CurrentUserName, ct),
+            "Admission fee instalment recorded.");
 
     /// <summary>Student photo, decoded from the Base64 blob the legacy uploader stored.</summary>
     [HttpGet("photo")]

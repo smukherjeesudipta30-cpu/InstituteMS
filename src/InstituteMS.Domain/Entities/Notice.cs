@@ -12,3 +12,23 @@ public class Notice
     public string? ModifiedBy { get; set; }
     public DateTime? ModifiedOn { get; set; }
 }
+
+/// <summary>
+/// A row of the weekly class routine shown on the public front page
+/// (legacy <c>dailyRoutine</c>, read by <c>Notice/gettime</c>).
+/// </summary>
+public class DailyRoutine
+{
+    public int Id { get; set; }
+
+    /// <summary>Batch or class name the row is for.</summary>
+    public string? Name { get; set; }
+
+    public string? Sunday { get; set; }
+    public string? Monday { get; set; }
+    public string? Tuesday { get; set; }
+    public string? Wednesday { get; set; }
+    public string? Thursday { get; set; }
+    public string? Friday { get; set; }
+    public string? Saturday { get; set; }
+}

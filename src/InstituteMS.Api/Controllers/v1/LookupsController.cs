@@ -14,9 +14,15 @@ namespace InstituteMS.Api.Controllers.v1;
 /// </summary>
 [Route("api/v1")]
 [Tags("Lookups")]
-// Receptionist is admitted at the class level only for the course lookup that
-// feeds their course-progress filter; the other lookups re-state BackOffice.
-[Authorize(Roles = $"{UserRoles.BackOffice},{UserRoles.Receptionist}")]
+/* MasterData, so the receptionist gets every lookup here rather than only the
+   course one. These feed the dropdowns on Student Registration and the two
+   enquiry screens, which are the receptionist's screens; leaving the individual
+   lookups on BackOffice let the page open and then failed each dropdown with a
+   403, which reads as "you do not have permission" on a page they are entitled to.
+
+   Nothing is given away by this. Each list is the read-only name-and-id form of a
+   master the receptionist already has the full screen for. */
+[Authorize(Roles = UserRoles.MasterData)]
 public class LookupsController : ApiControllerBase
 {
     private readonly ILookupService _lookups;
@@ -34,7 +40,6 @@ public class LookupsController : ApiControllerBase
     /// from the legacy system while students still referenced them; they sort last.
     /// </summary>
     [HttpGet("teachers/lookup")]
-    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<TeacherLookupDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Teachers(CancellationToken ct)
         => Envelope(await _lookups.GetTeachersAsync(ct));
@@ -44,14 +49,12 @@ public class LookupsController : ApiControllerBase
     /// (<c>AVI/Raj/3463/26</c>), so the form must send the branch rather than free text.
     /// </summary>
     [HttpGet("branches/lookup")]
-    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<BranchLookupDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Branches(CancellationToken ct)
         => Envelope(await _lookups.GetBranchesAsync(ct));
 
     /// <summary>Duration in months for one course (legacy <c>Home/getCourseDetails</c>).</summary>
     [HttpGet("courses/{courseId:int}/duration")]
-    [Authorize(Roles = UserRoles.BackOffice)]
     [ProducesResponseType(typeof(ApiResponse<int?>), StatusCodes.Status200OK)]
     public async Task<IActionResult> CourseDuration(int courseId, CancellationToken ct)
         => Envelope(await _lookups.GetCourseDurationAsync(courseId, ct));

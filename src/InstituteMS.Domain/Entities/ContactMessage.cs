@@ -10,5 +10,12 @@ public class ContactMessage
     public string? Body { get; set; }
     public DateTime SubmittedOn { get; set; }
     public string? SourceIp { get; set; }
+    /// <summary>
+    /// Not persisted - dbo.CusMessage cannot gain a column. The real flag is
+    /// <see cref="ContactMessageExt.IsHandled"/>, reached through <see cref="Ext"/>.
+    /// </summary>
     public bool IsHandled { get; set; }
+
+    /// <summary>Side row carrying the handled flag. Null means not handled.</summary>
+    public ContactMessageExt? Ext { get; set; }
 }

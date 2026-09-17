@@ -31,6 +31,13 @@ public interface IStudentService
     /// <param name="branchId">Optional — shapes the preview as <c>AVI/{code}/{n}/{yy}</c>.</param>
     Task<NextRegistrationDto> PeekNextRegistrationAsync(int? branchId, CancellationToken ct = default);
 
+    /// <summary>
+    /// The portal sign-in that would be issued for a student name, so the
+    /// registration form can show it before the student is saved.
+    /// </summary>
+    Task<SuggestedLoginDto> SuggestLoginAsync(
+        string? studentName, int? excludingStudentId = null, CancellationToken ct = default);
+
     Task<Result<(byte[] Content, string ContentType, string FileName)>> GetPhotoAsync(
         string registrationId, CancellationToken ct = default);
 
@@ -43,6 +50,19 @@ public interface IStudentService
         string registrationId, PhotoUpload upload, string? actor, CancellationToken ct = default);
 
     Task<Result<bool>> DeletePhotoAsync(string registrationId, CancellationToken ct = default);
+
+    /// <summary>
+    /// What a student still owes on their admission fee, with the receipts taken
+    /// against it so far.
+    /// </summary>
+    Task<Result<AdmissionDueDto>> GetAdmissionDueAsync(int studentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Takes an instalment against an outstanding admission fee: writes the receipt
+    /// and moves the running total, in one transaction.
+    /// </summary>
+    Task<Result<AdmissionDueDto>> CollectAdmissionDueAsync(
+        int studentId, AdmissionDueCollectRequest request, string? actor, CancellationToken ct = default);
 }
 
 /// <summary>An uploaded file, decoupled from ASP.NET's IFormFile.</summary>

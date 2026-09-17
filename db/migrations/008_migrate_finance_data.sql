@@ -1,6 +1,6 @@
 /* =====================================================================
    008_migrate_finance_data.sql
-   Source    : ph19987796653_   (legacy, READ ONLY)
+   Source    : ph19987796653_prod   (production snapshot, READ ONLY)
    Target    : Avijan_Angular_Migration
    Purpose   : Load the real fee ledger, expenses, fines, teacher payouts,
                marks, branches and notices.
@@ -34,9 +34,9 @@ GO
 USE [Avijan_Angular_Migration];
 GO
 
-IF DB_ID('ph19987796653_') IS NULL
+IF DB_ID('ph19987796653_prod') IS NULL
 BEGIN
-    RAISERROR('Source database ph19987796653_ is not attached on this server.', 16, 1);
+    RAISERROR('Source database ph19987796653_prod is not attached on this server.', 16, 1);
     RETURN;
 END
 GO

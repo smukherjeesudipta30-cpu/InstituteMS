@@ -26,6 +26,15 @@ public class StudentPhoto
     public int? FileSize { get; set; }
     public string? ContentType { get; set; }
 
+    /// <summary>
+    /// Not actually persisted — <c>dbo.ImageUpload</c> was never given
+    /// CreatedBy/CreatedOn columns, unlike the tables the coexistence script
+    /// did add them to. Confirmed directly against the live table (8 columns,
+    /// neither present); every upload was failing with "Invalid column name
+    /// 'CreatedBy'" until <c>StudentPhotoConfiguration</c> started ignoring
+    /// both. Left on the entity, unset, rather than removed outright, in case
+    /// the table is ever given real audit columns later.
+    /// </summary>
     public string? CreatedBy { get; set; }
-    public DateTime CreatedOn { get; set; }
+    public DateTime? CreatedOn { get; set; }
 }

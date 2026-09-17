@@ -28,7 +28,11 @@ public class BranchService : IBranchService
         var branches = await _db.Branches
             .AsNoTracking()
             .OrderBy(b => b.Name)
-            .Select(b => new { b.Id, b.Name, b.Code, b.IsActive })
+            .Select(b => new
+            {
+                b.Id, b.Name, b.Code, b.IsActive,
+                b.Latitude, b.Longitude, b.GeofenceMetres
+            })
             .ToListAsync(ct);
 
         if (branches.Count == 0) return [];
@@ -62,7 +66,8 @@ public class BranchService : IBranchService
                 b.Id, b.Name, b.Code, b.IsActive,
                 studentCounts.FirstOrDefault(s =>
                     string.Equals(s.Branch, b.Name, StringComparison.OrdinalIgnoreCase))?.Count ?? 0,
-                issued);
+                issued,
+                b.Latitude, b.Longitude, b.GeofenceMetres);
         }).ToList();
     }
 
@@ -82,7 +87,16 @@ public class BranchService : IBranchService
         {
             Name = name,
             Code = code,
+
+            // Written to the legacy columns too, so the row is complete for both
+            // applications and Is_active (NOT NULL) is satisfied.
+            LegacyName = name,
+            LegacyCode = code,
+            LegacyIsActive = request.IsActive,
             IsActive = request.IsActive,
+            Latitude = request.Latitude,
+            Longitude = request.Longitude,
+            GeofenceMetres = request.GeofenceMetres,
             CreatedBy = actor,
             CreatedOn = DateTime.UtcNow
         };
@@ -135,6 +149,13 @@ public class BranchService : IBranchService
         branch.Name = name;
         branch.Code = code;
         branch.IsActive = request.IsActive;
+        branch.Latitude = request.Latitude;
+        branch.Longitude = request.Longitude;
+        branch.GeofenceMetres = request.GeofenceMetres;
+
+        branch.LegacyName = name;
+        branch.LegacyCode = code;
+        branch.LegacyIsActive = request.IsActive;
 
         if (!string.Equals(oldName, name, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(oldName))
         {
