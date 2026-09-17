@@ -11,12 +11,6 @@ namespace InstituteMS.Domain.Common;
 /// </summary>
 public static class UserRoles
 {
-    public const string Admin = "Admin";
-    public const string Editor = "Editor";
-    public const string Student = "Student";
-    public const string Teacher = "Teacher";
-    public const string Receptionist = "Receptionist";
-
     /// <summary>
     /// Above every screen's own role list, not inside one: a SuperAdmin bypasses
     /// every <c>[Authorize(Roles=...)]</c> check globally (see
@@ -26,6 +20,12 @@ public static class UserRoles
     /// SuperAdmin out by omission.
     /// </summary>
     public const string SuperAdmin = "SuperAdmin";
+
+    public const string Admin = "Admin";
+    public const string Editor = "Editor";
+    public const string Student = "Student";
+    public const string Teacher = "Teacher";
+    public const string Receptionist = "Receptionist";
 
     public static readonly string[] All = [SuperAdmin, Admin, Editor, Student, Teacher, Receptionist];
 

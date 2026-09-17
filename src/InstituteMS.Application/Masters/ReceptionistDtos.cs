@@ -178,6 +178,48 @@ public class ReceptionistReportQuery
     public string? Branch { get; set; }
 }
 
+/* ==================================================================== service */
+
+public interface IReceptionistService
+{
+    Task<PagedResult<ReceptionistListItemDto>> GetListAsync(
+        ReceptionistQuery query, CancellationToken ct = default);
+
+    Task<Result<int>> CreateAsync(
+        ReceptionistSaveRequest request, string? actor, CancellationToken ct = default);
+
+    Task<Result<bool>> UpdateAsync(
+        int id, ReceptionistSaveRequest request, string? actor, CancellationToken ct = default);
+
+    /// <summary>Removes a receptionist. Refused once payments exist against them.</summary>
+    Task<Result<bool>> DeleteAsync(int id, CancellationToken ct = default);
+
+    /// <summary>Records or corrects one month's payment.</summary>
+    Task<Result<int>> RecordPaymentAsync(
+        ReceptionistPaymentRequest request, string? actor, CancellationToken ct = default);
+
+    Task<Result<IReadOnlyList<ReceptionistPaymentDto>>> GetPaymentsAsync(
+        int receptionistId, DateOnly? from, DateOnly? to, CancellationToken ct = default);
+
+    Task<Result<bool>> DeletePaymentAsync(int paymentId, CancellationToken ct = default);
+
+    /// <summary>Receptionist pay by branch and month.</summary>
+    Task<Result<ReceptionistReportDto>> GetReportAsync(
+        ReceptionistReportQuery query, CancellationToken ct = default);
+
+    /// <summary>
+    /// Leave taken against entitlement for every active receptionist in one
+    /// period, plus whatever deduction decision an Admin has already recorded
+    /// for that period.
+    /// </summary>
+    Task<Result<ReceptionistLeaveReportDto>> GetLeaveReportAsync(
+        ReceptionistLeaveReportQuery query, CancellationToken ct = default);
+
+    /// <summary>Records (or updates) the Admin's deduction decision for one receptionist's period.</summary>
+    Task<Result<bool>> SetLeaveDeductionAsync(
+        ReceptionistLeaveDeductionRequest request, string? actor, CancellationToken ct = default);
+}
+
 /* ==================================================== leave & deduction */
 
 /// <summary>
@@ -252,46 +294,4 @@ public class ReceptionistLeaveDeductionRequestValidator : AbstractValidator<Rece
 
         RuleFor(x => x.Notes).MaximumLength(300);
     }
-}
-
-/* ==================================================================== service */
-
-public interface IReceptionistService
-{
-    Task<PagedResult<ReceptionistListItemDto>> GetListAsync(
-        ReceptionistQuery query, CancellationToken ct = default);
-
-    Task<Result<int>> CreateAsync(
-        ReceptionistSaveRequest request, string? actor, CancellationToken ct = default);
-
-    Task<Result<bool>> UpdateAsync(
-        int id, ReceptionistSaveRequest request, string? actor, CancellationToken ct = default);
-
-    /// <summary>Removes a receptionist. Refused once payments exist against them.</summary>
-    Task<Result<bool>> DeleteAsync(int id, CancellationToken ct = default);
-
-    /// <summary>Records or corrects one month's payment.</summary>
-    Task<Result<int>> RecordPaymentAsync(
-        ReceptionistPaymentRequest request, string? actor, CancellationToken ct = default);
-
-    Task<Result<IReadOnlyList<ReceptionistPaymentDto>>> GetPaymentsAsync(
-        int receptionistId, DateOnly? from, DateOnly? to, CancellationToken ct = default);
-
-    Task<Result<bool>> DeletePaymentAsync(int paymentId, CancellationToken ct = default);
-
-    /// <summary>Receptionist pay by branch and month.</summary>
-    Task<Result<ReceptionistReportDto>> GetReportAsync(
-        ReceptionistReportQuery query, CancellationToken ct = default);
-
-    /// <summary>
-    /// Leave taken against entitlement for every active receptionist in one
-    /// period, plus whatever deduction decision an Admin has already recorded
-    /// for that period.
-    /// </summary>
-    Task<Result<ReceptionistLeaveReportDto>> GetLeaveReportAsync(
-        ReceptionistLeaveReportQuery query, CancellationToken ct = default);
-
-    /// <summary>Records (or updates) the Admin's deduction decision for one receptionist's period.</summary>
-    Task<Result<bool>> SetLeaveDeductionAsync(
-        ReceptionistLeaveDeductionRequest request, string? actor, CancellationToken ct = default);
 }

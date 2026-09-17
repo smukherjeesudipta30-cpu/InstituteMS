@@ -109,6 +109,16 @@ monthly-fee row and earns no teacher percentage. See
 `db/migrations/051_admission_fee_part_payment.sql` — whose backfill marks all
 960 existing students paid in full, because that is what those records mean.
 
+**Editing a student no longer erases their personal email.** The edit form
+never loaded the personal email (the row it read from did not carry it) and so
+posted it back empty on every save, wiping it silently — and that address is
+where fee receipts and password-reset codes go. Two real students had already
+lost theirs (SWAGATA ROY, SUBHAM HALDER); both were restored from the address the
+admission welcome email was actually delivered to. Fixed at three layers: the row
+now carries the field, the form loads it, and the server treats a request that
+does not send the field as "keep what is there" rather than "clear it" — a
+deliberate clear is an empty string.
+
 **A wrongly recorded admission amount can be corrected.** If 250 was typed at
 admission when 750 was actually taken, the office edits the student: the
 admission fee to 750 and "Admission fee received" to 750, and nothing is left
