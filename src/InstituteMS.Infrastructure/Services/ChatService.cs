@@ -1042,6 +1042,74 @@ public class ChatService : IChatService
         await PushFcmAsync(recipients, title, body, ct);
     }
 
+    /// <summary>
+    /// The call-specific push. Unlike a message push it carries the call's
+    /// fields as <c>data</c>, so the app opened from the notification rejoins
+    /// the ringing call instead of just showing the chat list, and it targets
+    /// the calls channel so a call rings differently from a message. FCM only —
+    /// a browser tab that is closed cannot answer a WebRTC call anyway.
+    /// </summary>
+    public async Task NotifyCallPushAsync(
+        string targetEmail, string fromEmail, string fromName, string callId, string kind,
+        CancellationToken ct = default)
+    {
+        if (!EnsureFirebaseInitialized()) return;
+        if (string.IsNullOrWhiteSpace(targetEmail)) return;
+
+        var subscriptions = await _db.ChatFcmSubscriptions
+            .Where(s => s.Email == targetEmail)
+            .ToListAsync(ct);
+
+        if (subscriptions.Count == 0) return;
+
+        var messaging = FirebaseMessaging.DefaultInstance;
+        var stale = new List<ChatFcmSubscription>();
+        var label = kind == "video" ? "Incoming video call" : "Incoming call";
+
+        foreach (var sub in subscriptions)
+        {
+            try
+            {
+                await messaging.SendAsync(new Message
+                {
+                    Token = sub.Token,
+                    Notification = new Notification { Title = label, Body = fromName },
+                    Data = new Dictionary<string, string>
+                    {
+                        ["type"] = "call",
+                        ["callId"] = callId,
+                        ["fromEmail"] = fromEmail,
+                        ["fromName"] = fromName,
+                        ["kind"] = kind
+                    },
+                    Android = new AndroidConfig
+                    {
+                        Priority = Priority.High,
+                        Notification = new AndroidNotification
+                        {
+                            ChannelId = "incoming_calls_v2",
+                            DefaultVibrateTimings = true,
+                            DefaultSound = true,
+                            Priority = NotificationPriority.MAX
+                        }
+                    }
+                }, ct);
+            }
+            catch (FirebaseMessagingException ex) when (
+                ex.MessagingErrorCode is MessagingErrorCode.Unregistered or MessagingErrorCode.InvalidArgument)
+            {
+                stale.Add(sub);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Chat FCM call push failed for {Email}", sub.Email);
+            }
+        }
+
+        if (stale.Count > 0) _db.ChatFcmSubscriptions.RemoveRange(stale);
+        await _db.SaveChangesAsync(ct);
+    }
+
     private async Task PushWebAsync(
         IReadOnlyList<string> recipients, string title, string body, CancellationToken ct)
     {
@@ -1114,7 +1182,26 @@ public class ChatService : IChatService
                 await messaging.SendAsync(new Message
                 {
                     Token = sub.Token,
-                    Notification = new Notification { Title = title, Body = body }
+                    Notification = new Notification { Title = title, Body = body },
+
+                    // From Android 8 the phone vibrates for a notification only
+                    // if its channel says so, and only a high-priority message
+                    // gets the heads-up banner and the buzz while the screen is
+                    // off. ChannelId must match the one the app creates
+                    // (PushNotificationsService.CHANNEL_ID); DefaultVibrateTimings
+                    // covers the Android 7 and older phones where the payload,
+                    // not a channel, still decides.
+                    Android = new AndroidConfig
+                    {
+                        Priority = Priority.High,
+                        Notification = new AndroidNotification
+                        {
+                            ChannelId = "chat_messages_v2",
+                            DefaultVibrateTimings = true,
+                            DefaultSound = true,
+                            Priority = NotificationPriority.HIGH
+                        }
+                    }
                 }, ct);
             }
             catch (FirebaseMessagingException ex) when (

@@ -6,6 +6,7 @@ using InstituteMS.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace InstituteMS.Api.Hubs;
 
@@ -22,13 +23,16 @@ public class ChatHub : Hub
     private readonly IChatPresenceTracker _presence;
     private readonly IChatNotifier _notifier;
     private readonly IChatService _chat;
+    private readonly ILogger<ChatHub> _logger;
 
-    public ChatHub(AppDbContext db, IChatPresenceTracker presence, IChatNotifier notifier, IChatService chat)
+    public ChatHub(AppDbContext db, IChatPresenceTracker presence, IChatNotifier notifier, IChatService chat,
+        ILogger<ChatHub> logger)
     {
         _db = db;
         _presence = presence;
         _notifier = notifier;
         _chat = chat;
+        _logger = logger;
     }
 
     /// <summary>
@@ -169,8 +173,22 @@ public class ChatHub : Hub
         if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(targetEmail)) return;
         if (!await _chat.CanCallAsync(email, targetEmail)) return;
 
+        // The live path — reaches the callee only if their app is open and
+        // connected right now.
         await Clients.Group(PersonalGroup(targetEmail))
             .SendAsync("IncomingCall", email, fromName, callId, kind);
+
+        // The closed-app path — a device push carrying the same call so a phone
+        // whose app is shut still rings and can answer. Best-effort: a failed
+        // push must never break the call for a callee who is in fact connected.
+        try
+        {
+            await _chat.NotifyCallPushAsync(targetEmail, email, fromName, callId, kind);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Call push notification failed for {Target}", targetEmail);
+        }
     }
 
     [Authorize]

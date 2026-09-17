@@ -264,6 +264,17 @@ public interface IChatService
     Task<Result<ChatPresenceSnapshotDto>> GetOnlinePresenceAsync(
         string email, CancellationToken ct = default);
 
+    /// <summary>
+    /// Sends a device push for an incoming call, so a phone whose app is closed
+    /// still rings — the live SignalR "IncomingCall" reaches only a connected
+    /// app. Carries the call's own fields as data so the app, opened from the
+    /// notification, can join the very call that is still ringing rather than
+    /// just landing on the chat list.
+    /// </summary>
+    Task NotifyCallPushAsync(
+        string targetEmail, string fromEmail, string fromName, string callId, string kind,
+        CancellationToken ct = default);
+
     /// <summary>Registers (or re-registers) this browser to receive a push notification for a new chat message.</summary>
     Task<Result<bool>> SubscribePushAsync(
         string email, ChatPushSubscribeRequest request, CancellationToken ct = default);
