@@ -359,7 +359,7 @@ public class ChatService : IChatService
 
         var everyone = await _db.Users.AsNoTracking()
             .Where(u => u.IsActive && u.Email != null && u.Email != me.Email)
-            .Select(u => new { u.Email, u.Name, u.Roles })
+            .Select(u => new { u.Email, u.Name, u.Roles, u.LastSeenOn })
             .ToListAsync(ct);
 
         var entries = everyone
@@ -379,10 +379,11 @@ public class ChatService : IChatService
                 u.Email,
                 DisplayName = u.Name ?? u.Email!,
                 Roles = UserRoles.Split(u.Roles),
-                Primary = UserRoles.Primary(u.Roles)
+                Primary = UserRoles.Primary(u.Roles),
+                u.LastSeenOn
             })
             .Where(u => u.Roles.Length > 0 && CanMessage(me.Roles, u.Roles))
-            .Select(u => new ChatDirectoryEntryDto(u.Email!, u.DisplayName, u.Primary))
+            .Select(u => new ChatDirectoryEntryDto(u.Email!, u.DisplayName, u.Primary, u.LastSeenOn))
             .OrderBy(u => u.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -931,7 +932,10 @@ public class ChatService : IChatService
     public Task<Result<ChatPresenceSnapshotDto>> GetOnlinePresenceAsync(
         string email, CancellationToken ct = default) =>
         Task.FromResult(Result<ChatPresenceSnapshotDto>.Success(
-            new ChatPresenceSnapshotDto(_presence.OnlineEmails.ToList(), _presence.AwayEmails.ToList())));
+            new ChatPresenceSnapshotDto(
+                _presence.OnlineEmails.ToList(),
+                _presence.AwayEmails.ToList(),
+                _presence.InCallEmails.ToList())));
 
     /* ------------------------------------------------------ push notify */
 

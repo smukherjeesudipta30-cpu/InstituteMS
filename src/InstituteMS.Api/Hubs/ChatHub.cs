@@ -68,6 +68,8 @@ public class ChatHub : Hub
             foreach (var id in conversationIds)
                 await Groups.AddToGroupAsync(Context.ConnectionId, ConversationGroup(id));
 
+            await TouchLastSeenAsync(email);
+
             // Only the person's FIRST live connection is a real state change —
             // a second tab opening must not re-announce someone already online.
             if (_presence.MarkConnected(email))
@@ -75,6 +77,15 @@ public class ChatHub : Hub
         }
 
         await base.OnConnectedAsync();
+    }
+
+    /// <summary>Stamps the moment this person's chat connection was last live, for "last seen …".</summary>
+    private async Task TouchLastSeenAsync(string email)
+    {
+        var now = DateTime.Now;
+        await _db.Users
+            .Where(u => u.Email == email)
+            .ExecuteUpdateAsync(s => s.SetProperty(u => u.LastSeenOn, now));
     }
 
     /// <summary>
@@ -87,7 +98,14 @@ public class ChatHub : Hub
         var email = Context.User?.FindFirstValue(ClaimTypes.Email);
 
         if (!string.IsNullOrWhiteSpace(email) && _presence.MarkDisconnected(email))
-            await _notifier.PresenceChangedAsync(email, PresenceOffline);
+        {
+            var now = DateTime.Now;
+            await _db.Users
+                .Where(u => u.Email == email)
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.LastSeenOn, now));
+
+            await _notifier.PresenceChangedAsync(email, PresenceOffline, now.ToString("o"));
+        }
 
         await base.OnDisconnectedAsync(exception);
     }
@@ -106,6 +124,36 @@ public class ChatHub : Hub
 
         if (_presence.SetAway(email, away))
             await _notifier.PresenceChangedAsync(email, away ? PresenceAway : PresenceOnline);
+    }
+
+    /// <summary>
+    /// The person is (or is no longer) on a call — a courtesy state on top of
+    /// online, so a third person deciding whether to message or ring them sees
+    /// they are busy. Each side of a call reports its own; a peer-to-peer call
+    /// has no server record of who is talking to whom, only that they are.
+    /// </summary>
+    [Authorize]
+    public async Task SetCallStatus(bool inCall)
+    {
+        var email = Context.User?.FindFirstValue(ClaimTypes.Email);
+        if (string.IsNullOrWhiteSpace(email)) return;
+
+        if (_presence.SetInCall(email, inCall))
+            await _notifier.PresenceChangedAsync(email, inCall ? PresenceOnCall : PresenceOnline);
+    }
+
+    /// <summary>
+    /// Relays "X is typing" to the one person on the other end of a direct chat.
+    /// Ephemeral and unstored — the client shows it for a moment and lets it
+    /// lapse, so nothing needs a matching "stopped typing" to be reliable.
+    /// </summary>
+    [Authorize]
+    public async Task Typing(string targetEmail, int conversationId)
+    {
+        var email = Context.User?.FindFirstValue(ClaimTypes.Email);
+        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(targetEmail)) return;
+
+        await Clients.Group(PersonalGroup(targetEmail)).SendAsync("Typing", email, conversationId);
     }
 
     /// <summary>
@@ -227,4 +275,5 @@ public class ChatHub : Hub
     private const string PresenceOnline = "online";
     private const string PresenceAway = "away";
     private const string PresenceOffline = "offline";
+    private const string PresenceOnCall = "incall";
 }

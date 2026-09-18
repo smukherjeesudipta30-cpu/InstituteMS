@@ -6,7 +6,7 @@ namespace InstituteMS.Application.Chat;
 /* ================================================================ shared */
 
 /// <summary>Someone the signed-in user is allowed to start a direct chat with.</summary>
-public record ChatDirectoryEntryDto(string Email, string DisplayName, string Role);
+public record ChatDirectoryEntryDto(string Email, string DisplayName, string Role, DateTime? LastSeenOn = null);
 
 /// <summary>What a browser hands back from `PushManager.subscribe()`, flattened.</summary>
 public record ChatPushSubscribeRequest(string Endpoint, string P256dh, string Auth);
@@ -306,7 +306,9 @@ public interface IChatService
 /// a state a live connection is in, not an alternative to having one.
 /// </summary>
 public record ChatPresenceSnapshotDto(
-    IReadOnlyList<string> OnlineEmails, IReadOnlyList<string> AwayEmails);
+    IReadOnlyList<string> OnlineEmails,
+    IReadOnlyList<string> AwayEmails,
+    IReadOnlyList<string> InCallEmails);
 
 /// <summary>
 /// Who currently has the app open. In-memory and per-process by design: presence
@@ -341,10 +343,21 @@ public interface IChatPresenceTracker
     /// </summary>
     bool SetAway(string email, bool away);
 
+    /// <summary>
+    /// Records whether the person is on a call right now. Returns true only when
+    /// this actually changed their call flag while they are still online — so a
+    /// third party's screen updates once, not on every repeat. Like away, it
+    /// only means anything on top of a live connection.
+    /// </summary>
+    bool SetInCall(string email, bool inCall);
+
     IReadOnlyCollection<string> OnlineEmails { get; }
 
     /// <summary>Always a subset of <see cref="OnlineEmails"/>.</summary>
     IReadOnlyCollection<string> AwayEmails { get; }
+
+    /// <summary>Always a subset of <see cref="OnlineEmails"/>.</summary>
+    IReadOnlyCollection<string> InCallEmails { get; }
 }
 
 /// <summary>
@@ -371,10 +384,12 @@ public interface IChatNotifier
     /// <summary>
     /// Someone's presence changed — tells every connected client so it can
     /// update a presence dot. <paramref name="status"/> is one of "online",
-    /// "away" or "offline"; a plain bool stopped being enough once away
-    /// became a third state rather than a variant of online.
+    /// "away", "incall" or "offline"; a plain bool stopped being enough once
+    /// away became a third state rather than a variant of online.
+    /// <paramref name="lastSeenOn"/> is set (round-trip ISO string) only when
+    /// going offline, so the dot can become a "last seen …" line.
     /// </summary>
-    Task PresenceChangedAsync(string email, string status, CancellationToken ct = default);
+    Task PresenceChangedAsync(string email, string status, string? lastSeenOn = null, CancellationToken ct = default);
 
     /// <summary>
     /// Someone read up to a point in a conversation — tells everyone else

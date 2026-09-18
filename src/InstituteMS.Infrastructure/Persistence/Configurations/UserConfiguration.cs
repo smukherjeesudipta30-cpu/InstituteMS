@@ -29,6 +29,7 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         b.Property(x => x.FailedLoginCount).HasColumnName("FailedLoginCount");
         b.Property(x => x.LockoutEnd).HasColumnName("LockoutEnd");
         b.Property(x => x.LastLoginOn).HasColumnName("LastLoginOn");
+        b.Property(x => x.LastSeenOn).HasColumnName("LastSeenOn");
         b.Property(x => x.PasswordResetCodeHash).HasColumnName("PasswordResetCodeHash").HasMaxLength(255);
         b.Property(x => x.PasswordResetCodeExpiry).HasColumnName("PasswordResetCodeExpiry");
         b.Property(x => x.PasswordResetAttempts).HasColumnName("PasswordResetAttempts");

@@ -32,6 +32,14 @@ public class User
     public DateTime? LastLoginOn { get; set; }
 
     /// <summary>
+    /// When this person's chat connection was last live — updated as they
+    /// connect and again as they disconnect, so an offline contact can be shown
+    /// as "last seen …". Distinct from <see cref="LastLoginOn"/>, which is the
+    /// sign-in event, not chat activity.
+    /// </summary>
+    public DateTime? LastSeenOn { get; set; }
+
+    /// <summary>
     /// Hashed the same way as <see cref="PasswordHash"/>, not stored in clear — the
     /// six-digit code emailed by "forgot password". Cleared the moment it is spent
     /// or replaced by a fresh request.

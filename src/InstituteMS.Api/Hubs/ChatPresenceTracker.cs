@@ -15,6 +15,9 @@ public class ChatPresenceTracker : IChatPresenceTracker
     /// <summary>Only ever holds an entry for someone also present in <see cref="_connectionsByEmail"/>.</summary>
     private readonly ConcurrentDictionary<string, bool> _awayByEmail = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Only ever holds an entry for someone also present in <see cref="_connectionsByEmail"/>.</summary>
+    private readonly ConcurrentDictionary<string, bool> _inCallByEmail = new(StringComparer.OrdinalIgnoreCase);
+
     public bool MarkConnected(string email)
     {
         var newCount = _connectionsByEmail.AddOrUpdate(email, 1, (_, count) => count + 1);
@@ -31,6 +34,7 @@ public class ChatPresenceTracker : IChatPresenceTracker
         {
             _connectionsByEmail.TryRemove(email, out _);
             _awayByEmail.TryRemove(email, out _);
+            _inCallByEmail.TryRemove(email, out _);
             return true;
         }
 
@@ -53,7 +57,23 @@ public class ChatPresenceTracker : IChatPresenceTracker
         return _awayByEmail.TryRemove(email, out _);
     }
 
+    public bool SetInCall(string email, bool inCall)
+    {
+        if (!_connectionsByEmail.ContainsKey(email)) return false;
+
+        if (inCall)
+        {
+            var changed = true;
+            _inCallByEmail.AddOrUpdate(email, _ => true, (_, was) => { changed = !was; return true; });
+            return changed;
+        }
+
+        return _inCallByEmail.TryRemove(email, out _);
+    }
+
     public IReadOnlyCollection<string> OnlineEmails => _connectionsByEmail.Keys.ToList();
 
     public IReadOnlyCollection<string> AwayEmails => _awayByEmail.Keys.ToList();
+
+    public IReadOnlyCollection<string> InCallEmails => _inCallByEmail.Keys.ToList();
 }

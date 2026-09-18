@@ -24,8 +24,8 @@ public class ChatNotifier : IChatNotifier
     public Task GuestInboxChangedAsync(CancellationToken ct = default) =>
         _hub.Clients.Group(ChatHub.GuestInboxGroup).SendAsync("GuestInboxChanged", cancellationToken: ct);
 
-    public Task PresenceChangedAsync(string email, string status, CancellationToken ct = default) =>
-        _hub.Clients.Group(ChatHub.PresenceGroup).SendAsync("PresenceChanged", email, status, ct);
+    public Task PresenceChangedAsync(string email, string status, string? lastSeenOn = null, CancellationToken ct = default) =>
+        _hub.Clients.Group(ChatHub.PresenceGroup).SendAsync("PresenceChanged", email, status, lastSeenOn, ct);
 
     public Task MessagesReadAsync(int conversationId, string readerEmail, int lastReadMessageId, CancellationToken ct = default) =>
         _hub.Clients.Group(ChatHub.ConversationGroup(conversationId))
