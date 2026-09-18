@@ -366,6 +366,9 @@ public class ReceptionistService : IReceptionistService
         _ => (MonthStart(date), new DateOnly(date.Year, date.Month, DateTime.DaysInMonth(date.Year, date.Month)))
     };
 
+    /// <summary>The average length of a month, for prorating a monthly figure across an arbitrary range.</summary>
+    private const decimal DaysPerMonth = 30.44m;
+
     /// <summary>Monday-start week containing the given date.</summary>
     private static (DateOnly Start, DateOnly End) WeekRange(DateOnly date)
     {
@@ -380,13 +383,17 @@ public class ReceptionistService : IReceptionistService
     /// whatever period the report was asked for, on a straight months-per-year
     /// basis — the policy only ever states a monthly figure.
     /// </summary>
-    private static decimal EntitlementForPeriod(string periodType, int shiftsPerWeek)
+    private static decimal EntitlementForPeriod(string periodType, int shiftsPerWeek, DateOnly start, DateOnly end)
     {
         var monthly = ReceptionistLeavePolicy.MonthlyEntitlementDays(shiftsPerWeek);
         return periodType switch
         {
             "Weekly" => Math.Round(monthly * 12m / 52m, 2),
             "Yearly" => monthly * 12m,
+            // A hand-picked range is prorated by how many days it spans, so a
+            // fortnight earns about half a month's leave and a full month earns
+            // a month's.
+            "Custom" => Math.Round(monthly * (end.DayNumber - start.DayNumber + 1) / DaysPerMonth, 2),
             _ => monthly
         };
     }
@@ -401,9 +408,22 @@ public class ReceptionistService : IReceptionistService
     public async Task<Result<ReceptionistLeaveReportDto>> GetLeaveReportAsync(
         ReceptionistLeaveReportQuery query, CancellationToken ct = default)
     {
-        var periodType = query.PeriodType is "Weekly" or "Yearly" ? query.PeriodType : "Monthly";
+        var periodType = query.PeriodType is "Weekly" or "Yearly" or "Custom" ? query.PeriodType : "Monthly";
         var anchor = query.Date == default ? DateOnly.FromDateTime(DateTime.Today) : query.Date;
-        var (start, end) = PeriodRange(periodType, anchor);
+
+        DateOnly start, end;
+        if (periodType == "Custom")
+        {
+            // A hand-picked range; fall back to the month around the anchor if
+            // one end is missing, and swap if they came in reversed.
+            start = query.From ?? MonthStart(anchor);
+            end = query.To ?? new DateOnly(anchor.Year, anchor.Month, DateTime.DaysInMonth(anchor.Year, anchor.Month));
+            if (end < start) (start, end) = (end, start);
+        }
+        else
+        {
+            (start, end) = PeriodRange(periodType, anchor);
+        }
 
         // A day that hasn't happened yet has no scan and no roster outcome either
         // way — counting it as "leave" would flag every receptionist as over
@@ -430,7 +450,17 @@ public class ReceptionistService : IReceptionistService
             .Select(a => new { a.StaffId, a.DayOfWeek })
             .ToListAsync(ct);
 
-        var assignmentsByReceptionist = assignments
+        // Two different views of the same rota. "Shifts per week" counts every
+        // shift assigned, so a day worked morning and evening counts twice — it
+        // is what the entitlement tier is chosen by. Leave, though, is whether
+        // the person came in on a rostered day at all, so it is measured against
+        // the distinct days: a day off is one day of leave however many shifts
+        // it held.
+        var shiftCountByReceptionist = assignments
+            .GroupBy(a => a.StaffId)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var rosteredDaysByReceptionist = assignments
             .GroupBy(a => a.StaffId)
             .ToDictionary(g => g.Key, g => g.Select(a => a.DayOfWeek).Distinct().ToHashSet());
 
@@ -461,9 +491,9 @@ public class ReceptionistService : IReceptionistService
 
         foreach (var r in receptionists)
         {
-            var rosteredDaysOfWeek = assignmentsByReceptionist.TryGetValue(r.Id, out var d)
+            var rosteredDaysOfWeek = rosteredDaysByReceptionist.TryGetValue(r.Id, out var d)
                 ? d : new HashSet<byte>();
-            var shiftsPerWeek = rosteredDaysOfWeek.Count;
+            var shiftsPerWeek = shiftCountByReceptionist.TryGetValue(r.Id, out var sc) ? sc : 0;
 
             // Nobody rostered yet — nothing to compute leave against for this period.
             if (shiftsPerWeek == 0) continue;
@@ -480,7 +510,7 @@ public class ReceptionistService : IReceptionistService
             }
 
             var taken = Math.Max(0, rosteredCount - presentCount);
-            var entitlement = EntitlementForPeriod(periodType, shiftsPerWeek);
+            var entitlement = EntitlementForPeriod(periodType, shiftsPerWeek, start, end);
 
             existingDecisions.TryGetValue(r.Id, out var decision);
 

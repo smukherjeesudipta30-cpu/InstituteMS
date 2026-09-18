@@ -109,6 +109,7 @@ public class ExamScheduleConfiguration : IEntityTypeConfiguration<ExamSchedule>
         b.Property(x => x.ExamId).HasColumnName("ExamId");
         b.Property(x => x.StudentRegistrationId).HasColumnName("StuRegId").HasMaxLength(50).IsRequired();
         b.Property(x => x.ScheduledOn).HasColumnName("ScheduledOn");
+        b.Property(x => x.Mode).HasColumnName("Mode").HasMaxLength(10).IsRequired().HasDefaultValue("Online");
 
         // char(6): held as text so a leading zero survives.
         b.Property(x => x.AccessCode).HasColumnName("AccessCode").HasMaxLength(6).IsFixedLength();

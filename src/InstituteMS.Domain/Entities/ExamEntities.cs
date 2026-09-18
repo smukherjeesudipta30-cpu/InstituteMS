@@ -185,8 +185,18 @@ public class ExamSchedule
     public DateTime ScheduledOn { get; set; }
 
     /// <summary>
+    /// How a theory paper is sat: <c>Online</c> — the student takes it in the
+    /// app against the question bank, exactly as before — or <c>Offline</c> — it
+    /// is written on paper in the room and a receptionist enters the mark by
+    /// hand afterwards. Chosen per student when the theory exam is scheduled.
+    /// Always <c>Online</c> for a practical, which has no online form anyway.
+    /// </summary>
+    public string Mode { get; set; } = "Online";
+
+    /// <summary>
     /// Six digits, held as text so a leading zero survives. Null on a practical,
-    /// which is examined in the room and needs no code.
+    /// which is examined in the room and needs no code — and null on an offline
+    /// theory paper too, which is sat on paper rather than behind a code.
     /// </summary>
     public string? AccessCode { get; set; }
 

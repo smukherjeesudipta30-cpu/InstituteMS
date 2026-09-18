@@ -388,7 +388,13 @@ public record ExamScheduleRowDto(
     /// submitted the Theory paper of the same course and term — the Practical date
     /// cannot be set for them until then.
     /// </summary>
-    DateTime? TheorySubmittedOn = null);
+    DateTime? TheorySubmittedOn = null,
+
+    /// <summary>
+    /// How this student's theory paper is sat — <c>Online</c> or <c>Offline</c>.
+    /// Always <c>Online</c> for a practical.
+    /// </summary>
+    string Mode = "Online");
 
 /// <summary>Schedules one student, or corrects a sitting already set.</summary>
 public record ExamScheduleSaveRequest
@@ -396,6 +402,13 @@ public record ExamScheduleSaveRequest
     public int ExamId { get; init; }
     public string RegistrationId { get; init; } = string.Empty;
     public DateTime ScheduledOn { get; init; }
+
+    /// <summary>
+    /// <c>Online</c> (the app, against the question bank) or <c>Offline</c>
+    /// (written on paper, marked by hand). Read only for a theory paper; a
+    /// practical is always in the room.
+    /// </summary>
+    public string Mode { get; init; } = "Online";
 }
 
 public class ExamScheduleSaveRequestValidator : AbstractValidator<ExamScheduleSaveRequest>
@@ -410,6 +423,10 @@ public class ExamScheduleSaveRequestValidator : AbstractValidator<ExamScheduleSa
 
         RuleFor(x => x.ScheduledOn)
             .NotEmpty().WithMessage("Set the date and time the student sits the paper.");
+
+        RuleFor(x => x.Mode)
+            .Must(m => m is "Online" or "Offline")
+            .WithMessage("Mode must be Online or Offline.");
     }
 }
 

@@ -953,9 +953,12 @@ public class ExamService : IExamService
             return Result<IReadOnlyList<PracticalRosterRowDto>>.Failure(
                 "That exam paper no longer exists.", ResultStatus.NotFound);
 
-        if (!string.Equals(paper.PaperType, "Practical", StringComparison.OrdinalIgnoreCase))
+        var isPractical = string.Equals(paper.PaperType, "Practical", StringComparison.OrdinalIgnoreCase);
+        var isTheory = string.Equals(paper.PaperType, "Theory", StringComparison.OrdinalIgnoreCase);
+
+        if (!isPractical && !isTheory)
             return Result<IReadOnlyList<PracticalRosterRowDto>>.Failure(
-                "Marks are only entered by hand for a practical paper. A theory paper is marked by the portal.");
+                "Marks are only entered by hand for a practical or an offline theory paper.");
 
         var marks = await _db.ExamAttempts
             .AsNoTracking()
@@ -965,24 +968,40 @@ public class ExamService : IExamService
 
         var scheduledHere = await _db.ExamSchedules.AsNoTracking()
             .Where(s => s.ExamId == examId)
-            .Select(s => s.StudentRegistrationId)
+            .Select(s => new { s.StudentRegistrationId, s.Mode })
             .ToListAsync(ct);
 
-        // Enrolled students, plus anyone already marked or scheduled on this paper —
-        // a mark still has to be correctable after the student completes the course.
-        var pinned = marks.Select(m => m.StudentRegistrationId).Concat(scheduledHere).ToList();
+        // On a theory paper the hand sheet is only the students sitting it
+        // offline — the online ones are marked by the portal — plus anyone
+        // already marked, so a correction survives after the course completes.
+        HashSet<string>? offlineOnly = null;
+        if (isTheory)
+        {
+            offlineOnly = scheduledHere
+                .Where(s => string.Equals(s.Mode, "Offline", StringComparison.OrdinalIgnoreCase))
+                .Select(s => s.StudentRegistrationId)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var m in marks) offlineOnly.Add(m.StudentRegistrationId);
+        }
+
+        // Enrolled students, plus anyone already marked or scheduled on this paper.
+        var pinned = marks.Select(m => m.StudentRegistrationId)
+            .Concat(scheduledHere.Select(s => s.StudentRegistrationId))
+            .ToList();
 
         var students = await StudentsForPaperAsync(paper, ct, pinned);
 
-        var rows = students.Select(s =>
-        {
-            var mark = marks.FirstOrDefault(m =>
-                string.Equals(m.StudentRegistrationId, s.RegistrationId, StringComparison.OrdinalIgnoreCase));
+        var rows = students
+            .Where(s => offlineOnly is null || offlineOnly.Contains(s.RegistrationId!))
+            .Select(s =>
+            {
+                var mark = marks.FirstOrDefault(m =>
+                    string.Equals(m.StudentRegistrationId, s.RegistrationId, StringComparison.OrdinalIgnoreCase));
 
-            return new PracticalRosterRowDto(
-                s.RegistrationId!, s.Name, mark?.Score, paper.TotalMarks,
-                mark?.SubmittedOn, mark?.EnteredBy);
-        }).ToList();
+                return new PracticalRosterRowDto(
+                    s.RegistrationId!, s.Name, mark?.Score, paper.TotalMarks,
+                    mark?.SubmittedOn, mark?.EnteredBy);
+            }).ToList();
 
         return Result<IReadOnlyList<PracticalRosterRowDto>>.Success(rows);
     }
@@ -1001,9 +1020,12 @@ public class ExamService : IExamService
         if (paper is null)
             return Result<bool>.Failure("That exam paper no longer exists.", ResultStatus.NotFound);
 
-        if (!string.Equals(paper.PaperType, "Practical", StringComparison.OrdinalIgnoreCase))
+        var isPractical = string.Equals(paper.PaperType, "Practical", StringComparison.OrdinalIgnoreCase);
+        var isTheory = string.Equals(paper.PaperType, "Theory", StringComparison.OrdinalIgnoreCase);
+
+        if (!isPractical && !isTheory)
             return Result<bool>.Failure(
-                "Only a practical paper is marked by hand. A theory paper is marked by the portal.");
+                "Only a practical or an offline theory paper is marked by hand.");
 
         if (request.Score > paper.TotalMarks)
             return Result<bool>.Failure(
@@ -1020,6 +1042,22 @@ public class ExamService : IExamService
         if (student.CourseId != paper.CourseId)
             return Result<bool>.Failure(
                 "That student is not enrolled on this paper's course.");
+
+        // A theory paper is hand-marked only for a student sitting it offline. An
+        // online theory paper is the portal's to mark — a hand mark there would
+        // quietly overwrite, or pre-empt, the real sitting.
+        if (isTheory)
+        {
+            var offlineHere = await _db.ExamSchedules.AsNoTracking()
+                .AnyAsync(s => s.ExamId == paper.ExamId
+                              && s.StudentRegistrationId == regId
+                              && s.Mode == "Offline", ct);
+
+            if (!offlineHere)
+                return Result<bool>.Failure(
+                    $"{student.Name}'s theory paper is not scheduled as offline. " +
+                    "Schedule it offline first, or let the online sitting mark it.");
+        }
 
         var now = DateTime.Now;
 
@@ -1300,7 +1338,8 @@ public class ExamService : IExamService
                 schedule?.CodeIssuedOn, schedule?.CodeIssuedBy,
                 attempt is not null, attempt?.SubmittedOn,
                 s.IsActive == true, s.IsComplete == true,
-                theorySubmitted is null ? null : (theoryOn == default ? null : theoryOn));
+                theorySubmitted is null ? null : (theoryOn == default ? null : theoryOn),
+                Mode: schedule?.Mode ?? "Online");
         }).ToList();
 
         return Result<IReadOnlyList<ExamScheduleRowDto>>.Success(rows);
@@ -1376,6 +1415,15 @@ public class ExamService : IExamService
 
         var isTheory = string.Equals(paper.PaperType, "Theory", StringComparison.OrdinalIgnoreCase);
 
+        // Offline is a theory choice only: a practical is always sat in the room,
+        // and an online code only means anything for a paper taken in the app.
+        var mode = isTheory && string.Equals(request.Mode, "Offline", StringComparison.OrdinalIgnoreCase)
+            ? "Offline" : "Online";
+
+        // An offline theory paper is written on paper and marked by hand — it
+        // needs no online access code, the same as a practical.
+        var needsCode = isTheory && mode == "Online";
+
         // The Practical date is the office's call to make once Theory is behind
         // the student, not before — sitting a practical for a paper someone has
         // not yet been examined on in theory is not a sequence this puts a date on.
@@ -1406,10 +1454,11 @@ public class ExamService : IExamService
                 ExamId = paper.ExamId,
                 StudentRegistrationId = regId,
                 ScheduledOn = request.ScheduledOn,
-                // A practical is examined in the room, so it never needs a code.
-                AccessCode = isTheory ? NewAccessCode() : null,
-                CodeIssuedOn = isTheory ? now : null,
-                CodeIssuedBy = isTheory ? actor : null,
+                Mode = mode,
+                // Neither a practical nor an offline theory paper needs a code.
+                AccessCode = needsCode ? NewAccessCode() : null,
+                CodeIssuedOn = needsCode ? now : null,
+                CodeIssuedBy = needsCode ? actor : null,
                 CreatedBy = actor,
                 CreatedOn = now
             };
@@ -1419,12 +1468,20 @@ public class ExamService : IExamService
         else
         {
             schedule.ScheduledOn = request.ScheduledOn;
+            schedule.Mode = mode;
             schedule.ModifiedBy = actor;
             schedule.ModifiedOn = now;
 
-            // Re-scheduling keeps the code already printed on the admit card;
-            // regenerating it is a separate, deliberate act.
-            if (isTheory && string.IsNullOrWhiteSpace(schedule.AccessCode))
+            // Switching a theory sitting to offline retires a code that no longer
+            // applies; switching to online (re-)issues one. Re-scheduling within
+            // online keeps the code already printed on the admit card.
+            if (!needsCode)
+            {
+                schedule.AccessCode = null;
+                schedule.CodeIssuedOn = null;
+                schedule.CodeIssuedBy = null;
+            }
+            else if (string.IsNullOrWhiteSpace(schedule.AccessCode))
             {
                 schedule.AccessCode = NewAccessCode();
                 schedule.CodeIssuedOn = now;
@@ -1439,7 +1496,8 @@ public class ExamService : IExamService
             schedule.ScheduleId, schedule.ScheduledOn, schedule.AccessCode,
             schedule.CodeIssuedOn, schedule.CodeIssuedBy,
             attempt is not null, attempt?.SubmittedOn,
-            student.IsActive == true, student.IsComplete == true));
+            student.IsActive == true, student.IsComplete == true,
+            Mode: schedule.Mode));
     }
 
     /// <summary>
@@ -1624,7 +1682,8 @@ public class ExamService : IExamService
             schedule.ScheduleId, schedule.ScheduledOn, schedule.AccessCode,
             schedule.CodeIssuedOn, schedule.CodeIssuedBy,
             attempt is not null, attempt?.SubmittedOn,
-            student?.IsActive ?? false, student?.IsComplete ?? false));
+            student?.IsActive ?? false, student?.IsComplete ?? false,
+            Mode: schedule.Mode));
     }
 
     public async Task<Result<bool>> RemoveScheduleAsync(

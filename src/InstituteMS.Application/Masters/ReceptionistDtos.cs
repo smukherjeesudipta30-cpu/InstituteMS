@@ -228,15 +228,18 @@ public interface IReceptionistService
 /// </summary>
 public static class ReceptionistLeavePolicy
 {
-    /// <summary>Days of paid leave per month, by weekly shift count. Any other shift count carries no entitlement.</summary>
-    public static decimal MonthlyEntitlementDays(int shiftsPerWeek) => shiftsPerWeek switch
-    {
-        6 => 1.5m,
-        4 => 1m,
-        3 => 0.8m,
-        2 => 0.5m,
-        _ => 0m
-    };
+    /// <summary>
+    /// Days of paid leave per month, by weekly shift count. Banded rather than
+    /// exact: a shift count that falls between two named tiers takes the lower
+    /// one, so 5 shifts (above the 4 tier, below the 6) earns the 4-tier's one
+    /// day rather than nothing. Below the lowest tier there is no entitlement.
+    /// </summary>
+    public static decimal MonthlyEntitlementDays(int shiftsPerWeek) =>
+        shiftsPerWeek >= 6 ? 1.5m :
+        shiftsPerWeek >= 4 ? 1m :
+        shiftsPerWeek >= 3 ? 0.8m :
+        shiftsPerWeek >= 2 ? 0.5m :
+        0m;
 }
 
 public record ReceptionistLeaveReportLineDto(
@@ -260,11 +263,17 @@ public record ReceptionistLeaveReportDto(
 
 public class ReceptionistLeaveReportQuery
 {
-    /// <summary><c>Weekly</c>, <c>Monthly</c> or <c>Yearly</c>.</summary>
+    /// <summary><c>Weekly</c>, <c>Monthly</c>, <c>Yearly</c> or <c>Custom</c>.</summary>
     public string PeriodType { get; set; } = "Monthly";
 
-    /// <summary>Any date inside the period; normalised to the start of the week/month/year.</summary>
+    /// <summary>Any date inside the period; normalised to the start of the week/month/year. Ignored for Custom.</summary>
     public DateOnly Date { get; set; }
+
+    /// <summary>Custom range start (inclusive). Only read when <see cref="PeriodType"/> is Custom.</summary>
+    public DateOnly? From { get; set; }
+
+    /// <summary>Custom range end (inclusive). Only read when <see cref="PeriodType"/> is Custom.</summary>
+    public DateOnly? To { get; set; }
 
     public string? Branch { get; set; }
 }
