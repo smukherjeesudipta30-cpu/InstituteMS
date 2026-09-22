@@ -1,3 +1,4 @@
+using FluentValidation;
 using InstituteMS.Application.Common;
 using InstituteMS.Application.Fees;
 
@@ -419,10 +420,25 @@ public record TeacherDeductionDto(
     decimal DeductionAmount,
     string Reason);
 
-/// <summary>The admin's own switch for the missed-scan-out deduction.</summary>
-public record PayrollSettingsDto(bool MissedScanOutDeductionEnabled, string? ModifiedBy, DateTime? ModifiedOn);
+/// <summary>
+/// The admin's own switch for the missed-scan-out deduction, and the day of
+/// the month the receptionist pay cycle starts on (26 by default — the 26th
+/// to the 25th of the next month, not the calendar month).
+/// </summary>
+public record PayrollSettingsDto(
+    bool MissedScanOutDeductionEnabled, int PayCycleStartDay, string? ModifiedBy, DateTime? ModifiedOn);
 
-public record UpdatePayrollSettingsRequest(bool MissedScanOutDeductionEnabled);
+public record UpdatePayrollSettingsRequest(bool MissedScanOutDeductionEnabled, int PayCycleStartDay);
+
+public class UpdatePayrollSettingsRequestValidator : AbstractValidator<UpdatePayrollSettingsRequest>
+{
+    public UpdatePayrollSettingsRequestValidator()
+    {
+        RuleFor(x => x.PayCycleStartDay)
+            .InclusiveBetween(1, 28)
+            .WithMessage("The pay cycle start day must be between 1 and 28, so it falls in every month.");
+    }
+}
 
 /* ===================================================== students by teacher */
 
@@ -636,9 +652,9 @@ public interface IReportService
     /// <summary>Whether the missed-scan-out deduction is currently switched on.</summary>
     Task<PayrollSettingsDto> GetPayrollSettingsAsync(CancellationToken ct = default);
 
-    /// <summary>Admin-only: switches the missed-scan-out deduction on or off.</summary>
+    /// <summary>Admin-only: switches the missed-scan-out deduction on or off, and sets the pay cycle start day.</summary>
     Task<Result<PayrollSettingsDto>> UpdatePayrollSettingsAsync(
-        bool missedScanOutDeductionEnabled, string? actor, CancellationToken ct = default);
+        bool missedScanOutDeductionEnabled, int payCycleStartDay, string? actor, CancellationToken ct = default);
 
     Task<Result<StudentsByTeacherReportDto>> GetStudentsByTeacherAsync(
         StudentsByTeacherQuery query, CancellationToken ct = default);

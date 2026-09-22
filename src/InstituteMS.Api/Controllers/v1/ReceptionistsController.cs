@@ -72,7 +72,12 @@ public class ReceptionistsController : ApiControllerBase
     public async Task<IActionResult> Payments(
         int id, [FromQuery] DateOnly? from, [FromQuery] DateOnly? to, CancellationToken ct)
     {
-        var mayViewAny = User.IsInRole(UserRoles.Admin) || User.IsInRole(UserRoles.Editor);
+        // A manual IsInRole check, not the declarative [Authorize(Roles=...)]
+        // pipeline SuperAdminAuthorizationHandler participates in — so SuperAdmin
+        // has to be named explicitly here, the one place in this controller that
+        // needs it, rather than relying on the bypass.
+        var mayViewAny = User.IsInRole(UserRoles.SuperAdmin)
+            || User.IsInRole(UserRoles.Admin) || User.IsInRole(UserRoles.Editor);
 
         if (!mayViewAny)
         {
@@ -122,6 +127,17 @@ public class ReceptionistsController : ApiControllerBase
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
     public async Task<IActionResult> DeletePayment(int paymentId, CancellationToken ct)
         => Envelope(await _receptionists.DeletePaymentAsync(paymentId, ct), "Payment removed.");
+
+    /// <summary>
+    /// A suggested bonus for covering a colleague's shift, to pre-fill the payment
+    /// form with — the Admin still reviews and saves it, nothing is paid on its own.
+    /// </summary>
+    [HttpGet("{id:int}/extra-shift-bonus")]
+    [Authorize(Roles = UserRoles.Admin)]
+    [ProducesResponseType(typeof(ApiResponse<ExtraShiftBonusDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ExtraShiftBonus(
+        int id, [FromQuery] DateOnly forMonth, CancellationToken ct)
+        => Envelope(await _receptionists.GetExtraShiftBonusAsync(id, forMonth, ct));
 
     /// <summary>Receptionist pay by branch and month.</summary>
     // Everyone's salary on one page. Back office only, for the reason above.

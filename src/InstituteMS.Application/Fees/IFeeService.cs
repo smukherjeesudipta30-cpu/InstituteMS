@@ -25,6 +25,14 @@ public interface IFeeService
     Task<Result<bool>> UpdatePaymentAsync(
         int id, FeeSaveRequest request, string? actor, CancellationToken ct = default);
 
+    /// <summary>
+    /// Removes a payment entered by mistake or duplicated — the fee ledger row and
+    /// every sibling row keyed to its bill number (the income roll-up, the late-fine
+    /// row, and each teacher's payout), so nothing is left pointing at a bill number
+    /// that no longer has a payment behind it.
+    /// </summary>
+    Task<Result<bool>> DeletePaymentAsync(int id, CancellationToken ct = default);
+
     Task<Result<FeeReceiptDto>> GetReceiptAsync(int id, CancellationToken ct = default);
 
     /* ----------------------------------- online payment from the portal */

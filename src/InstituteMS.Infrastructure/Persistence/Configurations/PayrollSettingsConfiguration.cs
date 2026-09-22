@@ -13,6 +13,7 @@ public class PayrollSettingsConfiguration : IEntityTypeConfiguration<PayrollSett
 
         b.Property(x => x.Id).HasColumnName("Id");
         b.Property(x => x.MissedScanOutDeductionEnabled).HasColumnName("MissedScanOutDeductionEnabled");
+        b.Property(x => x.PayCycleStartDay).HasColumnName("PayCycleStartDay");
         b.Property(x => x.ModifiedBy).HasColumnName("ModifiedBy").HasMaxLength(50);
         b.Property(x => x.ModifiedOn).HasColumnName("ModifiedOn");
     }

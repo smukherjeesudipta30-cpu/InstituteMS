@@ -74,6 +74,18 @@ public class FeesController : ApiControllerBase
     public async Task<IActionResult> Update(int id, [FromBody] FeeSaveRequest request, CancellationToken ct)
         => Envelope(await _fees.UpdatePaymentAsync(id, request, CurrentUserName, ct), "Payment updated.");
 
+    /// <summary>
+    /// Removes a payment entered by mistake or duplicated. Administrator only,
+    /// like every other delete in this ledger — reading and correcting a fee is
+    /// the office's job, undoing one outright is the administrator's call.
+    /// </summary>
+    [HttpDelete("payments/{id:int}")]
+    [Authorize(Roles = UserRoles.Admin)]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+        => Envelope(await _fees.DeletePaymentAsync(id, ct), "Payment removed.");
+
     /// <summary>Money receipt for a payment.</summary>
     [HttpGet("payments/{id:int}/receipt")]
     [ProducesResponseType(typeof(ApiResponse<FeeReceiptDto>), StatusCodes.Status200OK)]

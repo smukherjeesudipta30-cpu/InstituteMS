@@ -467,6 +467,49 @@ public class FeeService : IFeeService
         return Result<bool>.Success(true);
     }
 
+    /// <summary>
+    /// The reverse of <see cref="RecordPaymentAsync"/>: removes the ledger row and
+    /// every sibling row <see cref="RecordPaymentAsync"/> wrote alongside it, all
+    /// keyed to the same bill number, in one transaction — for a payment entered
+    /// by mistake or duplicated, which until now had no way back out.
+    /// </summary>
+    public async Task<Result<bool>> DeletePaymentAsync(int id, CancellationToken ct = default)
+    {
+        var fee = await _db.MonthlyFees.FirstOrDefaultAsync(f => f.Id == id, ct);
+        if (fee is null)
+            return Result<bool>.Failure("Payment not found.", ResultStatus.NotFound);
+
+        var billNo = fee.BillNo;
+        var reg = fee.StudentRegistrationId;
+
+        var strategy = _db.Database.CreateExecutionStrategy();
+
+        await strategy.ExecuteAsync(async () =>
+        {
+            await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
+            if (billNo is not null)
+            {
+                _db.TeacherFees.RemoveRange(_db.TeacherFees.Where(t => t.BillNo == billNo));
+                _db.LateFees.RemoveRange(_db.LateFees.Where(l => l.BillNo == billNo));
+            }
+
+            // FeeTotal carries no bill number — it is matched the same way the
+            // report that reads it does, by student and the exact date/amount this
+            // payment wrote.
+            _db.FeeTotals.RemoveRange(_db.FeeTotals.Where(t =>
+                t.StudentRegistrationId == reg && t.StoreDate == fee.FeeDate && t.Total == fee.Installment));
+
+            _db.MonthlyFees.Remove(fee);
+
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        });
+
+        _logger.LogInformation("Fee {BillNo} (id {Id}) deleted", billNo, id);
+        return Result<bool>.Success(true);
+    }
+
     /* --------------------------------------------------------------- helpers */
 
     private Task<DateOnly?> GetLastPaymentDateAsync(string registrationId, CancellationToken ct) =>

@@ -137,8 +137,11 @@ public class ReportsController : ApiControllerBase
            Note the legacy data holds combined "Receptionist & Teacher" accounts, and
            such a person now sees every teacher's earnings, not just their own. That
            follows directly from the front desk being given this report. */
+        // Manual IsInRole checks, not the declarative [Authorize(Roles=...)]
+        // pipeline SuperAdminAuthorizationHandler participates in — SuperAdmin
+        // has to be named explicitly wherever this controller checks roles by hand.
         var mayViewAnyTeacher =
-            User.IsInRole(UserRoles.Admin) || User.IsInRole(UserRoles.Receptionist);
+            User.IsInRole(UserRoles.SuperAdmin) || User.IsInRole(UserRoles.Admin) || User.IsInRole(UserRoles.Receptionist);
 
         if (!mayViewAnyTeacher)
         {
@@ -176,7 +179,7 @@ public class ReportsController : ApiControllerBase
         int teacherId, [FromQuery] DateOnly month, CancellationToken ct)
     {
         var mayViewAnyTeacher =
-            User.IsInRole(UserRoles.Admin) || User.IsInRole(UserRoles.Receptionist);
+            User.IsInRole(UserRoles.SuperAdmin) || User.IsInRole(UserRoles.Admin) || User.IsInRole(UserRoles.Receptionist);
 
         if (!mayViewAnyTeacher)
         {
@@ -213,7 +216,7 @@ public class ReportsController : ApiControllerBase
         int receptionistId, [FromQuery] DateOnly month, CancellationToken ct)
     {
         var mayViewAnyReceptionist =
-            User.IsInRole(UserRoles.Admin) || User.IsInRole(UserRoles.Editor);
+            User.IsInRole(UserRoles.SuperAdmin) || User.IsInRole(UserRoles.Admin) || User.IsInRole(UserRoles.Editor);
 
         if (!mayViewAnyReceptionist)
         {
@@ -261,7 +264,7 @@ public class ReportsController : ApiControllerBase
     public async Task<IActionResult> StudentsByTeacher(
         [FromQuery] StudentsByTeacherQuery query, CancellationToken ct)
     {
-        if (!User.IsInRole(UserRoles.Admin) && !User.IsInRole(UserRoles.Receptionist))
+        if (!User.IsInRole(UserRoles.SuperAdmin) && !User.IsInRole(UserRoles.Admin) && !User.IsInRole(UserRoles.Receptionist))
         {
             var own = await _reports.ResolveOwnTeacherIdAsync(CurrentUserName ?? string.Empty, ct);
 
@@ -303,7 +306,7 @@ public class ReportsController : ApiControllerBase
     public async Task<IActionResult> UpdatePayrollSettings(
         [FromBody] UpdatePayrollSettingsRequest request, CancellationToken ct)
         => Envelope(await _reports.UpdatePayrollSettingsAsync(
-            request.MissedScanOutDeductionEnabled, CurrentUserName, ct), "Setting saved.");
+            request.MissedScanOutDeductionEnabled, request.PayCycleStartDay, CurrentUserName, ct), "Setting saved.");
 
     /// <summary>
     /// The signed-in student's own profile, fee ledger and marks.

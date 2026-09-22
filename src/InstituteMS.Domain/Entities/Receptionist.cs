@@ -79,7 +79,23 @@ public class ReceptionistPayment
     /// <summary>When it was actually handed over, which may fall in another month.</summary>
     public DateOnly? PaidOn { get; set; }
 
+    /// <summary>
+    /// The standard monthly pay — the "payment structure" — which changes only
+    /// when the Admin deliberately changes it, never as a side effect of a
+    /// bonus. Kept apart from <see cref="ExtraShiftBonus"/> for exactly that
+    /// reason: an extra-shift bonus folded into this figure would inflate next
+    /// month's per-shift rate (itself derived from this same figure), compounding
+    /// every time someone covered a shift.
+    /// </summary>
     public decimal Amount { get; set; }
+
+    /// <summary>
+    /// Paid on top of <see cref="Amount"/> for shifts covered for an absent
+    /// colleague that month — see <c>ReceptionistService.GetExtraShiftBonusAsync</c>.
+    /// A suggestion the Admin reviewed and chose to include, never applied on
+    /// its own.
+    /// </summary>
+    public decimal ExtraShiftBonus { get; set; }
 
     /// <summary>
     /// Copied from the receptionist when the payment is recorded, so a branch

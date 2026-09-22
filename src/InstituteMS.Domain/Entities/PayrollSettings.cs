@@ -18,6 +18,16 @@ public class PayrollSettings
     /// </summary>
     public bool MissedScanOutDeductionEnabled { get; set; }
 
+    /// <summary>
+    /// The day of the month a receptionist's pay cycle starts on — 26 by
+    /// default, so "this month" for pay purposes runs the 26th to the 25th of
+    /// the next, not the 1st to the end. Everything keyed to a pay month (leave
+    /// entitlement, the extra-shift bonus) resolves its date range from this
+    /// rather than the calendar month, so an Admin can move the whole
+    /// institute's cycle without a deploy.
+    /// </summary>
+    public int PayCycleStartDay { get; set; } = 26;
+
     public string? ModifiedBy { get; set; }
     public DateTime? ModifiedOn { get; set; }
 }

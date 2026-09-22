@@ -993,12 +993,12 @@ public class ReportService : IReportService
         // No row is only reachable on a database that has not run migration 047 --
         // the migration itself seeds one. Off is the same safe default either way.
         return row is null
-            ? new PayrollSettingsDto(false, null, null)
-            : new PayrollSettingsDto(row.MissedScanOutDeductionEnabled, row.ModifiedBy, row.ModifiedOn);
+            ? new PayrollSettingsDto(false, 26, null, null)
+            : new PayrollSettingsDto(row.MissedScanOutDeductionEnabled, row.PayCycleStartDay, row.ModifiedBy, row.ModifiedOn);
     }
 
     public async Task<Result<PayrollSettingsDto>> UpdatePayrollSettingsAsync(
-        bool missedScanOutDeductionEnabled, string? actor, CancellationToken ct = default)
+        bool missedScanOutDeductionEnabled, int payCycleStartDay, string? actor, CancellationToken ct = default)
     {
         var row = await _db.PayrollSettings.FirstOrDefaultAsync(ct);
 
@@ -1009,13 +1009,14 @@ public class ReportService : IReportService
         }
 
         row.MissedScanOutDeductionEnabled = missedScanOutDeductionEnabled;
+        row.PayCycleStartDay = payCycleStartDay;
         row.ModifiedBy = actor;
         row.ModifiedOn = DateTime.Now;
 
         await _db.SaveChangesAsync(ct);
 
         return Result<PayrollSettingsDto>.Success(
-            new PayrollSettingsDto(row.MissedScanOutDeductionEnabled, row.ModifiedBy, row.ModifiedOn));
+            new PayrollSettingsDto(row.MissedScanOutDeductionEnabled, row.PayCycleStartDay, row.ModifiedBy, row.ModifiedOn));
     }
 
     /// <summary>

@@ -104,7 +104,13 @@ public record ReceptionistPaymentRequest
     public DateOnly PayMonth { get; init; }
 
     public DateOnly? PaidOn { get; init; }
+
+    /// <summary>The standard monthly pay — changes only when the Admin deliberately changes the payment structure.</summary>
     public decimal Amount { get; init; }
+
+    /// <summary>Extra-shift bonus for that month, kept separate so it never inflates next month's base — see <see cref="ExtraShiftBonusDto"/>.</summary>
+    public decimal ExtraShiftBonus { get; init; }
+
     public string? Notes { get; init; }
 }
 
@@ -120,6 +126,9 @@ public class ReceptionistPaymentRequestValidator : AbstractValidator<Receptionis
         RuleFor(x => x.Amount)
             .GreaterThan(0m).WithMessage("Amount must be greater than zero.")
             .LessThan(1_000_000m).WithMessage("Amount must be less than 10,00,000.");
+
+        RuleFor(x => x.ExtraShiftBonus)
+            .InclusiveBetween(0m, 1_000_000m).WithMessage("Extra-shift bonus must be zero or a positive amount.");
 
         RuleFor(x => x.PaidOn)
             .LessThanOrEqualTo(_ => DateOnly.FromDateTime(DateTime.Now.AddDays(1)))
@@ -137,6 +146,7 @@ public record ReceptionistPaymentDto(
     DateOnly PayMonth,
     DateOnly? PaidOn,
     decimal Amount,
+    decimal ExtraShiftBonus,
     string? Branch,
     string? Notes,
     string? RecordedBy,
@@ -178,6 +188,29 @@ public class ReceptionistReportQuery
     public string? Branch { get; set; }
 }
 
+/* ============================================================ extra-shift bonus */
+
+/// <summary>One day this receptionist covered a colleague's shift.</summary>
+public record ExtraShiftDayDto(
+    DateOnly Date,
+    string AbsentReceptionistName,
+    string? Branch);
+
+/// <summary>
+/// The suggested extra-shift bonus for one receptionist's upcoming payment —
+/// see <see cref="IReceptionistService.GetExtraShiftBonusAsync"/> for how it is
+/// worked out. A suggestion the Admin still reviews and can adjust before
+/// saving the payment, never money moved on its own.
+/// </summary>
+public record ExtraShiftBonusDto(
+    int ReceptionistId,
+    decimal PerShiftRate,
+    int LastMonthShifts,
+    decimal LastMonthAmount,
+    int CoveredShiftCount,
+    decimal SuggestedBonus,
+    IReadOnlyList<ExtraShiftDayDto> Days);
+
 /* ==================================================================== service */
 
 public interface IReceptionistService
@@ -218,6 +251,14 @@ public interface IReceptionistService
     /// <summary>Records (or updates) the Admin's deduction decision for one receptionist's period.</summary>
     Task<Result<bool>> SetLeaveDeductionAsync(
         ReceptionistLeaveDeductionRequest request, string? actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Suggests an extra-shift bonus for one receptionist's next payment, from the
+    /// days in <paramref name="forMonth"/> where they scanned in at their branch on
+    /// a day rostered to a colleague who did not — covering an absence.
+    /// </summary>
+    Task<Result<ExtraShiftBonusDto>> GetExtraShiftBonusAsync(
+        int receptionistId, DateOnly forMonth, CancellationToken ct = default);
 }
 
 /* ==================================================== leave & deduction */
