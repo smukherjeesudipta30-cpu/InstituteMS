@@ -96,14 +96,10 @@ public class TeachersController : ApiControllerBase
 
     /// <summary>
     /// Records money handed to a teacher — the "paid" side of their account.
+    /// Receptionist or Admin, same as fee payments — the office records these
+    /// day to day, not just the administrator.
     /// </summary>
-    /// <remarks>
-    /// <b>Administrator only.</b> This moves money out of the institute and
-    /// straight onto a teacher's balance, so it is deliberately narrower than the
-    /// rest of the teacher master, which Editors may use.
-    /// </remarks>
     [HttpPost("{id:int}/payments")]
-    [Authorize(Roles = UserRoles.Admin)]
     [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -113,9 +109,8 @@ public class TeachersController : ApiControllerBase
             await _teachers.RecordPaymentAsync(request with { TeacherId = id }, CurrentUserName, ct),
             "Payment recorded.");
 
-    /// <summary>Removes a payment recorded in error. Administrator only.</summary>
+    /// <summary>Removes a payment recorded in error — Receptionist or Admin.</summary>
     [HttpDelete("payments/{paymentId:int}")]
-    [Authorize(Roles = UserRoles.Admin)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeletePayment(int paymentId, CancellationToken ct)
