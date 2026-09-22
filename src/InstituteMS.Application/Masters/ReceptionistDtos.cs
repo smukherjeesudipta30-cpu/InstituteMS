@@ -108,9 +108,6 @@ public record ReceptionistPaymentRequest
     /// <summary>The standard monthly pay — changes only when the Admin deliberately changes the payment structure.</summary>
     public decimal Amount { get; init; }
 
-    /// <summary>Extra-shift bonus for that month, kept separate so it never inflates next month's base — see <see cref="ExtraShiftBonusDto"/>.</summary>
-    public decimal ExtraShiftBonus { get; init; }
-
     public string? Notes { get; init; }
 }
 
@@ -126,9 +123,6 @@ public class ReceptionistPaymentRequestValidator : AbstractValidator<Receptionis
         RuleFor(x => x.Amount)
             .GreaterThan(0m).WithMessage("Amount must be greater than zero.")
             .LessThan(1_000_000m).WithMessage("Amount must be less than 10,00,000.");
-
-        RuleFor(x => x.ExtraShiftBonus)
-            .InclusiveBetween(0m, 1_000_000m).WithMessage("Extra-shift bonus must be zero or a positive amount.");
 
         RuleFor(x => x.PaidOn)
             .LessThanOrEqualTo(_ => DateOnly.FromDateTime(DateTime.Now.AddDays(1)))
@@ -190,26 +184,30 @@ public class ReceptionistReportQuery
 
 /* ============================================================ extra-shift bonus */
 
-/// <summary>One day this receptionist covered a colleague's shift.</summary>
+/// <summary>One day this receptionist covered a colleague's absence, or was themselves covered.</summary>
 public record ExtraShiftDayDto(
     DateOnly Date,
-    string AbsentReceptionistName,
+    string OtherReceptionistName,
     string? Branch);
 
 /// <summary>
-/// The suggested extra-shift bonus for one receptionist's upcoming payment —
-/// see <see cref="IReceptionistService.GetExtraShiftBonusAsync"/> for how it is
-/// worked out. A suggestion the Admin still reviews and can adjust before
-/// saving the payment, never money moved on its own.
+/// The net extra-shift adjustment for one receptionist's upcoming payment — a
+/// transfer, not money created from nothing: a day they covered for an absent
+/// colleague adds one shift at their <b>own</b> per-shift rate; a day a
+/// colleague covered <b>for them</b> deducts one shift at that same rate, since
+/// they did not work it. See <see cref="IReceptionistService.GetExtraShiftBonusAsync"/>.
+/// Computed by the server alone — never entered, never edited.
 /// </summary>
 public record ExtraShiftBonusDto(
     int ReceptionistId,
     decimal PerShiftRate,
     int LastMonthShifts,
     decimal LastMonthAmount,
-    int CoveredShiftCount,
-    decimal SuggestedBonus,
-    IReadOnlyList<ExtraShiftDayDto> Days);
+    int CoveredForOthersCount,
+    int CoveredByOthersCount,
+    decimal NetBonus,
+    IReadOnlyList<ExtraShiftDayDto> CoveredForOthers,
+    IReadOnlyList<ExtraShiftDayDto> CoveredByOthers);
 
 /* ==================================================================== service */
 

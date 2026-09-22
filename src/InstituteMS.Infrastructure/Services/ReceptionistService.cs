@@ -212,6 +212,12 @@ public class ReceptionistService : IReceptionistService
 
         var month = MonthStart(request.PayMonth);
 
+        // Computed here, never taken from the request: the bonus is the server's
+        // own read of who covered which shift, not a figure anyone types in. See
+        // GetExtraShiftBonusAsync for how it is worked out.
+        var bonus = await GetExtraShiftBonusAsync(request.ReceptionistId, request.PayMonth, ct);
+        var extraShiftBonus = bonus.Value?.NetBonus ?? 0m;
+
         // One payment per person per month. A second for the same month is a
         // correction to the first, so it updates rather than adding a second salary.
         var existing = await _db.ReceptionistPayments
@@ -220,7 +226,7 @@ public class ReceptionistService : IReceptionistService
         if (existing is not null)
         {
             existing.Amount = request.Amount;
-            existing.ExtraShiftBonus = request.ExtraShiftBonus;
+            existing.ExtraShiftBonus = extraShiftBonus;
             existing.PaidOn = request.PaidOn;
             existing.Notes = request.Notes?.Trim();
             // The branch is refreshed from the person, so correcting a payment after
@@ -238,7 +244,7 @@ public class ReceptionistService : IReceptionistService
             PayMonth = month,
             PaidOn = request.PaidOn ?? DateOnly.FromDateTime(DateTime.Now),
             Amount = request.Amount,
-            ExtraShiftBonus = request.ExtraShiftBonus,
+            ExtraShiftBonus = extraShiftBonus,
             // Copied, not joined, so a later branch move does not rewrite history.
             Branch = person.Branch,
             Notes = request.Notes?.Trim(),
@@ -678,11 +684,13 @@ public class ReceptionistService : IReceptionistService
     /* --------------------------------------------------------- extra-shift bonus */
 
     /// <summary>
-    /// A day is "covered" when this receptionist scanned in at their branch on a
-    /// day of the week rostered to a colleague at the same branch, and that
-    /// colleague did not scan in at all that day — an absence, stood in for
-    /// without anyone having to ask. Not counted on a day already part of this
-    /// receptionist's own roster: that is their ordinary shift, not an extra one.
+    /// A transfer, not new money: a day this receptionist covered an absent
+    /// colleague's shift adds one shift at their own rate; a day a colleague
+    /// covered <b>their</b> shift instead deducts one, since they did not work
+    /// it. Both sides use this receptionist's own per-shift rate — what they
+    /// would have earned or lost for that one day, on their own pay structure.
+    /// Not counted on a day already part of this receptionist's own roster:
+    /// that is their ordinary shift, not an extra one.
     /// </summary>
     public async Task<Result<ExtraShiftBonusDto>> GetExtraShiftBonusAsync(
         int receptionistId, DateOnly forMonth, CancellationToken ct = default)
@@ -727,7 +735,7 @@ public class ReceptionistService : IReceptionistService
         if (perShiftRate == 0m || countEnd < monthStart)
         {
             return Result<ExtraShiftBonusDto>.Success(new ExtraShiftBonusDto(
-                receptionistId, perShiftRate, ownShiftsNow, lastPayment?.Amount ?? 0m, 0, 0m, []));
+                receptionistId, perShiftRate, ownShiftsNow, lastPayment?.Amount ?? 0m, 0, 0, 0m, [], []));
         }
 
         // --- 2. every OTHER receptionist at the same branch, and their roster.
@@ -765,31 +773,46 @@ public class ReceptionistService : IReceptionistService
             .GroupBy(a => a.OnDate)
             .ToDictionary(g => g.Key, g => g.Select(a => a.StaffId).ToHashSet());
 
-        var days = new List<ExtraShiftDayDto>();
+        var coveredForOthers = new List<ExtraShiftDayDto>();
+        var coveredByOthers = new List<ExtraShiftDayDto>();
 
         for (var date = monthStart; date <= countEnd; date = date.AddDays(1))
         {
             var dow = (byte)date.DayOfWeek;
-
-            // Not an extra shift if it's already this receptionist's own rostered day.
-            if (myOwnDaysOfWeek.Contains(dow)) continue;
-
             var presentToday = presentByDay.TryGetValue(date, out var p) ? p : new HashSet<int>();
-            if (!presentToday.Contains(receptionistId)) continue;
+            var iAmPresent = presentToday.Contains(receptionistId);
 
-            var absentColleague = colleagues.FirstOrDefault(c =>
-                rosterByColleague.TryGetValue(c.Id, out var rosterDays)
-                && rosterDays.Contains(dow)
-                && !presentToday.Contains(c.Id));
+            // Gain: not this receptionist's own rostered day, they scanned in
+            // anyway, and a colleague actually rostered for it did not.
+            if (!myOwnDaysOfWeek.Contains(dow) && iAmPresent)
+            {
+                var absentColleague = colleagues.FirstOrDefault(c =>
+                    rosterByColleague.TryGetValue(c.Id, out var rosterDays)
+                    && rosterDays.Contains(dow)
+                    && !presentToday.Contains(c.Id));
 
-            if (absentColleague is not null)
-                days.Add(new ExtraShiftDayDto(date, absentColleague.Name, me.Branch));
+                if (absentColleague is not null)
+                    coveredForOthers.Add(new ExtraShiftDayDto(date, absentColleague.Name, me.Branch));
+            }
+
+            // Loss: this receptionist's own rostered day, they did NOT scan in,
+            // and some other colleague (not rostered that day) stood in instead.
+            if (myOwnDaysOfWeek.Contains(dow) && !iAmPresent)
+            {
+                var coveringColleague = colleagues.FirstOrDefault(c =>
+                    presentToday.Contains(c.Id)
+                    && !(rosterByColleague.TryGetValue(c.Id, out var rosterDays) && rosterDays.Contains(dow)));
+
+                if (coveringColleague is not null)
+                    coveredByOthers.Add(new ExtraShiftDayDto(date, coveringColleague.Name, me.Branch));
+            }
         }
 
-        var bonus = Math.Round(days.Count * perShiftRate, 2);
+        var netBonus = Math.Round((coveredForOthers.Count - coveredByOthers.Count) * perShiftRate, 2);
 
         return Result<ExtraShiftBonusDto>.Success(new ExtraShiftBonusDto(
             receptionistId, perShiftRate, ownShiftsNow, lastPayment?.Amount ?? 0m,
-            days.Count, bonus, days));
+            coveredForOthers.Count, coveredByOthers.Count, netBonus,
+            coveredForOthers, coveredByOthers));
     }
 }
