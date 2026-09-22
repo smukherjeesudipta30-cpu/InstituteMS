@@ -35,6 +35,12 @@ public record ReceptionistListItemDto(
     /// <summary>Technical staff are excused qualification and computer training.</summary>
     bool IsTechnical,
 
+    /// <summary>
+    /// The current standard monthly pay — the default a new month's payment
+    /// starts from. Set on the fees master screen, not here.
+    /// </summary>
+    decimal MonthlyPay,
+
     /// <summary>How many months have been paid, and the total.</summary>
     int PaymentCount,
     decimal TotalPaid,
@@ -91,6 +97,21 @@ public class ReceptionistSaveRequestValidator : AbstractValidator<ReceptionistSa
            to the teacher master. */
         RuleFor(x => x.Qualification).MaximumLength(200);
         RuleFor(x => x.ComputerTraining).MaximumLength(200);
+    }
+}
+
+public record ReceptionistMonthlyPayRequest
+{
+    public decimal MonthlyPay { get; init; }
+}
+
+public class ReceptionistMonthlyPayRequestValidator : AbstractValidator<ReceptionistMonthlyPayRequest>
+{
+    public ReceptionistMonthlyPayRequestValidator()
+    {
+        RuleFor(x => x.MonthlyPay)
+            .GreaterThanOrEqualTo(0m).WithMessage("Monthly pay cannot be negative.")
+            .LessThan(1_000_000m).WithMessage("Monthly pay must be less than 10,00,000.");
     }
 }
 
@@ -184,25 +205,37 @@ public class ReceptionistReportQuery
 
 /* ============================================================ extra-shift bonus */
 
-/// <summary>One day this receptionist covered a colleague's absence, or was themselves covered.</summary>
+/// <summary>
+/// One day this receptionist covered a colleague's absence, or was themselves
+/// covered — valued at the actual hours that day's shift(s) ran, from
+/// <c>AttendanceShift.StartTime</c>/<c>EndTime</c>, not a flat one-shift count.
+/// </summary>
 public record ExtraShiftDayDto(
     DateOnly Date,
     string OtherReceptionistName,
-    string? Branch);
+    string? Branch,
+    decimal Hours,
+    decimal Amount);
 
 /// <summary>
 /// The net extra-shift adjustment for one receptionist's upcoming payment — a
 /// transfer, not money created from nothing: a day they covered for an absent
-/// colleague adds one shift at their <b>own</b> per-shift rate; a day a
-/// colleague covered <b>for them</b> deducts one shift at that same rate, since
-/// they did not work it. See <see cref="IReceptionistService.GetExtraShiftBonusAsync"/>.
+/// colleague adds that day's actual rostered hours at their <b>own</b> hourly
+/// rate; a day a colleague covered <b>for them</b> deducts their own hours for
+/// that day at the same rate, since they did not work it. The hourly rate
+/// comes from the receptionist's standard monthly pay — the fees master
+/// figure, not a recorded payment, which can lag behind or not exist yet —
+/// divided by the previous pay cycle's actual rostered hours (the week-long Staff Rota
+/// pattern replayed across every calendar day of that cycle), not a flat
+/// shift count — see <see cref="IReceptionistService.GetExtraShiftBonusAsync"/>.
 /// Computed by the server alone — never entered, never edited.
 /// </summary>
 public record ExtraShiftBonusDto(
     int ReceptionistId,
-    decimal PerShiftRate,
-    int LastMonthShifts,
-    decimal LastMonthAmount,
+    decimal HourlyRate,
+    decimal LastCycleHours,
+    // The Receptionist.MonthlyPay the hourly rate above was computed from.
+    decimal StandardPay,
     int CoveredForOthersCount,
     int CoveredByOthersCount,
     decimal NetBonus,
@@ -224,6 +257,13 @@ public interface IReceptionistService
 
     /// <summary>Removes a receptionist. Refused once payments exist against them.</summary>
     Task<Result<bool>> DeleteAsync(int id, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sets the current standard monthly pay on the fees master screen — the
+    /// default a new month's payment starts from, not a payment itself.
+    /// </summary>
+    Task<Result<bool>> UpdateMonthlyPayAsync(
+        int id, decimal monthlyPay, string? actor, CancellationToken ct = default);
 
     /// <summary>Records or corrects one month's payment.</summary>
     Task<Result<int>> RecordPaymentAsync(

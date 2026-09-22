@@ -58,6 +58,19 @@ public class ReceptionistsController : ApiControllerBase
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
         => Envelope(await _receptionists.DeleteAsync(id, ct), "Receptionist deleted.");
 
+    /// <summary>
+    /// Sets the current standard monthly pay on the fees master screen — the
+    /// default a new month's payment starts from, not a payment itself.
+    /// </summary>
+    [HttpPut("{id:int}/monthly-pay")]
+    [Authorize(Roles = UserRoles.Admin)]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateMonthlyPay(
+        int id, [FromBody] ReceptionistMonthlyPayRequest request, CancellationToken ct)
+        => Envelope(await _receptionists.UpdateMonthlyPayAsync(id, request.MonthlyPay, CurrentUserName, ct),
+            "Monthly pay updated.");
+
     /* ------------------------------------------------------ payments */
 
     /// <summary>

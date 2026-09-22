@@ -21,6 +21,7 @@ public class ReceptionistConfiguration : IEntityTypeConfiguration<Receptionist>
         b.Property(x => x.ComputerTraining).HasColumnName("ComputerTraining").HasMaxLength(200);
         b.Property(x => x.IsTechnical).HasColumnName("IsTechnical");
         b.Property(x => x.Branch).HasColumnName("Branch").HasMaxLength(100);
+        b.Property(x => x.MonthlyPay).HasColumnName("MonthlyPay").HasPrecision(18, 2);
         b.Property(x => x.IsActive).HasColumnName("IsActive");
         b.Property(x => x.CreatedBy).HasColumnName("CreatedBy").HasMaxLength(50);
         b.Property(x => x.CreatedOn).HasColumnName("CreatedOn");

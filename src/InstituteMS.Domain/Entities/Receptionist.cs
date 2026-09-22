@@ -50,7 +50,14 @@ public class Receptionist
     public string? Branch { get; set; }
 
     /// <summary>
-
+    /// The current standard monthly pay, set here by the Admin on a dedicated
+    /// fees master screen — separate from <see cref="ReceptionistPayment.Amount"/>,
+    /// which is the actual recorded transaction for one month. This is only the
+    /// default a new month's payment starts from; recording that month's
+    /// payment with a different amount changes that one month, not this master
+    /// figure, exactly as before this field existed.
+    /// </summary>
+    public decimal MonthlyPay { get; set; }
 
     public bool IsActive { get; set; } = true;
 

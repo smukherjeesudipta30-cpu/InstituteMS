@@ -66,6 +66,7 @@ public class ReceptionistService : IReceptionistService
             .Select(r => new ReceptionistListItemDto(
                 r.Id, r.Name, r.LoginId, r.Phone, r.PersonalEmail, r.Branch, r.IsActive,
                 r.Designation, r.Qualification, r.ComputerTraining, r.IsTechnical,
+                r.MonthlyPay,
                 r.Payments.Count,
                 r.Payments.Sum(p => (decimal?)(p.Amount + p.ExtraShiftBonus)) ?? 0m,
                 r.Payments.Max(p => (DateOnly?)p.PayMonth)))
@@ -198,6 +199,23 @@ public class ReceptionistService : IReceptionistService
         return Result<bool>.Success(true);
     }
 
+    public async Task<Result<bool>> UpdateMonthlyPayAsync(
+        int id, decimal monthlyPay, string? actor, CancellationToken ct = default)
+    {
+        var person = await _db.Receptionists.FirstOrDefaultAsync(r => r.Id == id, ct);
+
+        if (person is null)
+            return Result<bool>.Failure("That receptionist no longer exists.", ResultStatus.NotFound);
+
+        person.MonthlyPay = monthlyPay;
+        person.ModifiedBy = actor;
+        person.ModifiedOn = DateTime.Now;
+
+        await _db.SaveChangesAsync(ct);
+
+        return Result<bool>.Success(true);
+    }
+
     /* ----------------------------------------------------------- payments */
 
     public async Task<Result<int>> RecordPaymentAsync(
@@ -225,6 +243,11 @@ public class ReceptionistService : IReceptionistService
 
         if (existing is not null)
         {
+            // Only announce the transfer when it actually changed — re-saving a
+            // correction to the amount or notes must not repeat an identical
+            // broadcast every time the same month's payment is reopened.
+            var bonusChanged = existing.ExtraShiftBonus != extraShiftBonus;
+
             existing.Amount = request.Amount;
             existing.ExtraShiftBonus = extraShiftBonus;
             existing.PaidOn = request.PaidOn;
@@ -234,6 +257,9 @@ public class ReceptionistService : IReceptionistService
             existing.Branch = person.Branch;
 
             await _db.SaveChangesAsync(ct);
+
+            if (bonusChanged && bonus.Value is not null)
+                await NotifyExtraShiftBonusAsync(person.Name, person.Branch, month, bonus.Value, actor, ct);
 
             return Result<int>.Success(existing.Id);
         }
@@ -254,6 +280,9 @@ public class ReceptionistService : IReceptionistService
 
         _db.ReceptionistPayments.Add(payment);
         await _db.SaveChangesAsync(ct);
+
+        if (bonus.Value is not null)
+            await NotifyExtraShiftBonusAsync(person.Name, person.Branch, month, bonus.Value, actor, ct);
 
         return Result<int>.Success(payment.Id);
     }
@@ -685,13 +714,25 @@ public class ReceptionistService : IReceptionistService
 
     /// <summary>
     /// A transfer, not new money: a day this receptionist covered an absent
-    /// colleague's shift adds one shift at their own rate; a day a colleague
-    /// covered <b>their</b> shift instead deducts one, since they did not work
-    /// it. Both sides use this receptionist's own per-shift rate — what they
-    /// would have earned or lost for that one day, on their own pay structure.
-    /// Not counted on a day already part of this receptionist's own roster:
-    /// that is their ordinary shift, not an extra one.
+    /// colleague's shift adds that day's actual rostered hours at their own
+    /// hourly rate; a day a colleague covered <b>their</b> shift instead
+    /// deducts their own hours for that day, since they did not work it. Both
+    /// sides use this receptionist's own hourly rate — what they would have
+    /// earned or lost for those hours, on their own pay structure. Not counted
+    /// on a day already part of this receptionist's own roster: that is their
+    /// ordinary shift, not an extra one.
     /// </summary>
+    /// <remarks>
+    /// The Staff Rota only ever stores one week's pattern — a row per
+    /// (day-of-week, shift) — so both the hourly rate and the day-by-day
+    /// coverage below replay that weekly pattern across every calendar day of
+    /// the relevant pay cycle, exactly as the day-counting version of this
+    /// method already did, just summing hours (from <c>AttendanceShift</c>'s
+    /// actual start/end times) instead of a flat one-shift-per-day count. A
+    /// day can carry more than one shift (e.g. someone rostered Morning AND
+    /// Evening on the same day-of-week), so hours are summed per day, not
+    /// capped at one shift.
+    /// </remarks>
     public async Task<Result<ExtraShiftBonusDto>> GetExtraShiftBonusAsync(
         int receptionistId, DateOnly forMonth, CancellationToken ct = default)
     {
@@ -703,116 +744,204 @@ public class ReceptionistService : IReceptionistService
         if (me is null)
             return Result<ExtraShiftBonusDto>.Failure("Receptionist not found.", ResultStatus.NotFound);
 
-        // Two different "months" deliberately kept apart. A ReceptionistPayment
-        // is always keyed to a calendar month-start (RecordPaymentAsync normalises
-        // it), so the payment lookup below stays calendar-month. Which SHIFTS
-        // count as extra, though, is a pay-period question — the institute's
+        var branchBonuses = await ComputeBranchExtraShiftBonusesAsync(me.Branch, forMonth, ct);
+
+        return branchBonuses.TryGetValue(receptionistId, out var dto)
+            ? Result<ExtraShiftBonusDto>.Success(dto)
+            : Result<ExtraShiftBonusDto>.Success(new ExtraShiftBonusDto(receptionistId, 0m, 0m, 0m, 0, 0, 0m, [], []));
+    }
+
+    /// <summary>
+    /// Works out every active receptionist's extra-shift transfer for one
+    /// branch and pay cycle, all at once. Doing it branch-wide instead of one
+    /// receptionist at a time matters for correctness, not just efficiency: a
+    /// single physical presence can only ever cover one absent colleague's
+    /// shift on a given day, so when two colleagues are absent on the same
+    /// day-of-week and only one person is on hand to cover, that one covering
+    /// day must be attributed to exactly one absentee — never charged against
+    /// both of them independently, which is what happened when each
+    /// receptionist's transfer was computed in isolation. Matching absentees
+    /// to coverers once, per day, for the whole branch together, is what keeps
+    /// a covering day paired 1:1 on both sides of the transfer.
+    /// </summary>
+    /// <remarks>
+    /// The Staff Rota only ever stores one week's pattern — a row per
+    /// (day-of-week, shift) — so both the hourly rate and the day-by-day
+    /// coverage below replay that weekly pattern across every calendar day of
+    /// the relevant pay cycle, summing hours (from <c>AttendanceShift</c>'s
+    /// actual start/end times), not a flat one-shift-per-day count. A day can
+    /// carry more than one shift (e.g. someone rostered Morning AND Evening on
+    /// the same day-of-week), so hours are summed per day, not capped at one
+    /// shift. Absentees and coverers on the same day are paired by ascending
+    /// receptionist id — deterministic, since attendance carries no shift
+    /// identity to pair them by anything more specific.
+    /// </remarks>
+    private async Task<Dictionary<int, ExtraShiftBonusDto>> ComputeBranchExtraShiftBonusesAsync(
+        string? branch, DateOnly forMonth, CancellationToken ct)
+    {
+        // Which shifts count as extra is a pay-period question — the institute's
         // configured cycle (26th-to-26th by default), not the calendar month —
-        // so the coverage window uses PayCycleRange instead.
-        var paymentLookupMonth = MonthStart(forMonth);
+        // so the coverage window uses PayCycleRange.
         var payCycleStartDay = await GetPayCycleStartDayAsync(ct);
         var (monthStart, monthEnd) = PayCycleRange(forMonth, payCycleStartDay);
         var today = DateOnly.FromDateTime(DateTime.Today);
         var countEnd = monthEnd > today ? today : monthEnd;
 
-        // --- 1. the per-shift rate: last recorded BASE payment (never the bonus —
-        // see ReceptionistPayment.ExtraShiftBonus), divided by however many shifts
-        // this receptionist was rostered for at the time. Using the base alone
-        // keeps the rate stable: a bonus paid one cycle must never inflate the
-        // rate the next cycle's bonus is computed from.
-        var lastPayment = await _db.ReceptionistPayments.AsNoTracking()
-            .Where(p => p.ReceptionistId == receptionistId && p.PayMonth < paymentLookupMonth)
-            .OrderByDescending(p => p.PayMonth)
-            .FirstOrDefaultAsync(ct);
-
-        var ownShiftsNow = await _db.StaffShiftAssignments.AsNoTracking()
-            .CountAsync(a => a.StaffType == "Receptionist" && a.StaffId == receptionistId && a.IsActive, ct);
-
-        var perShiftRate = lastPayment is null || ownShiftsNow == 0
-            ? 0m
-            : Math.Round(lastPayment.Amount / ownShiftsNow, 2);
-
-        if (perShiftRate == 0m || countEnd < monthStart)
-        {
-            return Result<ExtraShiftBonusDto>.Success(new ExtraShiftBonusDto(
-                receptionistId, perShiftRate, ownShiftsNow, lastPayment?.Amount ?? 0m, 0, 0, 0m, [], []));
-        }
-
-        // --- 2. every OTHER receptionist at the same branch, and their roster.
-        var colleagues = await _db.Receptionists.AsNoTracking()
-            .Where(r => r.IsActive && r.Id != receptionistId && r.Branch == me.Branch)
-            .Select(r => new { r.Id, r.Name })
+        var people = await _db.Receptionists.AsNoTracking()
+            .Where(r => r.IsActive && r.Branch == branch)
+            .Select(r => new { r.Id, r.Name, r.MonthlyPay })
             .ToListAsync(ct);
 
-        var colleagueIds = colleagues.Select(c => c.Id).ToList();
+        var ids = people.Select(p => p.Id).ToList();
 
-        var colleagueRoster = await _db.StaffShiftAssignments.AsNoTracking()
-            .Where(a => a.StaffType == "Receptionist" && a.IsActive && colleagueIds.Contains(a.StaffId))
-            .Select(a => new { a.StaffId, a.DayOfWeek })
+        // --- 1. every active shift's actual duration, in hours.
+        var shiftHours = await _db.AttendanceShifts.AsNoTracking()
+            .Where(s => s.IsActive)
+            .ToDictionaryAsync(s => s.Id, s => ShiftHours(s.StartTime, s.EndTime), ct);
+
+        // --- 2. everyone's weekly rota reduced to hours-rostered-per-day-of-week
+        // (summed, since one day-of-week can carry more than one shift).
+        var roster = await _db.StaffShiftAssignments.AsNoTracking()
+            .Where(a => a.StaffType == "Receptionist" && a.IsActive && ids.Contains(a.StaffId))
+            .Select(a => new { a.StaffId, a.DayOfWeek, a.ShiftId })
             .ToListAsync(ct);
 
-        var rosterByColleague = colleagueRoster
-            .GroupBy(a => a.StaffId)
-            .ToDictionary(g => g.Key, g => g.Select(a => a.DayOfWeek).ToHashSet());
+        var hoursByStaffDay = roster
+            .GroupBy(a => (a.StaffId, a.DayOfWeek))
+            .ToDictionary(g => g.Key, g => g.Sum(a => shiftHours.TryGetValue(a.ShiftId, out var h) ? h : 0m));
 
-        var myOwnDaysOfWeek = (await _db.StaffShiftAssignments.AsNoTracking()
-            .Where(a => a.StaffType == "Receptionist" && a.StaffId == receptionistId && a.IsActive)
-            .Select(a => a.DayOfWeek)
-            .ToListAsync(ct)).ToHashSet();
+        decimal HoursFor(int staffId, byte dow) =>
+            hoursByStaffDay.TryGetValue((staffId, dow), out var h) ? h : 0m;
 
-        // --- 3. who scanned in ("In") on which day, everyone involved, at the branch.
-        var everyoneIds = colleagueIds.Append(receptionistId).ToList();
+        // --- 3. everyone's own hourly rate: their MASTER standard monthly pay
+        // (Receptionist.MonthlyPay, set on the fees master screen — never a
+        // recorded payment, which can lag behind, be corrected after the fact,
+        // or simply not exist yet for a new hire) divided by the actual hours
+        // the weekly rota put them down for across the PREVIOUS pay cycle.
+        var (prevStart, prevEnd) = PayCycleRange(monthStart.AddDays(-1), payCycleStartDay);
 
-        var presentByDay = (await _db.StaffAttendance.AsNoTracking()
-            .Where(a => a.StaffType == "Receptionist" && a.Direction == "In"
-                && a.Branch == me.Branch && a.OnDate >= monthStart && a.OnDate <= countEnd
-                && everyoneIds.Contains(a.StaffId))
-            .Select(a => new { a.StaffId, a.OnDate })
-            .Distinct()
-            .ToListAsync(ct))
-            .GroupBy(a => a.OnDate)
-            .ToDictionary(g => g.Key, g => g.Select(a => a.StaffId).ToHashSet());
+        var lastCycleHours = new Dictionary<int, decimal>();
+        var hourlyRate = new Dictionary<int, decimal>();
 
-        var coveredForOthers = new List<ExtraShiftDayDto>();
-        var coveredByOthers = new List<ExtraShiftDayDto>();
-
-        for (var date = monthStart; date <= countEnd; date = date.AddDays(1))
+        foreach (var p in people)
         {
-            var dow = (byte)date.DayOfWeek;
-            var presentToday = presentByDay.TryGetValue(date, out var p) ? p : new HashSet<int>();
-            var iAmPresent = presentToday.Contains(receptionistId);
+            var hrs = 0m;
+            for (var d = prevStart; d <= prevEnd; d = d.AddDays(1))
+                hrs += HoursFor(p.Id, (byte)d.DayOfWeek);
 
-            // Gain: not this receptionist's own rostered day, they scanned in
-            // anyway, and a colleague actually rostered for it did not.
-            if (!myOwnDaysOfWeek.Contains(dow) && iAmPresent)
+            lastCycleHours[p.Id] = hrs;
+
+            hourlyRate[p.Id] = p.MonthlyPay <= 0m || hrs <= 0m ? 0m : Math.Round(p.MonthlyPay / hrs, 2);
+        }
+
+        var coveredForOthers = people.ToDictionary(p => p.Id, _ => new List<ExtraShiftDayDto>());
+        var coveredByOthers = people.ToDictionary(p => p.Id, _ => new List<ExtraShiftDayDto>());
+
+        if (countEnd >= monthStart)
+        {
+            // --- 4. who scanned in ("In") on which day, everyone at the branch.
+            var presentByDay = (await _db.StaffAttendance.AsNoTracking()
+                .Where(a => a.StaffType == "Receptionist" && a.Direction == "In"
+                    && a.Branch == branch && a.OnDate >= monthStart && a.OnDate <= countEnd
+                    && ids.Contains(a.StaffId))
+                .Select(a => new { a.StaffId, a.OnDate })
+                .Distinct()
+                .ToListAsync(ct))
+                .GroupBy(a => a.OnDate)
+                .ToDictionary(g => g.Key, g => g.Select(a => a.StaffId).ToHashSet());
+
+            for (var date = monthStart; date <= countEnd; date = date.AddDays(1))
             {
-                var absentColleague = colleagues.FirstOrDefault(c =>
-                    rosterByColleague.TryGetValue(c.Id, out var rosterDays)
-                    && rosterDays.Contains(dow)
-                    && !presentToday.Contains(c.Id));
+                var dow = (byte)date.DayOfWeek;
+                var presentToday = presentByDay.TryGetValue(date, out var pr) ? pr : new HashSet<int>();
 
-                if (absentColleague is not null)
-                    coveredForOthers.Add(new ExtraShiftDayDto(date, absentColleague.Name, me.Branch));
-            }
+                // Rostered for today but did not scan in.
+                var absentees = people
+                    .Where(p => HoursFor(p.Id, dow) > 0m && !presentToday.Contains(p.Id))
+                    .OrderBy(p => p.Id)
+                    .ToList();
 
-            // Loss: this receptionist's own rostered day, they did NOT scan in,
-            // and some other colleague (not rostered that day) stood in instead.
-            if (myOwnDaysOfWeek.Contains(dow) && !iAmPresent)
-            {
-                var coveringColleague = colleagues.FirstOrDefault(c =>
-                    presentToday.Contains(c.Id)
-                    && !(rosterByColleague.TryGetValue(c.Id, out var rosterDays) && rosterDays.Contains(dow)));
+                // Not rostered for today but scanned in anyway.
+                var coverers = people
+                    .Where(p => HoursFor(p.Id, dow) == 0m && presentToday.Contains(p.Id))
+                    .OrderBy(p => p.Id)
+                    .ToList();
 
-                if (coveringColleague is not null)
-                    coveredByOthers.Add(new ExtraShiftDayDto(date, coveringColleague.Name, me.Branch));
+                var pairCount = Math.Min(absentees.Count, coverers.Count);
+                for (var i = 0; i < pairCount; i++)
+                {
+                    var absent = absentees[i];
+                    var coverer = coverers[i];
+                    var hours = HoursFor(absent.Id, dow);
+
+                    coveredByOthers[absent.Id].Add(new ExtraShiftDayDto(
+                        date, coverer.Name, branch, hours, Math.Round(hours * hourlyRate[absent.Id], 2)));
+
+                    coveredForOthers[coverer.Id].Add(new ExtraShiftDayDto(
+                        date, absent.Name, branch, hours, Math.Round(hours * hourlyRate[coverer.Id], 2)));
+                }
             }
         }
 
-        var netBonus = Math.Round((coveredForOthers.Count - coveredByOthers.Count) * perShiftRate, 2);
+        return people.ToDictionary(p => p.Id, p =>
+        {
+            var gains = coveredForOthers[p.Id];
+            var losses = coveredByOthers[p.Id];
+            var netBonus = Math.Round(gains.Sum(d => d.Amount) - losses.Sum(d => d.Amount), 2);
 
-        return Result<ExtraShiftBonusDto>.Success(new ExtraShiftBonusDto(
-            receptionistId, perShiftRate, ownShiftsNow, lastPayment?.Amount ?? 0m,
-            coveredForOthers.Count, coveredByOthers.Count, netBonus,
-            coveredForOthers, coveredByOthers));
+            return new ExtraShiftBonusDto(
+                p.Id, hourlyRate[p.Id], lastCycleHours[p.Id], p.MonthlyPay,
+                gains.Count, losses.Count, netBonus, gains, losses);
+        });
+    }
+
+    private static decimal ShiftHours(TimeOnly start, TimeOnly end)
+    {
+        var span = end - start;
+        if (span < TimeSpan.Zero) span += TimeSpan.FromDays(1);
+        return (decimal)span.TotalHours;
+    }
+
+    /// <summary>
+    /// Tells every active receptionist at the branch — not just the two
+    /// involved — why one receptionist's payment moved for an extra-shift
+    /// adjustment, so the transfer is never something colleagues only guess
+    /// at from a number on someone else's payslip. Fires for every
+    /// receptionist's payment, not just a chosen few. Best-effort, same as
+    /// <see cref="NotifyDeductionAsync"/>: a chat failure must never undo the
+    /// payment that already saved.
+    /// </summary>
+    private async Task NotifyExtraShiftBonusAsync(
+        string receptionistName, string? branch, DateOnly payMonth,
+        ExtraShiftBonusDto bonus, string? actor, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(actor)) return;
+        if (bonus.CoveredForOthersCount == 0 && bonus.CoveredByOthersCount == 0) return;
+
+        var lines = new List<string>();
+
+        foreach (var day in bonus.CoveredForOthers)
+            lines.Add($"{day.Date:d MMM}: {receptionistName} covered {day.OtherReceptionistName}'s " +
+                      $"{day.Hours:0.##}h shift and earned ₹{day.Amount:0.##} extra.");
+
+        foreach (var day in bonus.CoveredByOthers)
+            lines.Add($"{day.Date:d MMM}: {day.OtherReceptionistName} covered {receptionistName}'s " +
+                      $"{day.Hours:0.##}h shift, so ₹{day.Amount:0.##} was deducted from {receptionistName}'s pay.");
+
+        var text = $"Extra-shift adjustment for {receptionistName} — {payMonth:MMMM yyyy}:\n" +
+                   string.Join("\n", lines);
+
+        var recipients = await _db.Receptionists.AsNoTracking()
+            .Where(r => r.IsActive && r.Branch == branch && r.LoginId != null)
+            .Select(r => r.LoginId!)
+            .ToListAsync(ct);
+
+        foreach (var loginId in recipients)
+        {
+            var conversation = await _chat.StartOrGetDirectConversationAsync(actor, loginId, ct);
+            if (!conversation.Succeeded) continue;
+
+            await _chat.SendMessageAsync(actor, conversation.Value, new SendMessageRequest { Body = text }, ct);
+        }
     }
 }
