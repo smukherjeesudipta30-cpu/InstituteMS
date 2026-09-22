@@ -418,14 +418,35 @@ public class FeeService : IFeeService
         var reg = request.RegistrationId.Trim();
         var billNo = fee.BillNo;
 
-        var student = await _db.Students
-            .AsNoTracking()
-            .Where(s => s.RegistrationId == reg)
-            .OrderByDescending(s => s.Id)
-            .Select(s => new { s.TechniqueCount, s.PrimaryTeacherId, s.SecondTeacherId, s.ThirdTeacherId })
-            .FirstOrDefaultAsync(ct);
+        // How many teachers this SPECIFIC bill was already split across — the
+        // number of TeacherFee rows already on it, not the student's current
+        // TechniqueCount, which can have changed since the bill was first
+        // recorded (a reassignment, or a correction to the technique count
+        // itself). Editing a bill corrects its amount for the teachers already
+        // on it; it does not re-attribute the bill to a different set of
+        // teachers or a different count. Falls back to the student's own
+        // TechniqueCount only when the bill has no payout rows yet to count.
+        var existingPayoutCount = billNo is null
+            ? 0
+            : await _db.TeacherFees.CountAsync(t => t.BillNo == billNo, ct);
 
-        var teacherCount = student?.TechniqueCount is > 0 ? student.TechniqueCount!.Value : 1;
+        int teacherCount;
+        if (existingPayoutCount > 0)
+        {
+            teacherCount = existingPayoutCount;
+        }
+        else
+        {
+            var student = await _db.Students
+                .AsNoTracking()
+                .Where(s => s.RegistrationId == reg)
+                .OrderByDescending(s => s.Id)
+                .Select(s => new { s.TechniqueCount })
+                .FirstOrDefaultAsync(ct);
+
+            teacherCount = student?.TechniqueCount is > 0 ? student.TechniqueCount!.Value : 1;
+        }
+
         var salaryEach = LateFineCalculator.TeacherSalaryEach(
             request.InstallmentAmount, request.TeacherPercentage, teacherCount);
 
