@@ -1744,24 +1744,36 @@ public class ExamService : IExamService
                 })
             .ToListAsync(ct);
 
-        // One card per examination of a course — the legacy card's Theory and
-        // Practical rows are the two papers of a single term.
+        // One card per COURSE — never split across two, even when the office
+        // created the Theory and Practical papers under different term numbers
+        // (a data-entry slip, not a second examination). Grouping by course
+        // alone, rather than course-and-term, is what guarantees that: the most
+        // recently scheduled Theory and the most recently scheduled Practical
+        // for the course are printed on the same card regardless of which term
+        // number either paper happened to be filed under.
         var cards = scheduled
-            .GroupBy(x => new { x.CourseId, x.TermNumber })
-            .OrderBy(g => g.Key.TermNumber)
+            .GroupBy(x => x.CourseId)
             .Select(g =>
             {
-                var theory = g.FirstOrDefault(x =>
-                    string.Equals(x.PaperType, "Theory", StringComparison.OrdinalIgnoreCase));
+                var theory = g
+                    .Where(x => string.Equals(x.PaperType, "Theory", StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(x => x.ScheduledOn)
+                    .FirstOrDefault();
 
-                var practical = g.FirstOrDefault(x =>
-                    string.Equals(x.PaperType, "Practical", StringComparison.OrdinalIgnoreCase));
+                var practical = g
+                    .Where(x => string.Equals(x.PaperType, "Practical", StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(x => x.ScheduledOn)
+                    .FirstOrDefault();
+
+                // The term shown on the card is whichever paper the student is
+                // actually sitting soonest, so it reads as one coherent term.
+                var termNumber = (theory ?? practical)?.TermNumber ?? 0;
 
                 return new AdmitCardDto(
                     regId, student?.Name, student?.GuardianName,
-                    g.Key.CourseId,
+                    g.Key,
                     g.Select(x => x.CourseName).FirstOrDefault(n => n is not null),
-                    g.Key.TermNumber,
+                    termNumber,
                     new AdmitCardPaperDto(
                         "Theory", theory?.ExamId, theory?.Title,
                         theory?.ScheduledOn, theory?.DurationMinutes),
@@ -1770,6 +1782,7 @@ public class ExamService : IExamService
                         practical?.ScheduledOn, practical?.DurationMinutes),
                     DateTime.Now);
             })
+            .OrderBy(c => c.TermNumber)
             .ToList();
 
         return Result<IReadOnlyList<AdmitCardDto>>.Success(cards);
