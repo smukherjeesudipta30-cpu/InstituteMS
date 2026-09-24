@@ -1068,7 +1068,6 @@ public class ChatService : IChatService
 
         var messaging = FirebaseMessaging.DefaultInstance;
         var stale = new List<ChatFcmSubscription>();
-        var label = kind == "video" ? "Incoming video call" : "Incoming call";
 
         foreach (var sub in subscriptions)
         {
@@ -1077,7 +1076,18 @@ public class ChatService : IChatService
                 await messaging.SendAsync(new Message
                 {
                     Token = sub.Token,
-                    Notification = new Notification { Title = label, Body = fromName },
+                    // Deliberately data-only — no top-level Notification block.
+                    // A payload that carries one makes Android auto-display it
+                    // itself whenever the app is backgrounded or fully closed,
+                    // WITHOUT ever calling onMessageReceived, which is the one
+                    // thing CallAwareMessagingService.java needs in order to
+                    // build a real full-screen-intent notification that wakes
+                    // the phone the way an actual call does. Data-only is the
+                    // one payload shape that runs onMessageReceived in every
+                    // app state — foreground, backgrounded, or killed — with
+                    // no exceptions, which is why it is used here and nowhere
+                    // else in this file: every other push in this class is a
+                    // courtesy the OS is welcome to auto-display; a call is not.
                     Data = new Dictionary<string, string>
                     {
                         ["type"] = "call",
@@ -1088,18 +1098,7 @@ public class ChatService : IChatService
                     },
                     Android = new AndroidConfig
                     {
-                        Priority = Priority.High,
-                        Notification = new AndroidNotification
-                        {
-                            // Must match AvijanApp.CALL_CHANNEL_ID — that channel now sets
-                            // its own ringtone-stream sound (see its own comment for why
-                            // "_v3"), so DefaultSound must be off or FCM overrides it back
-                            // to the notification-stream default on delivery.
-                            ChannelId = "incoming_calls_v3",
-                            DefaultVibrateTimings = true,
-                            DefaultSound = false,
-                            Priority = NotificationPriority.MAX
-                        }
+                        Priority = Priority.High
                     }
                 }, ct);
             }
