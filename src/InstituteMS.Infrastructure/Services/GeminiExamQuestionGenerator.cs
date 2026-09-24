@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -120,6 +122,25 @@ public class GeminiExamQuestionGenerator : IExamQuestionGenerator
                 ResultStatus.BadRequest);
         }
 
+        // One retry, on a short delay — Gemini's own 503 "high demand" spikes
+        // are usually seconds long, and scheduling a sitting is a deliberate,
+        // occasional action worth a few extra seconds for, not a hot path
+        // where a doubled request would ever pile up.
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            var result = await CallOnceAsync(prompt, maxOutputTokens, courseName, ct);
+            if (result.Succeeded || result.Status != ResultStatus.TooManyRequests || attempt == 2)
+                return result;
+
+            await Task.Delay(TimeSpan.FromSeconds(3), ct);
+        }
+
+        throw new UnreachableException();
+    }
+
+    private async Task<Result<string>> CallOnceAsync(
+        string prompt, int maxOutputTokens, string courseName, CancellationToken ct)
+    {
         var url = string.Format(ApiUrlTemplate, _model, _apiKey);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
@@ -147,8 +168,31 @@ public class GeminiExamQuestionGenerator : IExamQuestionGenerator
         {
             var body = await response.Content.ReadAsStringAsync(ct);
             _logger.LogWarning("AI request returned {Status} for {Course}: {Body}", response.StatusCode, courseName, body);
+
+            // Both are "try again shortly", not "something is misconfigured":
+            // 503 is Google's own model being temporarily overloaded
+            // ("currently experiencing high demand"); 429 is the free tier's
+            // actual per-minute/per-day quota being hit — a real limit, not
+            // an error, on a tier with no billing behind it to raise it.
+            // Neither has anything to do with the key or model name, and
+            // pointing someone at server configuration for either would send
+            // them chasing a problem that doesn't exist.
+            if (response.StatusCode is HttpStatusCode.ServiceUnavailable or HttpStatusCode.TooManyRequests)
+            {
+                var reason = response.StatusCode == HttpStatusCode.ServiceUnavailable
+                    ? "is temporarily overloaded (\"experiencing high demand\" on Google's side)"
+                    : "hit its free-tier rate limit for the moment";
+
+                return Result<string>.Failure(
+                    $"The AI provider {reason}. Already retried once; try scheduling again in a minute.",
+                    ResultStatus.TooManyRequests);
+            }
+
             return Result<string>.Failure(
-                "The AI provider rejected the request — check Ai:ApiKey and Ai:Model on the server.",
+                response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                    ? "The AI provider rejected the key itself — check Ai:ApiKey on the server."
+                    : $"The AI provider rejected the request ({(int)response.StatusCode} {response.StatusCode}) " +
+                      "— check Ai:Model on the server.",
                 ResultStatus.BadRequest);
         }
 
