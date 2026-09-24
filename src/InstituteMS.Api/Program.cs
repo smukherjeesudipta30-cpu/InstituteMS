@@ -12,6 +12,7 @@ using InstituteMS.Application.Common;
 using InstituteMS.Infrastructure;
 using InstituteMS.Infrastructure.Persistence;
 using InstituteMS.Infrastructure.Security;
+using InstituteMS.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -31,6 +32,7 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
 // ----------------------------------------------------------- infrastructure
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddValidatorsFromAssemblyContaining<LoginRequestValidator>();
+builder.Services.AddHostedService<TeacherExamDueReminderService>();
 
 // ------------------------------------------------------------------- auth
 var jwt = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()

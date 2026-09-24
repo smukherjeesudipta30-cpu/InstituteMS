@@ -42,6 +42,11 @@ public class AppDbContext : DbContext
     public DbSet<TeacherExpense> TeacherExpenses => Set<TeacherExpense>();
     public DbSet<Mark> Marks => Set<Mark>();
     public DbSet<Branch> Branches => Set<Branch>();
+    public DbSet<TeacherExamAssignment> TeacherExamAssignments => Set<TeacherExamAssignment>();
+    public DbSet<TeacherExamSchedule> TeacherExamSchedules => Set<TeacherExamSchedule>();
+    public DbSet<TeacherExamQuestion> TeacherExamQuestions => Set<TeacherExamQuestion>();
+    public DbSet<TeacherExamAttempt> TeacherExamAttempts => Set<TeacherExamAttempt>();
+    public DbSet<TeacherExamAnswer> TeacherExamAnswers => Set<TeacherExamAnswer>();
     public DbSet<StaffAttendance> StaffAttendance => Set<StaffAttendance>();
     public DbSet<AttendanceShift> AttendanceShifts => Set<AttendanceShift>();
     public DbSet<AttendanceChallenge> AttendanceChallenges => Set<AttendanceChallenge>();

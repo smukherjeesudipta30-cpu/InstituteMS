@@ -18,6 +18,7 @@ using InstituteMS.Application.Expenses;
 using InstituteMS.Application.Exams;
 using InstituteMS.Application.Reports;
 using InstituteMS.Application.Students;
+using InstituteMS.Application.TeacherExams;
 using InstituteMS.Application.Users;
 using InstituteMS.Infrastructure.Documents;
 using InstituteMS.Infrastructure.Persistence;
@@ -90,6 +91,9 @@ public static class DependencyInjection
         services.AddSingleton<IChestCardPdfGenerator, ChestCardPdfGenerator>();
         services.AddScoped<RegistrationNumberService>();
         services.AddScoped<StudentLoginGenerator>();
+
+        services.AddScoped<ITeacherExamService, TeacherExamService>();
+        services.AddHttpClient<IExamQuestionGenerator, AnthropicExamQuestionGenerator>();
 
         return services;
     }
