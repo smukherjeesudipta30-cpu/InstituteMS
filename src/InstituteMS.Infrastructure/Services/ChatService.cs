@@ -1091,9 +1091,13 @@ public class ChatService : IChatService
                         Priority = Priority.High,
                         Notification = new AndroidNotification
                         {
-                            ChannelId = "incoming_calls_v2",
+                            // Must match AvijanApp.CALL_CHANNEL_ID — that channel now sets
+                            // its own ringtone-stream sound (see its own comment for why
+                            // "_v3"), so DefaultSound must be off or FCM overrides it back
+                            // to the notification-stream default on delivery.
+                            ChannelId = "incoming_calls_v3",
                             DefaultVibrateTimings = true,
-                            DefaultSound = true,
+                            DefaultSound = false,
                             Priority = NotificationPriority.MAX
                         }
                     }
