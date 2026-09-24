@@ -1505,26 +1505,40 @@ public class ReportService : IReportService
         }
         else
         {
-            var mark = await _db.Marks
-                .AsNoTracking()
-                .Where(m => m.StudentRegistrationId == regId)
-                .OrderByDescending(m => m.ExamDate)
-                .ThenByDescending(m => m.Id)
-                .FirstOrDefaultAsync(ct);
+            // No single term number carries both papers — but the office may still
+            // have scheduled Theory and Practical under two different term numbers
+            // for what is really one examination, the same mismatch that once made
+            // the admit card show only one of the two dates (see GetAdmitCardsAsync).
+            // Matched here the same way: by course alone, not course-and-term.
+            var crossTermCompletion = await GetCourseCompletionMarkAsync(regId, ct);
 
-            if (mark is null)
+            if (crossTermCompletion is not null)
             {
-                // Distinguish "nothing sat" from "sat, but the examination is not
-                // finished" — they need different things done about them.
-                return Result<StudentCertificateDto>.Failure(
-                    portalAll.Count > 0
-                        ? "Your examination is not complete yet — the practical mark has " +
-                          "still to be entered by the institute, so a certificate cannot be issued."
-                        : "No exam result has been recorded yet, so a certificate cannot be issued.",
-                    ResultStatus.NotFound);
+                scored = crossTermCompletion;
             }
+            else
+            {
+                var mark = await _db.Marks
+                    .AsNoTracking()
+                    .Where(m => m.StudentRegistrationId == regId)
+                    .OrderByDescending(m => m.ExamDate)
+                    .ThenByDescending(m => m.Id)
+                    .FirstOrDefaultAsync(ct);
 
-            scored = ToStatementMark(mark);
+                if (mark is null)
+                {
+                    // Distinguish "nothing sat" from "sat, but the examination is not
+                    // finished" — they need different things done about them.
+                    return Result<StudentCertificateDto>.Failure(
+                        portalAll.Count > 0
+                            ? "Your examination is not complete yet — the practical mark has " +
+                              "still to be entered by the institute, so a certificate cannot be issued."
+                            : "No exam result has been recorded yet, so a certificate cannot be issued.",
+                        ResultStatus.NotFound);
+                }
+
+                scored = ToStatementMark(mark);
+            }
         }
 
         /* ---- number this copy -------------------------------------------
@@ -1776,6 +1790,79 @@ public class ReportService : IReportService
             })
             .OrderByDescending(m => m.ExamDate)
             .ToList();
+    }
+
+    /// <summary>
+    /// Whether this student has a completed portal examination for any course —
+    /// Theory and Practical matched by course alone, not by course-and-term the
+    /// way <see cref="GetPortalMarksAsync"/> groups for the statement's own
+    /// per-sitting listing. A course whose two papers were scheduled under
+    /// different term numbers is still one completed examination, not two
+    /// unfinished ones — the same fix already made to <c>GetAdmitCardsAsync</c>
+    /// for the same underlying mismatch. Only reached once the term-grouped
+    /// check has already found nothing, so this never double-counts a course
+    /// that was already recognised the ordinary way.
+    /// </summary>
+    private async Task<StatementMarkDto?> GetCourseCompletionMarkAsync(string regId, CancellationToken ct)
+    {
+        var sat = await _db.ExamAttempts
+            .AsNoTracking()
+            .Where(a => a.StudentRegistrationId == regId
+                        && a.SubmittedOn != null
+                        && a.Score != null)
+            .Join(_db.ExamPapers.AsNoTracking(),
+                a => a.ExamId, p => p.ExamId,
+                (a, p) => new
+                {
+                    a.Score,
+                    AttemptTotal = a.TotalMarks,
+                    PaperTotal = p.TotalMarks,
+                    a.SubmittedOn,
+                    PaperType = a.PaperType ?? p.PaperType,
+                    CourseId = a.CourseId ?? p.CourseId
+                })
+            .Where(x => x.CourseId != null)
+            .ToListAsync(ct);
+
+        var completed = sat
+            .GroupBy(x => x.CourseId!.Value)
+            .Select(g => new
+            {
+                CourseId = g.Key,
+                Theory = g.Where(x => string.Equals(x.PaperType, "Theory", StringComparison.OrdinalIgnoreCase))
+                          .OrderByDescending(x => x.SubmittedOn).FirstOrDefault(),
+                Practical = g.Where(x => string.Equals(x.PaperType, "Practical", StringComparison.OrdinalIgnoreCase))
+                             .OrderByDescending(x => x.SubmittedOn).FirstOrDefault()
+            })
+            .Where(x => x.Theory is not null && x.Practical is not null)
+            .OrderByDescending(x => new[] { x.Theory!.SubmittedOn, x.Practical!.SubmittedOn }.Max())
+            .FirstOrDefault();
+
+        if (completed is null) return null;
+
+        var subjects = new List<StatementSubjectDto>
+        {
+            new("Theory", completed.Theory!.AttemptTotal ?? completed.Theory.PaperTotal, completed.Theory.Score ?? 0),
+            new("Practical", completed.Practical!.AttemptTotal ?? completed.Practical.PaperTotal, completed.Practical.Score ?? 0)
+        };
+
+        var full = subjects.Sum(s => s.FullMarks);
+        var obtained = subjects.Sum(s => s.ObtainedMarks);
+
+        var percent = full <= 0
+            ? 0m
+            : decimal.Round(obtained * 100m / full, 2, MidpointRounding.AwayFromZero);
+
+        var completedOn = new[] { completed.Theory.SubmittedOn, completed.Practical.SubmittedOn }.Max();
+
+        return new StatementMarkDto(
+            -(completed.CourseId * 1000),
+            completedOn is null ? null : DateOnly.FromDateTime(completedOn.Value),
+            subjects,
+            full,
+            obtained,
+            percent,
+            Grade(percent));
     }
 
     private static StatementMarkDto ToStatementMark(Domain.Entities.Mark m)
