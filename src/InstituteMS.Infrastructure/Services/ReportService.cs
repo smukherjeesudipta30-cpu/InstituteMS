@@ -1518,14 +1518,16 @@ public class ReportService : IReportService
             }
             else
             {
-                var mark = await _db.Marks
-                    .AsNoTracking()
-                    .Where(m => m.StudentRegistrationId == regId)
-                    .OrderByDescending(m => m.ExamDate)
-                    .ThenByDescending(m => m.Id)
-                    .FirstOrDefaultAsync(ct);
+                // The legacy Marks screen has the same room for the same mistake:
+                // Theory and Practical entered as two separate rows (typically on
+                // two different dates) rather than both filled into one row's four
+                // subject slots. Taking only the single latest row silently dropped
+                // whichever paper was entered first — reading every row for this
+                // student and merging their subjects (latest entry wins per subject
+                // name) fixes that the same way the portal side was fixed above.
+                var legacyMerged = await GetLegacyMergedMarkAsync(regId, ct);
 
-                if (mark is null)
+                if (legacyMerged is null)
                 {
                     // Distinguish "nothing sat" from "sat, but the examination is not
                     // finished" — they need different things done about them.
@@ -1537,7 +1539,7 @@ public class ReportService : IReportService
                         ResultStatus.NotFound);
                 }
 
-                scored = ToStatementMark(mark);
+                scored = legacyMerged;
             }
         }
 
@@ -1863,6 +1865,61 @@ public class ReportService : IReportService
             obtained,
             percent,
             Grade(percent));
+    }
+
+    /// <summary>
+    /// Every legacy <c>dbo.Marks</c> row for this student, merged into one result
+    /// by subject name — the same-named subject from a later row overrides an
+    /// earlier one (a re-entry or correction), and different-named subjects
+    /// (Theory from one row, Practical from another) both count, instead of the
+    /// single latest row silently hiding whichever paper was entered first.
+    /// Returns null when the student has no legacy Marks rows at all.
+    /// </summary>
+    private async Task<StatementMarkDto?> GetLegacyMergedMarkAsync(string regId, CancellationToken ct)
+    {
+        var rows = await _db.Marks
+            .AsNoTracking()
+            .Where(m => m.StudentRegistrationId == regId)
+            .OrderBy(m => m.ExamDate)
+            .ThenBy(m => m.Id)
+            .ToListAsync(ct);
+
+        if (rows.Count == 0) return null;
+
+        // A single row already covers the common case (all subjects entered
+        // together), so merging trivially reproduces the old behaviour for it.
+        if (rows.Count == 1) return ToStatementMark(rows[0]);
+
+        var bySubject = new Dictionary<string, StatementSubjectDto>(StringComparer.OrdinalIgnoreCase);
+        DateOnly? latestDate = null;
+        var latestId = 0;
+
+        foreach (var row in rows)
+        {
+            void Add(string? subject, int? full, int? obtained)
+            {
+                if (string.IsNullOrWhiteSpace(subject)) return;
+                bySubject[subject.Trim()] = new StatementSubjectDto(subject.Trim(), full ?? 0, obtained ?? 0);
+            }
+
+            Add(row.Subject1, row.FullMarks1, row.ObtainedMarks1);
+            Add(row.Subject2, row.FullMarks2, row.ObtainedMarks2);
+            Add(row.Subject3, row.FullMarks3, row.ObtainedMarks3);
+            Add(row.Subject4, row.FullMarks4, row.ObtainedMarks4);
+
+            if (row.ExamDate is not null) latestDate = row.ExamDate;
+            latestId = row.Id;
+        }
+
+        var subjects = bySubject.Values.ToList();
+        var full = subjects.Sum(s => s.FullMarks);
+        var obtained = subjects.Sum(s => s.ObtainedMarks);
+
+        var percent = full <= 0
+            ? 0m
+            : decimal.Round(obtained * 100m / full, 2, MidpointRounding.AwayFromZero);
+
+        return new StatementMarkDto(latestId, latestDate, subjects, full, obtained, percent, Grade(percent));
     }
 
     private static StatementMarkDto ToStatementMark(Domain.Entities.Mark m)
