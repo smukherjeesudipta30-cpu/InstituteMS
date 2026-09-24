@@ -17,7 +17,7 @@ namespace InstituteMS.Infrastructure.Services;
 /// </summary>
 public class GeminiExamQuestionGenerator : IExamQuestionGenerator
 {
-    private const string DefaultModel = "gemini-2.0-flash";
+    private const string DefaultModel = "gemini-3.6-flash";
     private const string ApiUrlTemplate =
         "https://generativelanguage.googleapis.com/v1beta/models/{0}:generateContent?key={1}";
 
