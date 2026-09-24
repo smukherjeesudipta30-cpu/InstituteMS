@@ -9,23 +9,25 @@ using Microsoft.Extensions.Logging;
 namespace InstituteMS.Infrastructure.Services;
 
 /// <summary>
-/// Generates teacher-exam MCQs by calling Anthropic's Messages API. Configured
-/// with <c>Ai:ApiKey</c> (required) and <c>Ai:Model</c> (optional, defaults
-/// below) — same pattern as <c>Firebase:ServiceAccountJsonPath</c>: read from
+/// Generates teacher-exam MCQs by calling Google's Gemini API (a free tier is
+/// available — no card needed at aistudio.google.com). Configured with
+/// <c>Ai:ApiKey</c> (required) and <c>Ai:Model</c> (optional, defaults below)
+/// — same pattern as <c>Firebase:ServiceAccountJsonPath</c>: read from
 /// configuration, absent in source control, placed on the server directly.
 /// </summary>
-public class AnthropicExamQuestionGenerator : IExamQuestionGenerator
+public class GeminiExamQuestionGenerator : IExamQuestionGenerator
 {
-    private const string DefaultModel = "claude-sonnet-5";
-    private const string ApiUrl = "https://api.anthropic.com/v1/messages";
+    private const string DefaultModel = "gemini-2.0-flash";
+    private const string ApiUrlTemplate =
+        "https://generativelanguage.googleapis.com/v1beta/models/{0}:generateContent?key={1}";
 
     private readonly HttpClient _http;
     private readonly string? _apiKey;
     private readonly string _model;
-    private readonly ILogger<AnthropicExamQuestionGenerator> _logger;
+    private readonly ILogger<GeminiExamQuestionGenerator> _logger;
 
-    public AnthropicExamQuestionGenerator(
-        HttpClient http, IConfiguration configuration, ILogger<AnthropicExamQuestionGenerator> logger)
+    public GeminiExamQuestionGenerator(
+        HttpClient http, IConfiguration configuration, ILogger<GeminiExamQuestionGenerator> logger)
     {
         _http = http;
         _apiKey = configuration["Ai:ApiKey"];
@@ -99,8 +101,7 @@ public class AnthropicExamQuestionGenerator : IExamQuestionGenerator
             "practical and exam-relevant, not a full textbook. Use Markdown with headings and " +
             "bullet points. Respond with ONLY the guide itself, no preamble like \"Here is...\".";
 
-        var response = await CallAsync(prompt, 2000, courseName, ct);
-        return response;
+        return await CallAsync(prompt, 2000, courseName, ct);
     }
 
     /// <summary>
@@ -109,7 +110,7 @@ public class AnthropicExamQuestionGenerator : IExamQuestionGenerator
     /// a non-2xx response, or an empty reply.
     /// </summary>
     private async Task<Result<string>> CallAsync(
-        string prompt, int maxTokens, string courseName, CancellationToken ct)
+        string prompt, int maxOutputTokens, string courseName, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
         {
@@ -119,14 +120,16 @@ public class AnthropicExamQuestionGenerator : IExamQuestionGenerator
                 ResultStatus.BadRequest);
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, ApiUrl);
-        request.Headers.Add("x-api-key", _apiKey);
-        request.Headers.Add("anthropic-version", "2023-06-01");
+        var url = string.Format(ApiUrlTemplate, _model, _apiKey);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Content = JsonContent.Create(new
         {
-            model = _model,
-            max_tokens = maxTokens,
-            messages = new[] { new { role = "user", content = prompt } }
+            contents = new[]
+            {
+                new { parts = new[] { new { text = prompt } } }
+            },
+            generationConfig = new { maxOutputTokens }
         });
 
         HttpResponseMessage response;
@@ -149,11 +152,13 @@ public class AnthropicExamQuestionGenerator : IExamQuestionGenerator
                 ResultStatus.BadRequest);
         }
 
-        var payload = await response.Content.ReadFromJsonAsync<AnthropicResponse>(cancellationToken: ct);
-        var text = payload?.Content?.FirstOrDefault(c => c.Type == "text")?.Text;
+        var payload = await response.Content.ReadFromJsonAsync<GeminiResponse>(cancellationToken: ct);
+        var text = payload?.Candidates?.FirstOrDefault()?.Content?.Parts?.FirstOrDefault()?.Text;
 
         return string.IsNullOrWhiteSpace(text)
-            ? Result<string>.Failure("The AI provider returned an empty response.", ResultStatus.BadRequest)
+            ? Result<string>.Failure(
+                "The AI provider returned an empty response — the request may have been blocked by a " +
+                "safety filter. Try again.", ResultStatus.BadRequest)
             : Result<string>.Success(text);
     }
 
@@ -169,17 +174,26 @@ public class AnthropicExamQuestionGenerator : IExamQuestionGenerator
         return start >= 0 && end > start ? text[start..(end + 1)] : text;
     }
 
-    private class AnthropicResponse
+    private class GeminiResponse
     {
-        [JsonPropertyName("content")]
-        public List<AnthropicContentBlock>? Content { get; set; }
+        [JsonPropertyName("candidates")]
+        public List<GeminiCandidate>? Candidates { get; set; }
     }
 
-    private class AnthropicContentBlock
+    private class GeminiCandidate
     {
-        [JsonPropertyName("type")]
-        public string? Type { get; set; }
+        [JsonPropertyName("content")]
+        public GeminiContent? Content { get; set; }
+    }
 
+    private class GeminiContent
+    {
+        [JsonPropertyName("parts")]
+        public List<GeminiPart>? Parts { get; set; }
+    }
+
+    private class GeminiPart
+    {
         [JsonPropertyName("text")]
         public string? Text { get; set; }
     }

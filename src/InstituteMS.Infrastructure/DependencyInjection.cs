@@ -93,7 +93,7 @@ public static class DependencyInjection
         services.AddScoped<StudentLoginGenerator>();
 
         services.AddScoped<ITeacherExamService, TeacherExamService>();
-        services.AddHttpClient<IExamQuestionGenerator, AnthropicExamQuestionGenerator>();
+        services.AddHttpClient<IExamQuestionGenerator, GeminiExamQuestionGenerator>();
 
         return services;
     }
