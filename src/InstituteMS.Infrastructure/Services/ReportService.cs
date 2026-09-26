@@ -810,11 +810,38 @@ public class ReportService : IReportService
 
         var allAdmissions = admissions.Concat(legacyAdmissions).ToList();
 
+        /* Exam fees are counter money too: a receptionist taking one holds that
+           cash (or saw it paid into the bank) exactly like a monthly fee, so the
+           reconciliation has to include it or the drawer never balances. The
+           collector is whoever received it - for an entry moved over from Other
+           income, the person who originally recorded it. */
+        var examFeeQuery = _db.ExamFeePayments
+            .AsNoTracking()
+            .Where(e => e.PaidOn >= query.From && e.PaidOn <= query.To);
+
+        if (!string.IsNullOrWhiteSpace(query.Branch))
+            examFeeQuery = examFeeQuery.Where(e => e.Branch == query.Branch);
+
+        if (mode is not null)
+            examFeeQuery = examFeeQuery.Where(e => e.PaymentMode == mode);
+
+        var examFees = (await examFeeQuery
+                .Join(_db.Students.AsNoTracking(), e => e.StudentId, s => s.Id, (e, s) => new
+                {
+                    e.PaidOn, e.Amount, e.PaymentMode, e.CreatedBy, e.Branch, e.RegistrationId, s.Name
+                })
+                .ToListAsync(ct))
+            .Select(e => new FeeCollectionRowDto(
+                e.PaidOn, "Exam fee", e.RegistrationId, e.Name, e.Branch,
+                e.Amount, e.PaymentMode, e.CreatedBy, null))
+            .ToList();
+
         /* The by-kind split is worked out before the kind filter narrows the rows,
            so the two tiles always show the whole picture for the range and the
            filter only changes which rows are listed underneath them. */
         var monthlyTotal = monthly.Sum(r => r.Amount);
         var admissionTotal = allAdmissions.Sum(r => r.Amount);
+        var examFeeTotal = examFees.Sum(r => r.Amount);
 
         var kind = string.IsNullOrWhiteSpace(query.Kind) ? null : query.Kind.Trim();
 
@@ -822,7 +849,8 @@ public class ReportService : IReportService
         {
             "Monthly" => monthly,
             "Admission" => allAdmissions,
-            _ => monthly.Concat(allAdmissions)
+            "Exam" => examFees,
+            _ => monthly.Concat(allAdmissions).Concat(examFees)
         };
 
         var rows = selected
@@ -842,7 +870,8 @@ public class ReportService : IReportService
         return Result<FeeCollectionsReportDto>.Success(new FeeCollectionsReportDto(
             query.From, query.To, query.Branch, mode,
             rows, totals, cashTotal, bankTotal, rows.Sum(r => r.Amount), DateTime.Now,
-            monthlyTotal, admissionTotal, monthly.Count, allAdmissions.Count));
+            monthlyTotal, admissionTotal, monthly.Count, allAdmissions.Count,
+            examFeeTotal, examFees.Count));
     }
 
     public async Task<Result<ExpenseReportDto>> GetExpensesAsync(

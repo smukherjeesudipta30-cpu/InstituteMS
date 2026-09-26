@@ -329,7 +329,9 @@ public record FeeCollectionsReportDto(
     decimal MonthlyTotal = 0m,
     decimal AdmissionTotal = 0m,
     int MonthlyCount = 0,
-    int AdmissionCount = 0);
+    int AdmissionCount = 0,
+    decimal ExamFeeTotal = 0m,
+    int ExamFeeCount = 0);
 
 /* ================================================================ expenses */
 
