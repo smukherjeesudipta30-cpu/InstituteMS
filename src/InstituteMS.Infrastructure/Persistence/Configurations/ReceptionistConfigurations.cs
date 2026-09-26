@@ -48,6 +48,7 @@ public class ReceptionistPaymentConfiguration : IEntityTypeConfiguration<Recepti
         b.Property(x => x.PaidOn).HasColumnName("PaidOn");
         b.Property(x => x.Amount).HasColumnName("Amount").HasPrecision(18, 2);
         b.Property(x => x.ExtraShiftBonus).HasColumnName("ExtraShiftBonus").HasPrecision(18, 2);
+        b.Property(x => x.ReferralBonus).HasColumnName("ReferralBonus").HasPrecision(12, 2);
         b.Property(x => x.Branch).HasColumnName("Branch").HasMaxLength(100);
         b.Property(x => x.Notes).HasColumnName("Notes").HasMaxLength(200);
         b.Property(x => x.CreatedBy).HasColumnName("CreatedBy").HasMaxLength(50);

@@ -33,6 +33,8 @@ public class AppDbContext : DbContext
     public DbSet<ExamAttempt> ExamAttempts => Set<ExamAttempt>();
     public DbSet<ExamAttemptAnswer> ExamAttemptAnswers => Set<ExamAttemptAnswer>();
     public DbSet<ExamAnswerCopy> ExamAnswerCopies => Set<ExamAnswerCopy>();
+    public DbSet<ReferralSlab> ReferralSlabs => Set<ReferralSlab>();
+    public DbSet<ReferralCredit> ReferralCredits => Set<ReferralCredit>();
     public DbSet<ExamSchedule> ExamSchedules => Set<ExamSchedule>();
     public DbSet<CertificateIssue> CertificateIssues => Set<CertificateIssue>();
     public DbSet<Receptionist> Receptionists => Set<Receptionist>();

@@ -793,7 +793,9 @@ public record BranchPeriodRowDto(
     /// not a branch, and a teacher may teach at more than one. Attributing them
     /// would be inventing a number, so they are excluded and said to be excluded.
     /// </summary>
-    decimal Net);
+    decimal Net,
+    // Admission referral commission credited in the period (already deducted in Net).
+    decimal ReferralCommission = 0m);
 
 /// <summary>A branch's whole-range total, across every period.</summary>
 public record BranchTotalDto(
@@ -806,7 +808,9 @@ public record BranchTotalDto(
     decimal Expenses,
     decimal OtherIncome,
     decimal ReceptionistPay,
-    decimal Net);
+    decimal Net,
+    // Admission referral commission credited in the period (already deducted in Net).
+    decimal ReferralCommission = 0m);
 
 /// <summary>
 /// Admissions, fee payments and expenses by branch, bucketed by month, quarter

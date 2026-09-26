@@ -78,6 +78,9 @@ public class IncomeService : IIncomeService
 
         var receptionistPayCount = await ReceptionistPayQuery(from, to, branch).CountAsync(ct);
 
+        var referralCommission = await ReferralQuery(from, to, branch).SumAsync(r => (decimal?)r.Amount ?? 0m, ct);
+        var referralCount = await ReferralQuery(from, to, branch).CountAsync(ct);
+
         var totalIncome = fees + admissions + otherIncome;
 
         /* ---- teacher cost is counted ONCE ---------------------------------
@@ -96,7 +99,11 @@ public class IncomeService : IIncomeService
            figure in its own right rather than a subset: paid can exceed
            earned within a range, so it is not an "of which" at all. */
 
-        var totalCost = expenses + teacherPayouts + receptionistPay;
+        /* Referral commission is its own cost: accrued when the admission fee is
+           collected, like the teacher share. A teacher's is not in TecFees and a
+           receptionist's is not in ReceptionistPayment.Amount, so nothing here is
+           counted twice. */
+        var totalCost = expenses + teacherPayouts + receptionistPay + referralCommission;
         var net = totalIncome - totalCost;
 
         var margin = totalIncome == 0m
@@ -127,6 +134,7 @@ public class IncomeService : IIncomeService
             new(IncomeSection.TeacherPayouts, "Teacher share earned", teacherPayouts, teacherPayoutCount, true, false),
             new(IncomeSection.TeacherExpenses, "Paid to teachers", teacherExpenses, teacherExpenseCount, true, true),
             new(IncomeSection.ReceptionistPay, "Receptionist pay", receptionistPay, receptionistPayCount, true, false),
+            new(IncomeSection.ReferralCommission, "Referral commission", referralCommission, referralCount, true, false),
             new(IncomeSection.Dues, "Dues movement", duesMovement, feeCount, false, true)
         };
 
@@ -316,6 +324,34 @@ public class IncomeService : IIncomeService
                 return PagedResult<IncomeDetailDto>.Create(items, query.Page, query.PageSize, total);
             }
 
+            case IncomeSection.ReferralCommission:
+            {
+                var source = ReferralQuery(from, to, branch);
+                var total = await source.CountAsync(ct);
+
+                var rows = await source
+                    .OrderByDescending(r => r.CreditedOn).ThenByDescending(r => r.Id)
+                    .Skip(skip).Take(query.PageSize)
+                    .ToListAsync(ct);
+
+                var names = await StudentNamesAsync(rows.Select(r => r.RegistrationId), ct);
+                var teacherIds = rows.Where(r => r.ReferrerType == Domain.Entities.ReferrerTypes.Teacher).Select(r => r.ReferrerId).ToList();
+                var receptionistIds = rows.Where(r => r.ReferrerType == Domain.Entities.ReferrerTypes.Receptionist).Select(r => r.ReferrerId).ToList();
+                var teachers = await _db.Teachers.AsNoTracking().Where(t => teacherIds.Contains(t.Id)).ToDictionaryAsync(t => t.Id, t => t.Name, ct);
+                var receptionists = await _db.Receptionists.AsNoTracking().Where(r => receptionistIds.Contains(r.Id)).ToDictionaryAsync(r => r.Id, r => (string?)r.Name, ct);
+
+                var items = rows.Select(r => new IncomeDetailDto(
+                    r.Id, r.CreditedOn, null,
+                    Name(names, r.RegistrationId), r.RegistrationId,
+                    Course(names, r.RegistrationId),
+                    r.ReferrerType == Domain.Entities.ReferrerTypes.Teacher
+                        ? teachers.GetValueOrDefault(r.ReferrerId)
+                        : receptionists.GetValueOrDefault(r.ReferrerId),
+                    $"Referral {r.Percent:0.##}% of {r.PaymentAmount:0.##}", r.Amount)).ToList();
+
+                return PagedResult<IncomeDetailDto>.Create(items, query.Page, query.PageSize, total);
+            }
+
             default:
                 return PagedResult<IncomeDetailDto>.Create([], query.Page, query.PageSize, 0);
         }
@@ -369,6 +405,11 @@ public class IncomeService : IIncomeService
             .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Amount ?? 0m)))
             .ToListAsync(ct);
 
+        var referralByMonth = await ReferralQuery(from, to, branch)
+            .GroupBy(r => new { r.CreditedOn.Year, r.CreditedOn.Month })
+            .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => x.Amount)))
+            .ToListAsync(ct);
+
         var points = new List<IncomeTrendPointDto>(months);
 
         for (var cursor = new DateOnly(from.Year, from.Month, 1);
@@ -379,7 +420,8 @@ public class IncomeService : IIncomeService
             // Teacher cost is the payout, not the payout plus the cash settling it.
             var cost = Total(expenseByMonth, cursor)
                        + Total(payoutByMonth, cursor)
-                       + Total(receptionistByMonth, cursor);
+                       + Total(receptionistByMonth, cursor)
+                       + Total(referralByMonth, cursor);
 
             var label = CultureInfo.InvariantCulture.DateTimeFormat.GetAbbreviatedMonthName(cursor.Month);
             points.Add(new IncomeTrendPointDto(cursor.Year, cursor.Month, label, income, cost, income - cost));
@@ -519,6 +561,16 @@ public class IncomeService : IIncomeService
             .Where(p => (p.PaidOn ?? p.PayMonth) >= from && (p.PaidOn ?? p.PayMonth) <= to);
 
         return branch is null ? q : q.Where(p => p.Branch == branch);
+    }
+
+    private IQueryable<Domain.Entities.ReferralCredit> ReferralQuery(
+        DateOnly from, DateOnly to, string? branch = null)
+    {
+        var q = _db.ReferralCredits
+            .AsNoTracking()
+            .Where(r => r.CreditedOn >= from && r.CreditedOn <= to);
+
+        return branch is null ? q : q.Where(r => r.Branch == branch);
     }
 
     /* --------------------------------------------------------------- names */

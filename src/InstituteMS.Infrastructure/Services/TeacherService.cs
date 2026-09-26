@@ -305,6 +305,14 @@ public class TeacherService : ITeacherService
             })
             .ToListAsync(ct);
 
+        // Admission referral credits are part of what a teacher has earned.
+        var referrals = await _db.ReferralCredits
+            .AsNoTracking()
+            .Where(r => r.ReferrerType == ReferrerTypes.Teacher && ids.Contains(r.ReferrerId))
+            .GroupBy(r => r.ReferrerId)
+            .Select(g => new { TeacherId = g.Key, Total = g.Sum(x => x.Amount) })
+            .ToDictionaryAsync(x => x.TeacherId, x => x.Total, ct);
+
         return teachers.Select(t =>
         {
             var assigned = assignments
@@ -318,7 +326,7 @@ public class TeacherService : ITeacherService
                 t.Designation, t.Qualification, t.ComputerTraining, t.Branch, t.IsTechnical,
                 assigned.Count(s => s.IsActive == true),
                 assigned.Count,
-                money?.Total ?? 0m,
+                (money?.Total ?? 0m) + referrals.GetValueOrDefault(t.Id),
                 money?.LastPaid,
                 t.IsPlaceholder,
                 assigned.Count > 0 || money is not null);
@@ -420,6 +428,13 @@ public class TeacherService : ITeacherService
         }
 
         var earned = await earnedQuery.SumAsync(t => (decimal?)t.Salary ?? 0m, ct);
+
+        // Plus admission referral credits, over the same date range.
+        var referralQuery = _db.ReferralCredits.AsNoTracking()
+            .Where(r => r.ReferrerType == ReferrerTypes.Teacher && r.ReferrerId == teacherId);
+        if (from.HasValue) referralQuery = referralQuery.Where(r => r.CreditedOn >= from);
+        if (to.HasValue) referralQuery = referralQuery.Where(r => r.CreditedOn <= to);
+        earned += await referralQuery.SumAsync(r => (decimal?)r.Amount ?? 0m, ct);
         var paid = await paidQuery.SumAsync(t => (decimal?)t.Amount ?? 0m, ct);
 
         return Result<TeacherAccountDto>.Success(new TeacherAccountDto(

@@ -22,7 +22,9 @@ public enum IncomeSection
     /// <summary>Movement in student dues over the range (<c>NewDue minus OldDue</c>).</summary>
     Dues = 7,
     /// <summary>Receptionists' monthly pay (<c>ReceptionistPayment</c>).</summary>
-    ReceptionistPay = 8
+    ReceptionistPay = 8,
+    /// <summary>Admission referral commission credited to teachers and receptionists (<c>ReferralCredit</c>).</summary>
+    ReferralCommission = 9
 }
 
 /// <summary>

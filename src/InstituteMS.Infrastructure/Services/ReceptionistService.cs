@@ -68,7 +68,7 @@ public class ReceptionistService : IReceptionistService
                 r.Designation, r.Qualification, r.ComputerTraining, r.IsTechnical,
                 r.MonthlyPay,
                 r.Payments.Count,
-                r.Payments.Sum(p => (decimal?)(p.Amount + p.ExtraShiftBonus)) ?? 0m,
+                r.Payments.Sum(p => (decimal?)(p.Amount + p.ExtraShiftBonus + p.ReferralBonus)) ?? 0m,
                 r.Payments.Max(p => (DateOnly?)p.PayMonth)))
             .ToListAsync(ct);
 
@@ -257,6 +257,7 @@ public class ReceptionistService : IReceptionistService
             existing.Branch = person.Branch;
 
             await _db.SaveChangesAsync(ct);
+            await AttachReferralCreditsAsync(existing, ct);
 
             if (bonusChanged && bonus.Value is not null)
                 await NotifyExtraShiftBonusAsync(person.Name, person.Branch, month, bonus.Value, actor, ct);
@@ -280,11 +281,60 @@ public class ReceptionistService : IReceptionistService
 
         _db.ReceptionistPayments.Add(payment);
         await _db.SaveChangesAsync(ct);
+        await AttachReferralCreditsAsync(payment, ct);
 
         if (bonus.Value is not null)
             await NotifyExtraShiftBonusAsync(person.Name, person.Branch, month, bonus.Value, actor, ct);
 
         return Result<int>.Success(payment.Id);
+    }
+
+    /// <summary>
+    /// Pays the receptionist's admission referral credits on this payment: every
+    /// credit not yet paid, earned up to the end of the pay cycle this payment
+    /// covers. Credits already on this payment stay on it, so re-saving a
+    /// correction never pays them twice or drops them.
+    /// </summary>
+    private async Task AttachReferralCreditsAsync(ReceptionistPayment payment, CancellationToken ct)
+    {
+        var startDay = await GetPayCycleStartDayAsync(ct);
+        var (_, cycleEnd) = PayCycleRange(payment.PayMonth, startDay);
+
+        var unpaid = await _db.ReferralCredits
+            .Where(r => r.ReferrerType == ReferrerTypes.Receptionist
+                        && r.ReferrerId == payment.ReceptionistId
+                        && r.ReceptionistPaymentId == null
+                        && r.CreditedOn <= cycleEnd)
+            .ToListAsync(ct);
+
+        foreach (var credit in unpaid) credit.ReceptionistPaymentId = payment.Id;
+        await _db.SaveChangesAsync(ct);
+
+        payment.ReferralBonus = await _db.ReferralCredits
+            .Where(r => r.ReceptionistPaymentId == payment.Id)
+            .SumAsync(r => (decimal?)r.Amount ?? 0m, ct);
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task<Result<decimal>> GetPendingReferralBonusAsync(
+        int receptionistId, DateOnly forMonth, CancellationToken ct = default)
+    {
+        var month = MonthStart(forMonth);
+        var startDay = await GetPayCycleStartDayAsync(ct);
+        var (_, cycleEnd) = PayCycleRange(month, startDay);
+
+        var existingId = await _db.ReceptionistPayments.AsNoTracking()
+            .Where(p => p.ReceptionistId == receptionistId && p.PayMonth == month)
+            .Select(p => (int?)p.Id)
+            .FirstOrDefaultAsync(ct);
+
+        var amount = await _db.ReferralCredits.AsNoTracking()
+            .Where(r => r.ReferrerType == ReferrerTypes.Receptionist && r.ReferrerId == receptionistId
+                        && ((r.ReceptionistPaymentId == null && r.CreditedOn <= cycleEnd)
+                            || (existingId != null && r.ReceptionistPaymentId == existingId)))
+            .SumAsync(r => (decimal?)r.Amount ?? 0m, ct);
+
+        return Result<decimal>.Success(amount);
     }
 
     public async Task<Result<IReadOnlyList<ReceptionistPaymentDto>>> GetPaymentsAsync(
@@ -303,7 +353,7 @@ public class ReceptionistService : IReceptionistService
                 p.Id, p.ReceptionistId,
                 p.Receptionist != null ? p.Receptionist.Name : null,
                 p.PayMonth, p.PaidOn, p.Amount, p.ExtraShiftBonus, p.Branch, p.Notes,
-                p.CreatedBy, p.CreatedOn))
+                p.CreatedBy, p.CreatedOn, p.ReferralBonus))
             .ToListAsync(ct);
 
         return Result<IReadOnlyList<ReceptionistPaymentDto>>.Success(rows);
@@ -315,6 +365,10 @@ public class ReceptionistService : IReceptionistService
 
         if (payment is null)
             return Result<bool>.Failure("That payment no longer exists.", ResultStatus.NotFound);
+
+        // Referral credits paid on it go back to unpaid, to be paid on the next one.
+        var credits = await _db.ReferralCredits.Where(r => r.ReceptionistPaymentId == paymentId).ToListAsync(ct);
+        foreach (var credit in credits) credit.ReceptionistPaymentId = null;
 
         _db.ReceptionistPayments.Remove(payment);
         await _db.SaveChangesAsync(ct);
@@ -349,7 +403,7 @@ public class ReceptionistService : IReceptionistService
                 p.PayMonth,
                 p.ReceptionistId,
                 Name = p.Receptionist != null ? p.Receptionist.Name : "(removed)",
-                Amount = p.Amount + p.ExtraShiftBonus
+                Amount = p.Amount + p.ExtraShiftBonus + p.ReferralBonus
             })
             .ToListAsync(ct);
 

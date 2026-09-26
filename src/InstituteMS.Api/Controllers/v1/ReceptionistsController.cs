@@ -152,6 +152,16 @@ public class ReceptionistsController : ApiControllerBase
         int id, [FromQuery] DateOnly forMonth, CancellationToken ct)
         => Envelope(await _receptionists.GetExtraShiftBonusAsync(id, forMonth, ct));
 
+    /// <summary>
+    /// Admission referral credits the payment for <paramref name="forMonth"/> will
+    /// pay — shown on the payment form; the server attaches them itself on save.
+    /// </summary>
+    [HttpGet("{id:int}/referral-bonus")]
+    [Authorize(Roles = UserRoles.Admin)]
+    [ProducesResponseType(typeof(ApiResponse<decimal>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ReferralBonus(int id, [FromQuery] DateOnly forMonth, CancellationToken ct)
+        => Envelope(await _receptionists.GetPendingReferralBonusAsync(id, forMonth, ct));
+
     /// <summary>Receptionist pay by branch and month.</summary>
     // Everyone's salary on one page. Back office only, for the reason above.
     [HttpGet("report")]

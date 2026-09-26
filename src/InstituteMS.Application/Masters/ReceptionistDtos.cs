@@ -165,7 +165,9 @@ public record ReceptionistPaymentDto(
     string? Branch,
     string? Notes,
     string? RecordedBy,
-    DateTime RecordedOn);
+    DateTime RecordedOn,
+    // Admission referral credits paid on this payment.
+    decimal ReferralBonus = 0m);
 
 /* ================================================= the branch-wise report */
 
@@ -297,6 +299,9 @@ public interface IReceptionistService
     /// days in <paramref name="forMonth"/> where they scanned in at their branch on
     /// a day rostered to a colleague who did not — covering an absence.
     /// </summary>
+    /// <summary>Referral credits that the payment for <paramref name="forMonth"/> would pay.</summary>
+    Task<Result<decimal>> GetPendingReferralBonusAsync(int receptionistId, DateOnly forMonth, CancellationToken ct = default);
+
     Task<Result<ExtraShiftBonusDto>> GetExtraShiftBonusAsync(
         int receptionistId, DateOnly forMonth, CancellationToken ct = default);
 }

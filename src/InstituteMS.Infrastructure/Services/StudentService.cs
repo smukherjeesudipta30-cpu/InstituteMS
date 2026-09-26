@@ -2,6 +2,7 @@ using InstituteMS.Application.Documents;
 using InstituteMS.Application.Common;
 using InstituteMS.Application.Common.Interfaces;
 using InstituteMS.Application.Notifications;
+using InstituteMS.Application.Referrals;
 using InstituteMS.Application.Students;
 using InstituteMS.Domain.Common;
 using InstituteMS.Domain.Entities;
@@ -26,6 +27,7 @@ public class StudentService : IStudentService
     private readonly IStudentMailer _mailer;
     private readonly IReceiptPdfGenerator _pdf;
     private readonly IReceiptLinkService _links;
+    private readonly IReferralService _referrals;
 
     public StudentService(
         AppDbContext db,
@@ -35,8 +37,10 @@ public class StudentService : IStudentService
         IStudentMailer mailer,
         IReceiptPdfGenerator pdf,
         IReceiptLinkService links,
+        IReferralService referrals,
         ILogger<StudentService> logger)
     {
+        _referrals = referrals;
         _db = db;
         _numbers = numbers;
         _logins = logins;
@@ -355,7 +359,7 @@ public class StudentService : IStudentService
                 $"That is more than the outstanding admission fee of {due:0.##}.");
         }
 
-        _db.AdmissionFeePayments.Add(new AdmissionFeePayment
+        var duePayment = new AdmissionFeePayment
         {
             StudentId = student.Id,
             RegistrationId = student.RegistrationId,
@@ -366,7 +370,8 @@ public class StudentService : IStudentService
             Note = request.Note?.Trim(),
             CreatedBy = actor,
             CreatedOn = DateTime.Now
-        });
+        };
+        _db.AdmissionFeePayments.Add(duePayment);
 
         // The receipt and the running total move together or not at all.
         student.AdmissionFeesPaid = paid + request.Amount;
@@ -378,6 +383,9 @@ public class StudentService : IStudentService
         _logger.LogInformation(
             "Admission due {Amount} collected for student {StudentId} ({RegistrationId}) by {Actor}",
             request.Amount, student.Id, student.RegistrationId, actor ?? "(unknown)");
+
+        // The referrer earns their share of each instalment as it comes in.
+        await _referrals.CreditAdmissionPaymentAsync(duePayment.Id, actor, ct);
 
         return Result<AdmissionDueDto>.Success(await BuildAdmissionDueAsync(student, ct));
     }
@@ -529,6 +537,17 @@ public class StudentService : IStudentService
         if (referenceError is not null)
             return Result<StudentCreatedDto>.Failure(referenceError, ResultStatus.BadRequest);
 
+        /* Every new admission names who referred the student. Only here, not in
+           the shared validator: students admitted before referrals existed are
+           edited without one, and a referrer is never changed after admission. */
+        var referrerError = await _referrals.ValidateReferrerAsync(request.ReferrerType, request.ReferrerId, ct);
+        if (referrerError is not null)
+            return Result<StudentCreatedDto>.Failure(referrerError, ResultStatus.BadRequest);
+
+        // The rate is fixed now, from the slabs as they stand at admission.
+        var referralPercent = await _referrals.PercentForFeeAsync(request.AdmissionFees ?? 0m, ct);
+        AdmissionFeePayment? admissionPayment = null;
+
         // EnableRetryOnFailure is on for the context, so a user-initiated transaction
         // has to run inside the execution strategy — otherwise the whole unit cannot
         // be replayed safely after a transient fault.
@@ -556,6 +575,9 @@ public class StudentService : IStudentService
 
             Apply(request, entity);
             entity.Branch = branch?.Name;
+            entity.ReferrerType = request.ReferrerType;
+            entity.ReferrerId = request.ReferrerId;
+            entity.ReferralPercent = referralPercent;
 
             /* Null means "paying the whole thing", which is what every admission did
                before part payment existed — so a client that does not send the field
@@ -574,7 +596,7 @@ public class StudentService : IStudentService
                real case, and a zero-rupee receipt would just be noise in the ledger. */
             if (paidNow > 0m)
             {
-                _db.AdmissionFeePayments.Add(new AdmissionFeePayment
+                admissionPayment = new AdmissionFeePayment
                 {
                     StudentId = entity.Id,
                     RegistrationId = entity.RegistrationId,
@@ -584,7 +606,8 @@ public class StudentService : IStudentService
                     IsAtAdmission = true,
                     CreatedBy = actor,
                     CreatedOn = DateTime.Now
-                });
+                };
+                _db.AdmissionFeePayments.Add(admissionPayment);
             }
 
             // Legacy Replica_id is the row's own id.
@@ -606,6 +629,10 @@ public class StudentService : IStudentService
         _logger.LogInformation(
             "Student {StudentId} admitted as {RegistrationId} by {Actor}",
             student.Id, student.RegistrationId, actor);
+
+        // The referrer's share of what was paid at the counter, after the commit.
+        if (admissionPayment is not null)
+            await _referrals.CreditAdmissionPaymentAsync(admissionPayment.Id, actor, ct);
 
         /* Sent after the transaction has committed, so a slow or unreachable mail
            server cannot hold a database transaction open - and deliberately
@@ -1008,7 +1035,7 @@ public class StudentService : IStudentService
             .ToList();
     }
 
-    private static IQueryable<StudentListItemDto> Project(IQueryable<Student> students) =>
+    private IQueryable<StudentListItemDto> Project(IQueryable<Student> students) =>
         students.AsNoTracking().Select(s => new StudentListItemDto(
             s.Id,
             s.Name,
@@ -1045,7 +1072,15 @@ public class StudentService : IStudentService
             (s.AdmissionFees ?? 0m) - (s.AdmissionFeesPaid ?? s.AdmissionFees ?? 0m) > 0m
                 ? (s.AdmissionFees ?? 0m) - (s.AdmissionFeesPaid ?? s.AdmissionFees ?? 0m)
                 : 0m,
-            s.PersonalEmail));
+            s.PersonalEmail,
+            s.ReferrerType,
+            s.ReferrerId,
+            s.ReferrerType == ReferrerTypes.Teacher
+                ? _db.Teachers.Where(t => t.Id == s.ReferrerId).Select(t => t.Name).FirstOrDefault()
+                : s.ReferrerType == ReferrerTypes.Receptionist
+                    ? _db.Receptionists.Where(r => r.Id == s.ReferrerId).Select(r => r.Name).FirstOrDefault()
+                    : null,
+            s.ReferralPercent));
 
     /// <summary>Copies the request onto the entity. Shared by create and update.</summary>
     private static void Apply(StudentSaveRequest request, Student student)

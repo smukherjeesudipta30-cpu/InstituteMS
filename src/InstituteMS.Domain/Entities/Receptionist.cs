@@ -105,6 +105,12 @@ public class ReceptionistPayment
     public decimal ExtraShiftBonus { get; set; }
 
     /// <summary>
+    /// Admission referral credits paid on this payment (see <see cref="ReferralCredit"/>),
+    /// computed by the server and kept apart from <see cref="Amount"/>.
+    /// </summary>
+    public decimal ReferralBonus { get; set; }
+
+    /// <summary>
     /// Copied from the receptionist when the payment is recorded, so a branch
     /// report stays correct if they later move between branches.
     /// </summary>

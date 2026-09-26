@@ -952,6 +952,25 @@ public class ReportService : IReportService
                 student?.Name, e.StudentRegistrationId, student?.CourseName, e.PaidOn, e.Salary);
         }).ToList();
 
+        /* Admission referral credits are earnings too: listed as their own rows,
+           labelled in the course column, so the total and the rows agree. */
+        var referralRows = await _db.ReferralCredits
+            .AsNoTracking()
+            .Where(r => r.ReferrerType == ReferrerTypes.Teacher && r.ReferrerId == teacherId
+                        && r.CreditedOn >= from && r.CreditedOn <= to)
+            .Join(_db.Students.AsNoTracking(), r => r.StudentId, s => s.Id,
+                  (r, s) => new { r.RegistrationId, s.Name, r.CreditedOn, r.Percent, r.Amount })
+            .ToListAsync(ct);
+
+        foreach (var r in referralRows)
+        {
+            earningRows.Add(new TeacherEarningRowDto(
+                r.Name, r.RegistrationId, $"Admission referral ({r.Percent:0.##}%)", r.CreditedOn, r.Amount));
+        }
+
+        earningRows = earningRows.OrderByDescending(r => r.PaidOn).ToList();
+        totalEarned += referralRows.Sum(r => r.Amount);
+
         var paymentsQuery = _db.TeacherExpenses
             .AsNoTracking()
             .Where(x => x.TeacherId == teacherId
@@ -2114,6 +2133,13 @@ public class ReportService : IReportService
             })
             .ToListAsync(ct);
 
+        /* ---- admission referral commission: branch copied onto the credit */
+        var referrals = await _db.ReferralCredits
+            .AsNoTracking()
+            .Where(r => r.CreditedOn >= query.From && r.CreditedOn <= query.To)
+            .Select(r => new { r.Branch, r.CreditedOn, r.Amount })
+            .ToListAsync(ct);
+
         /* ---- stitch them together on (branch, period) -------------------- */
         var buckets = new Dictionary<(string Branch, DateOnly Start), BranchPeriodAccumulator>();
 
@@ -2165,6 +2191,11 @@ public class ReportService : IReportService
             Bucket(r.Branch, r.Paid).ReceptionistPay += r.Amount;
         }
 
+        foreach (var r in referrals)
+        {
+            Bucket(r.Branch, r.CreditedOn).ReferralCommission += r.Amount;
+        }
+
         var rows = buckets
             .Where(kv => wanted is null || string.Equals(kv.Key.Branch, wanted, StringComparison.OrdinalIgnoreCase))
             .Select(kv => new BranchPeriodRowDto(
@@ -2183,7 +2214,8 @@ public class ReportService : IReportService
                 // Teacher payouts are absent on purpose - see BranchReportDto.
                 kv.Value.AdmissionFees + kv.Value.FeesCollected + kv.Value.LateFines
                     + kv.Value.OtherIncome
-                    - kv.Value.Expenses - kv.Value.ReceptionistPay))
+                    - kv.Value.Expenses - kv.Value.ReceptionistPay - kv.Value.ReferralCommission,
+                kv.Value.ReferralCommission))
             .OrderBy(r => r.Branch == Unassigned)      // real branches first
             .ThenBy(r => r.Branch)
             .ThenBy(r => r.PeriodStart)
@@ -2201,7 +2233,8 @@ public class ReportService : IReportService
                 g.Sum(r => r.Expenses),
                 g.Sum(r => r.OtherIncome),
                 g.Sum(r => r.ReceptionistPay),
-                g.Sum(r => r.Net)))
+                g.Sum(r => r.Net),
+                g.Sum(r => r.ReferralCommission)))
             .OrderBy(t => t.Branch == Unassigned)
             .ThenBy(t => t.Branch)
             .ToList();
@@ -2216,7 +2249,8 @@ public class ReportService : IReportService
             branchTotals.Sum(t => t.Expenses),
             branchTotals.Sum(t => t.OtherIncome),
             branchTotals.Sum(t => t.ReceptionistPay),
-            branchTotals.Sum(t => t.Net));
+            branchTotals.Sum(t => t.Net),
+            branchTotals.Sum(t => t.ReferralCommission));
 
         // Every branch on record, not just those with activity in the range, so the
         // filter does not shrink as the dates move.
@@ -2269,5 +2303,6 @@ public class ReportService : IReportService
         public decimal Expenses;
         public decimal OtherIncome;
         public decimal ReceptionistPay;
+        public decimal ReferralCommission;
     }
 }

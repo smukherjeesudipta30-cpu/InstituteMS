@@ -43,6 +43,16 @@ public class Student
     /// </remarks>
     public decimal? AdmissionFeesPaid { get; set; }
 
+    /// <summary>
+    /// Who referred this student: "Teacher" or "Receptionist", with <see cref="ReferrerId"/>.
+    /// Required for new admissions; null for students admitted before referrals existed.
+    /// </summary>
+    public string? ReferrerType { get; set; }
+    public int? ReferrerId { get; set; }
+
+    /// <summary>The referral rate locked in at admission from the slab table.</summary>
+    public decimal? ReferralPercent { get; set; }
+
     public decimal? MonthlyFees { get; set; }
     public DateOnly? DateOfJoining { get; set; }
     public DateOnly? DateOfBirth { get; set; }

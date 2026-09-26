@@ -48,7 +48,13 @@ public record StudentListItemDto(
     /// from this row, so the edit form had nothing to load and saved back empty,
     /// silently erasing it on every edit.
     /// </summary>
-    string? PersonalEmail = null);
+    string? PersonalEmail = null,
+
+    /// <summary>Who referred the student at admission (read-only; null for older students).</summary>
+    string? ReferrerType = null,
+    int? ReferrerId = null,
+    string? ReferrerName = null,
+    decimal? ReferralPercent = null);
 
 /// <summary>Lightweight row for dropdowns / the re-registration picker.</summary>
 public record StudentLookupDto(
@@ -98,6 +104,13 @@ public record StudentSaveRequest
     /// </summary>
     public int? BranchId { get; init; }
     public string? PersonalEmail { get; init; }
+
+    /// <summary>
+    /// Who referred the student: "Teacher" or "Receptionist", with the id. Required
+    /// when admitting; ignored on edit (a referrer is fixed at admission).
+    /// </summary>
+    public string? ReferrerType { get; init; }
+    public int? ReferrerId { get; init; }
 
     /// <summary>
     /// The Avijan portal sign-in. Leave both blank on create and the server
