@@ -26,7 +26,9 @@ public enum IncomeSection
     /// <summary>Admission referral commission credited to teachers and receptionists (<c>ReferralCredit</c>).</summary>
     ReferralCommission = 9,
     /// <summary>Exam fees collected (<c>ExamFeePayment</c>).</summary>
-    ExamFees = 10
+    ExamFees = 10,
+    /// <summary>The proprietor's monthly honorarium (<c>ProprietorHonorarium</c>); whole institute only.</summary>
+    ProprietorHonorarium = 11
 }
 
 /// <summary>
@@ -80,7 +82,13 @@ public record IncomeReportDto(
     /// from a student â folding institute-wide figures into a single branch would
     /// understate that branch every time.
     /// </summary>
-    bool BranchScoped = false);
+    bool BranchScoped = false,
+
+    /// <summary>
+    /// The proprietor's honorarium for the range, inside <see cref="TotalCost"/>.
+    /// Institute-wide, so always 0 on a branch-scoped report.
+    /// </summary>
+    decimal ProprietorHonorarium = 0m);
 
 public record IncomeSectionTotalDto(
     IncomeSection Section,

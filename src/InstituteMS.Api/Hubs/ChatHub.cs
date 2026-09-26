@@ -122,7 +122,11 @@ public class ChatHub : Hub
         var email = Context.User?.FindFirstValue(ClaimTypes.Email);
         if (string.IsNullOrWhiteSpace(email)) return;
 
-        if (_presence.SetAway(email, away))
+        /* Someone on a call stays "on a call" to everyone else even when their
+           screen turns off or they switch to another app mid-call: the phone
+           reports itself away then, but they are very much there. The away
+           flag is still recorded, so it shows once the call ends. */
+        if (_presence.SetAway(email, away) && !IsInCall(email))
             await _notifier.PresenceChangedAsync(email, away ? PresenceAway : PresenceOnline);
     }
 
@@ -139,7 +143,8 @@ public class ChatHub : Hub
         if (string.IsNullOrWhiteSpace(email)) return;
 
         if (_presence.SetInCall(email, inCall))
-            await _notifier.PresenceChangedAsync(email, inCall ? PresenceOnCall : PresenceOnline);
+            await _notifier.PresenceChangedAsync(email,
+                inCall ? PresenceOnCall : IsAway(email) ? PresenceAway : PresenceOnline);
     }
 
     /// <summary>
@@ -273,6 +278,12 @@ public class ChatHub : Hub
     public static string PersonalGroup(string email) => $"user:{email}";
 
     private const string PresenceOnline = "online";
+    private bool IsInCall(string email) =>
+        _presence.InCallEmails.Contains(email, StringComparer.OrdinalIgnoreCase);
+
+    private bool IsAway(string email) =>
+        _presence.AwayEmails.Contains(email, StringComparer.OrdinalIgnoreCase);
+
     private const string PresenceAway = "away";
     private const string PresenceOffline = "offline";
     private const string PresenceOnCall = "incall";

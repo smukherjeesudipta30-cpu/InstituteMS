@@ -86,6 +86,12 @@ public class IncomeService : IIncomeService
 
         var totalIncome = fees + admissions + otherIncome + examFees;
 
+        /* The proprietor's honorarium is a cost of the institute as a whole: it
+           is not charged to any one branch, so a branch-scoped report leaves it
+           out rather than loading all of it onto one branch. */
+        var honorarium = branch is null ? await HonorariumByMonthAsync(from, to, ct) : [];
+        var honorariumTotal = honorarium.Sum(h => h.Amount);
+
         /* ---- teacher cost is counted ONCE ---------------------------------
            TecFees and TecExpense are the two sides of one obligation, not two
            costs. A teacher's share is incurred the moment a fee is collected
@@ -106,7 +112,7 @@ public class IncomeService : IIncomeService
            collected, like the teacher share. A teacher's is not in TecFees and a
            receptionist's is not in ReceptionistPayment.Amount, so nothing here is
            counted twice. */
-        var totalCost = expenses + teacherPayouts + receptionistPay + referralCommission;
+        var totalCost = expenses + teacherPayouts + receptionistPay + referralCommission + honorariumTotal;
         var net = totalIncome - totalCost;
 
         var margin = totalIncome == 0m
@@ -139,10 +145,11 @@ public class IncomeService : IIncomeService
             new(IncomeSection.TeacherExpenses, "Paid to teachers", teacherExpenses, teacherExpenseCount, true, true),
             new(IncomeSection.ReceptionistPay, "Receptionist pay", receptionistPay, receptionistPayCount, true, false),
             new(IncomeSection.ReferralCommission, "Referral commission", referralCommission, referralCount, true, false),
+            new(IncomeSection.ProprietorHonorarium, "Proprietor honorarium", honorariumTotal, honorarium.Count, true, false),
             new(IncomeSection.Dues, "Dues movement", duesMovement, feeCount, false, true)
         };
 
-        var monthly = await GetMonthlyAsync(from, to, branch, ct);
+        var monthly = await GetMonthlyAsync(from, to, branch, honorarium, ct);
 
         return Result<IncomeReportDto>.Success(new IncomeReportDto(
             from, to,
@@ -150,7 +157,7 @@ public class IncomeService : IIncomeService
             lateFines,
             expenses, teacherPayouts, teacherExpenses, receptionistPay, totalCost,
             net, margin, duesMovement,
-            sections, monthly, DateTime.Now, branch, branch is not null));
+            sections, monthly, DateTime.Now, branch, branch is not null, honorariumTotal));
     }
 
     public async Task<PagedResult<IncomeDetailDto>> GetDetailAsync(
@@ -380,6 +387,19 @@ public class IncomeService : IIncomeService
                 return PagedResult<IncomeDetailDto>.Create(items, query.Page, query.PageSize, total);
             }
 
+            case IncomeSection.ProprietorHonorarium:
+            {
+                var months = branch is null ? await HonorariumByMonthAsync(from, to, ct) : [];
+                var items = months
+                    .OrderByDescending(m => m.Month)
+                    .Select((m, i) => new IncomeDetailDto(
+                        i + 1, m.Month, null, null, null, null, null,
+                        "Proprietor honorarium, " + m.Month.ToString("MMM yyyy", CultureInfo.InvariantCulture),
+                        m.Amount))
+                    .ToList();
+                return PagedResult<IncomeDetailDto>.Create(
+                    items.Skip(skip).Take(query.PageSize).ToList(), query.Page, query.PageSize, items.Count);
+            }
             default:
                 return PagedResult<IncomeDetailDto>.Create([], query.Page, query.PageSize, 0);
         }
@@ -387,8 +407,17 @@ public class IncomeService : IIncomeService
 
     /* ------------------------------------------------------------- monthly */
 
+    /// <summary>The proprietor's honorarium per calendar month of the range (pro rata at the ends).</summary>
+    private async Task<List<(DateOnly Month, decimal Amount)>> HonorariumByMonthAsync(
+        DateOnly from, DateOnly to, CancellationToken ct)
+    {
+        var rates = await _db.ProprietorHonoraria.AsNoTracking().ToListAsync(ct);
+        return HonorariumService.Allocate(rates, from, to);
+    }
+
     private async Task<IReadOnlyList<IncomeTrendPointDto>> GetMonthlyAsync(
-        DateOnly from, DateOnly to, string? branch, CancellationToken ct)
+        DateOnly from, DateOnly to, string? branch,
+        List<(DateOnly Month, decimal Amount)> honorarium, CancellationToken ct)
     {
         // Cap the chart so a decade-wide range does not return hundreds of points.
         var months = ((to.Year - from.Year) * 12) + to.Month - from.Month + 1;
@@ -455,7 +484,8 @@ public class IncomeService : IIncomeService
             var cost = Total(expenseByMonth, cursor)
                        + Total(payoutByMonth, cursor)
                        + Total(receptionistByMonth, cursor)
-                       + Total(referralByMonth, cursor);
+                       + Total(referralByMonth, cursor)
+                       + honorarium.Where(h => h.Month == cursor).Sum(h => h.Amount);
 
             var label = CultureInfo.InvariantCulture.DateTimeFormat.GetAbbreviatedMonthName(cursor.Month);
             points.Add(new IncomeTrendPointDto(cursor.Year, cursor.Month, label, income, cost, income - cost));

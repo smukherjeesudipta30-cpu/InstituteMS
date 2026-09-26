@@ -68,6 +68,7 @@ public static class DependencyInjection
         services.AddScoped<IStudentService, StudentService>();
         services.AddScoped<IReferralService, ReferralService>();
         services.AddScoped<IExamFeeService, ExamFeeService>();
+        services.AddScoped<IHonorariumService, HonorariumService>();
         services.AddScoped<ILookupService, LookupService>();
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<IFeeService, FeeService>();

@@ -37,6 +37,7 @@ public class AppDbContext : DbContext
     public DbSet<ReferralCredit> ReferralCredits => Set<ReferralCredit>();
     public DbSet<StudentReferrer> StudentReferrers => Set<StudentReferrer>();
     public DbSet<ExamFeeRate> ExamFeeRates => Set<ExamFeeRate>();
+    public DbSet<ProprietorHonorarium> ProprietorHonoraria => Set<ProprietorHonorarium>();
     public DbSet<ExamFeePayment> ExamFeePayments => Set<ExamFeePayment>();
     public DbSet<ExamSchedule> ExamSchedules => Set<ExamSchedule>();
     public DbSet<CertificateIssue> CertificateIssues => Set<CertificateIssue>();
