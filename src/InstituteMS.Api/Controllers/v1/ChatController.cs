@@ -179,6 +179,32 @@ public class ChatController : ApiControllerBase
     /// when the panel opens; PresenceChanged over the socket keeps it live
     /// after that.
     /// </summary>
+    /// <summary>
+    /// STUN/TURN servers for calls, from <c>WebRtc:IceServers</c> in settings.
+    /// STUN alone connects two phones directly, which mobile data and many
+    /// routers allow only briefly or not at all - the call then connects and
+    /// goes silent. A TURN server relays the audio when that happens.
+    /// </summary>
+    [HttpGet("ice-servers")]
+    [Authorize]
+    public IActionResult IceServers()
+    {
+        var configured = _configuration.GetSection("WebRtc:IceServers").GetChildren()
+            .Select(s => new
+            {
+                urls = s.GetSection("Urls").Get<string[]>() ?? (s["Urls"] is { } one ? new[] { one } : []),
+                username = s["Username"],
+                credential = s["Credential"]
+            })
+            .Where(s => s.urls.Length > 0)
+            .ToList<object>();
+
+        if (configured.Count == 0)
+            configured.Add(new { urls = new[] { "stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302" }, username = (string?)null, credential = (string?)null });
+
+        return Ok(new { success = true, data = configured });
+    }
+
     [HttpGet("presence")]
     [Authorize]
     [ProducesResponseType(typeof(ApiResponse<ChatPresenceSnapshotDto>), StatusCodes.Status200OK)]
