@@ -222,14 +222,42 @@ public class TeacherService : ITeacherService
         if (from is { } start) payouts = payouts.Where(f => f.PaidOn >= start);
         if (to is { } end) payouts = payouts.Where(f => f.PaidOn <= end);
 
-        var totalCount = await payouts.CountAsync(ct);
+        /* Admission referral credits are earnings too, and GetAccountAsync already
+           counts them in the total - so they are listed here as their own rows,
+           or the list would not add up to the "earned" figure above it. The id is
+           negative so a referral row is never mistaken for a TecFees payout. */
+        var referrals = _db.ReferralCredits.AsNoTracking()
+            .Where(r => r.ReferrerType == ReferrerTypes.Teacher && r.ReferrerId == teacherId);
 
-        var rows = await payouts
-            .OrderByDescending(f => f.PaidOn).ThenByDescending(f => f.Id)
+        if (from is { } rStart) referrals = referrals.Where(r => r.CreditedOn >= rStart);
+        if (to is { } rEnd) referrals = referrals.Where(r => r.CreditedOn <= rEnd);
+
+        var payoutRows = await payouts
+            .Select(f => new { f.Id, f.PaidOn, f.BillNo, f.StudentRegistrationId, f.Salary, Percent = (decimal?)null })
+            .ToListAsync(ct);
+
+        var referralRows = await referrals
+            .Select(r => new
+            {
+                Id = -r.Id,
+                PaidOn = (DateOnly?)r.CreditedOn,
+                BillNo = (string?)"Referral",
+                StudentRegistrationId = r.RegistrationId,
+                Salary = (decimal?)r.Amount,
+                Percent = (decimal?)r.Percent
+            })
+            .ToListAsync(ct);
+
+        var all = payoutRows.Concat(referralRows)
+            .OrderByDescending(f => f.PaidOn).ThenByDescending(f => Math.Abs(f.Id))
+            .ToList();
+
+        var totalCount = all.Count;
+
+        var rows = all
             .Skip((query.Page - 1) * query.PageSize)
             .Take(query.PageSize)
-            .Select(f => new { f.Id, f.PaidOn, f.BillNo, f.StudentRegistrationId, f.Salary })
-            .ToListAsync(ct);
+            .ToList();
 
         var regIds = rows
             .Select(r => r.StudentRegistrationId)
@@ -264,7 +292,8 @@ public class TeacherService : ITeacherService
 
             return new TeacherEarningDto(
                 r.Id, r.PaidOn, r.BillNo, student?.Name, r.StudentRegistrationId,
-                student?.CourseName, r.Salary ?? 0m);
+                r.Percent is { } pct ? $"Admission referral ({pct:0.##}%)" : student?.CourseName,
+                r.Salary ?? 0m);
         }).ToList();
 
         return PagedResult<TeacherEarningDto>.Create(items, query.Page, query.PageSize, totalCount);
