@@ -305,6 +305,29 @@ public class ExamFeeService : IExamFeeService
             .ToList();
     }
 
+    public async Task<IReadOnlyList<ExamFeePaymentRowDto>> GetPaymentsAsync(
+        DateOnly from, DateOnly to, string? branch, int? courseId, string? registrationId, CancellationToken ct = default)
+    {
+        var q = _db.ExamFeePayments.AsNoTracking().Where(p => p.PaidOn >= from && p.PaidOn <= to);
+        if (!string.IsNullOrWhiteSpace(branch)) q = q.Where(p => p.Branch == branch);
+        if (courseId is not null) q = q.Where(p => p.CourseId == courseId);
+        if (!string.IsNullOrWhiteSpace(registrationId))
+        {
+            var reg = registrationId.Trim();
+            q = q.Where(p => p.RegistrationId != null && p.RegistrationId.Contains(reg));
+        }
+
+        var rows = await q
+            .Join(_db.Students.AsNoTracking(), p => p.StudentId, s => s.Id, (p, s) => new { p, s.Name })
+            .GroupJoin(_db.Courses.AsNoTracking(), x => x.p.CourseId, c => (int?)c.Cid, (x, cs) => new { x.p, x.Name, cs })
+            .SelectMany(x => x.cs.DefaultIfEmpty(), (x, c) => new ExamFeePaymentRowDto(
+                x.p.Id, x.p.PaidOn, x.p.StudentId, x.p.RegistrationId, x.Name, x.p.Branch,
+                x.p.CourseId, c != null ? c.Name : null, x.p.Amount, x.p.PaymentMode, x.p.CreatedBy, x.p.Note))
+            .ToListAsync(ct);
+
+        return rows.OrderByDescending(r => r.PaidOn).ThenBy(r => r.StudentName).ToList();
+    }
+
     public async Task<HashSet<string>> UnpaidAmongAsync(IEnumerable<string> registrationIds, CancellationToken ct = default)
     {
         var regs = registrationIds.Where(r => !string.IsNullOrWhiteSpace(r)).Distinct().ToList();

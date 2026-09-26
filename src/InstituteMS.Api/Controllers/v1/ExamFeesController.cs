@@ -65,6 +65,15 @@ public class ExamFeesController : ApiControllerBase
     public async Task<IActionResult> MoveFromOtherIncome([FromBody] ExamFeeMoveRequest request, CancellationToken ct)
         => Envelope(await _fees.MoveFromOtherIncomeAsync(request, CurrentUserName, ct), "Moved to the student's exam fee.");
 
+    /// <summary>Who paid exam fee in a date range (grouped month/year/course/student by the client).</summary>
+    [HttpGet("payments")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ExamFeePaymentRowDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Payments(
+        [FromQuery] DateOnly from, [FromQuery] DateOnly to, [FromQuery] string? branch,
+        [FromQuery] int? courseId, [FromQuery] string? registrationId, CancellationToken ct)
+        => Envelope(Result<IReadOnlyList<ExamFeePaymentRowDto>>.Success(
+            await _fees.GetPaymentsAsync(from, to, branch, courseId, registrationId, ct)));
+
     /// <summary>Students scheduled for an exam who still owe exam fee.</summary>
     [HttpGet("dues")]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ExamFeeDueRowDto>>), StatusCodes.Status200OK)]

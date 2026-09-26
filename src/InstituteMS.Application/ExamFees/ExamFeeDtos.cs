@@ -71,6 +71,21 @@ public record ExamFeeDueRowDto(
     decimal Paid,
     decimal Due);
 
+/// <summary>One exam fee received: who paid, for which course, and who took it.</summary>
+public record ExamFeePaymentRowDto(
+    int Id,
+    DateOnly PaidOn,
+    int StudentId,
+    string? RegistrationId,
+    string? StudentName,
+    string? Branch,
+    int? CourseId,
+    string? CourseName,
+    decimal Amount,
+    string PaymentMode,
+    string? ReceivedBy,
+    string? Note);
+
 public interface IExamFeeService
 {
     /// <summary>Every course at every branch, with the fee where one is set.</summary>
@@ -104,5 +119,9 @@ public interface IExamFeeService
     Task<IReadOnlyList<ExamFeeDueRowDto>> GetDuesAsync(string? branch, CancellationToken ct = default, int? courseId = null);
 
     /// <summary>Of these registration ids, the ones whose exam fee is not fully paid.</summary>
+    /// <summary>Exam fees received in a date range, optionally narrowed by branch, course or registration id.</summary>
+    Task<IReadOnlyList<ExamFeePaymentRowDto>> GetPaymentsAsync(
+        DateOnly from, DateOnly to, string? branch, int? courseId, string? registrationId, CancellationToken ct = default);
+
     Task<HashSet<string>> UnpaidAmongAsync(IEnumerable<string> registrationIds, CancellationToken ct = default);
 }
