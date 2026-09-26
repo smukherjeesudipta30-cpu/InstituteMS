@@ -454,7 +454,13 @@ public record ExamScheduleRowDto(
     /// How this student's theory paper is sat — <c>Online</c> or <c>Offline</c>.
     /// Always <c>Online</c> for a practical.
     /// </summary>
-    string Mode = "Online");
+    string Mode = "Online",
+
+    /// <summary>
+    /// The student's exam fee is set but not fully paid. A warning only: it never
+    /// stops the student being scheduled or getting their admit card.
+    /// </summary>
+    bool ExamFeeUnpaid = false);
 
 /// <summary>Schedules one student, or corrects a sitting already set.</summary>
 public record ExamScheduleSaveRequest

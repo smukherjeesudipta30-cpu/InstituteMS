@@ -15,6 +15,7 @@ using InstituteMS.Application.Notifications;
 using InstituteMS.Application.Org;
 using InstituteMS.Application.Enquiries;
 using InstituteMS.Application.Expenses;
+using InstituteMS.Application.ExamFees;
 using InstituteMS.Application.Exams;
 using InstituteMS.Application.Referrals;
 using InstituteMS.Application.Reports;
@@ -66,6 +67,7 @@ public static class DependencyInjection
         services.AddScoped<IAboutService, AboutService>();
         services.AddScoped<IStudentService, StudentService>();
         services.AddScoped<IReferralService, ReferralService>();
+        services.AddScoped<IExamFeeService, ExamFeeService>();
         services.AddScoped<ILookupService, LookupService>();
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<IFeeService, FeeService>();

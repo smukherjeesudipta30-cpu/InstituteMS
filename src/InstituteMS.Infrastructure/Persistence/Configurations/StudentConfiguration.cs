@@ -27,6 +27,7 @@ public class StudentConfiguration : IEntityTypeConfiguration<Student>
         b.Property(x => x.ReferrerId).HasColumnName("ReferrerId");
         b.Property(x => x.ReferralPercent).HasColumnName("ReferralPercent").HasPrecision(5, 2);
         b.Property(x => x.ReferrerSummary).HasColumnName("ReferrerSummary").HasMaxLength(500);
+        b.Property(x => x.ExamFeeOverride).HasColumnName("ExamFeeOverride").HasPrecision(12, 2);
         // Stu_monthly_fees is varchar(250) in the legacy schema, not a number.
         b.Property(x => x.MonthlyFees).HasColumnName("Stu_monthly_fees")
             .HasConversion<DecimalOverTextConverter>().HasMaxLength(250);

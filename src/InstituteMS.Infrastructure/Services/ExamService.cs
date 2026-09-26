@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using ClosedXML.Excel;
 using InstituteMS.Application.Common;
+using InstituteMS.Application.ExamFees;
 using InstituteMS.Application.Exams;
 using InstituteMS.Application.Reports;
 using InstituteMS.Domain.Entities;
@@ -55,9 +56,12 @@ public class ExamService : IExamService
     private readonly IReportService _reports;
     private readonly ILogger<ExamService> _logger;
 
-    public ExamService(AppDbContext db, IReportService reports, ILogger<ExamService> logger)
+    private readonly IExamFeeService _examFees;
+
+    public ExamService(AppDbContext db, IReportService reports, IExamFeeService examFees, ILogger<ExamService> logger)
     {
         _db = db;
+        _examFees = examFees;
         _reports = reports;
         _logger = logger;
     }
@@ -1599,6 +1603,9 @@ public class ExamService : IExamService
             }
         }
 
+        // Exam fee not fully paid: flagged on the sheet so it can be collected.
+        var feeUnpaid = await _examFees.UnpaidAmongAsync(students.Select(s => s.RegistrationId!), ct);
+
         var rows = students.Select(s =>
         {
             var schedule = schedules.FirstOrDefault(x =>
@@ -1617,7 +1624,8 @@ public class ExamService : IExamService
                 attempt is not null, attempt?.SubmittedOn,
                 s.IsActive == true, s.IsComplete == true,
                 theorySubmitted is null ? null : (theoryOn == default ? null : theoryOn),
-                Mode: schedule?.Mode ?? "Online");
+                Mode: schedule?.Mode ?? "Online",
+                ExamFeeUnpaid: feeUnpaid.Contains(s.RegistrationId!));
         }).ToList();
 
         return Result<IReadOnlyList<ExamScheduleRowDto>>.Success(rows);

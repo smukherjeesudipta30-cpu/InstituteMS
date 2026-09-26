@@ -55,6 +55,9 @@ public class IncomeService : IIncomeService
         var admissionCount = await AdmissionQuery(from, to, branch).CountAsync(ct);
 
         var otherIncome = await OtherIncomeQuery(from, to, branch).SumAsync(i => (decimal?)i.Amount ?? 0m, ct);
+
+        var examFees = await ExamFeeQuery(from, to, branch).SumAsync(e => (decimal?)e.Amount ?? 0m, ct);
+        var examFeeCount = await ExamFeeQuery(from, to, branch).CountAsync(ct);
         var otherIncomeCount = await OtherIncomeQuery(from, to, branch).CountAsync(ct);
 
         var lateFines = await LateFineQuery(from, to, branch).SumAsync(l => (decimal?)l.FineAmount ?? 0m, ct);
@@ -81,7 +84,7 @@ public class IncomeService : IIncomeService
         var referralCommission = await ReferralQuery(from, to, branch).SumAsync(r => (decimal?)r.Amount ?? 0m, ct);
         var referralCount = await ReferralQuery(from, to, branch).CountAsync(ct);
 
-        var totalIncome = fees + admissions + otherIncome;
+        var totalIncome = fees + admissions + otherIncome + examFees;
 
         /* ---- teacher cost is counted ONCE ---------------------------------
            TecFees and TecExpense are the two sides of one obligation, not two
@@ -114,6 +117,7 @@ public class IncomeService : IIncomeService
         {
             new(IncomeSection.Fees, "Fee collections", fees, feeCount, false, false),
             new(IncomeSection.Admissions, "Admission fees", admissions, admissionCount, false, false),
+            new(IncomeSection.ExamFees, "Exam fees", examFees, examFeeCount, false, false),
             new(IncomeSection.OtherIncome, "Other income", otherIncome, otherIncomeCount, false, false),
             new(IncomeSection.LateFines, "of which late fines", lateFines, lateFineCount, false, true),
             new(IncomeSection.Expenses, "Institute expenses", expenses, expenseCount, true, false),
@@ -324,6 +328,27 @@ public class IncomeService : IIncomeService
                 return PagedResult<IncomeDetailDto>.Create(items, query.Page, query.PageSize, total);
             }
 
+            case IncomeSection.ExamFees:
+            {
+                var source = ExamFeeQuery(from, to, branch);
+                var total = await source.CountAsync(ct);
+
+                var rows = await source
+                    .OrderByDescending(e => e.PaidOn).ThenByDescending(e => e.Id)
+                    .Skip(skip).Take(query.PageSize)
+                    .ToListAsync(ct);
+
+                var names = await StudentNamesAsync(rows.Select(r => r.RegistrationId), ct);
+
+                var items = rows.Select(r => new IncomeDetailDto(
+                    r.Id, r.PaidOn, null,
+                    Name(names, r.RegistrationId), r.RegistrationId,
+                    Course(names, r.RegistrationId), null,
+                    $"Exam fee ({r.PaymentMode})", r.Amount)).ToList();
+
+                return PagedResult<IncomeDetailDto>.Create(items, query.Page, query.PageSize, total);
+            }
+
             case IncomeSection.ReferralCommission:
             {
                 var source = ReferralQuery(from, to, branch);
@@ -405,6 +430,11 @@ public class IncomeService : IIncomeService
             .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Amount ?? 0m)))
             .ToListAsync(ct);
 
+        var examFeeByMonth = await ExamFeeQuery(from, to, branch)
+            .GroupBy(e => new { e.PaidOn.Year, e.PaidOn.Month })
+            .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => x.Amount)))
+            .ToListAsync(ct);
+
         var referralByMonth = await ReferralQuery(from, to, branch)
             .GroupBy(r => new { r.CreditedOn.Year, r.CreditedOn.Month })
             .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => x.Amount)))
@@ -416,7 +446,8 @@ public class IncomeService : IIncomeService
              cursor <= new DateOnly(to.Year, to.Month, 1);
              cursor = cursor.AddMonths(1))
         {
-            var income = Total(feeByMonth, cursor) + Total(admissionByMonth, cursor) + Total(otherByMonth, cursor);
+            var income = Total(feeByMonth, cursor) + Total(admissionByMonth, cursor) + Total(otherByMonth, cursor)
+                         + Total(examFeeByMonth, cursor);
             // Teacher cost is the payout, not the payout plus the cash settling it.
             var cost = Total(expenseByMonth, cursor)
                        + Total(payoutByMonth, cursor)
@@ -561,6 +592,16 @@ public class IncomeService : IIncomeService
             .Where(p => (p.PaidOn ?? p.PayMonth) >= from && (p.PaidOn ?? p.PayMonth) <= to);
 
         return branch is null ? q : q.Where(p => p.Branch == branch);
+    }
+
+    private IQueryable<Domain.Entities.ExamFeePayment> ExamFeeQuery(
+        DateOnly from, DateOnly to, string? branch = null)
+    {
+        var q = _db.ExamFeePayments
+            .AsNoTracking()
+            .Where(e => e.PaidOn >= from && e.PaidOn <= to);
+
+        return branch is null ? q : q.Where(e => e.Branch == branch);
     }
 
     private IQueryable<Domain.Entities.ReferralCredit> ReferralQuery(

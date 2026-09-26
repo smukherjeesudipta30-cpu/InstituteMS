@@ -53,6 +53,12 @@ public class Student
     /// <summary>The referrers' names as they stood at admission, for display.</summary>
     public string? ReferrerSummary { get; set; }
 
+    /// <summary>
+    /// This student's own exam fee, when it differs from the course/branch rate
+    /// (a discount or special case). Null means the rate applies.
+    /// </summary>
+    public decimal? ExamFeeOverride { get; set; }
+
     /// <summary>The referral rate locked in at admission from the slab table.</summary>
     public decimal? ReferralPercent { get; set; }
 

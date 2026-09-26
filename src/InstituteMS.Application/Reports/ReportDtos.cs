@@ -1,5 +1,6 @@
 using FluentValidation;
 using InstituteMS.Application.Common;
+using InstituteMS.Application.ExamFees;
 using InstituteMS.Application.Fees;
 
 namespace InstituteMS.Application.Reports;
@@ -252,7 +253,12 @@ public record PendingPaymentsReportDto(
     /// </summary>
     IReadOnlyList<AdmissionDueRowDto>? AdmissionDues = null,
 
-    decimal TotalAdmissionDue = 0m);
+    decimal TotalAdmissionDue = 0m,
+
+    /// <summary>Students scheduled for an exam who still owe exam fee (not bounded by the dates).</summary>
+    IReadOnlyList<ExamFeeDueRowDto>? ExamFeeDues = null,
+
+    decimal TotalExamFeeDue = 0m);
 
 /* ====================================================== fee collections */
 
@@ -542,7 +548,9 @@ public record StudentStatementDto(
 
     IReadOnlyList<StatementPaymentDto> Payments,
     IReadOnlyList<StatementMarkDto> Marks,
-    DateTime GeneratedOn);
+    DateTime GeneratedOn,
+    /// <summary>The exam fee: charged, paid, owed and each payment.</summary>
+    StudentExamFeeDto? ExamFee = null);
 
 /* =============================================================== certificate */
 
@@ -795,7 +803,9 @@ public record BranchPeriodRowDto(
     /// </summary>
     decimal Net,
     // Admission referral commission credited in the period (already deducted in Net).
-    decimal ReferralCommission = 0m);
+    decimal ReferralCommission = 0m,
+    // Exam fees collected in the period (already included in Net).
+    decimal ExamFees = 0m);
 
 /// <summary>A branch's whole-range total, across every period.</summary>
 public record BranchTotalDto(
@@ -810,7 +820,9 @@ public record BranchTotalDto(
     decimal ReceptionistPay,
     decimal Net,
     // Admission referral commission credited in the period (already deducted in Net).
-    decimal ReferralCommission = 0m);
+    decimal ReferralCommission = 0m,
+    // Exam fees collected in the period (already included in Net).
+    decimal ExamFees = 0m);
 
 /// <summary>
 /// Admissions, fee payments and expenses by branch, bucketed by month, quarter

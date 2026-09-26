@@ -1,6 +1,7 @@
 using System.Globalization;
 using InstituteMS.Application.Attendance;
 using InstituteMS.Application.Common;
+using InstituteMS.Application.ExamFees;
 using InstituteMS.Application.Fees;
 using InstituteMS.Application.Reports;
 using InstituteMS.Domain.Entities;
@@ -36,9 +37,12 @@ public class ReportService : IReportService
     private readonly IFeeService _fees;
     private readonly IAttendanceService _attendance;
 
-    public ReportService(AppDbContext db, IFeeService fees, IAttendanceService attendance)
+    private readonly IExamFeeService _examFees;
+
+    public ReportService(AppDbContext db, IFeeService fees, IAttendanceService attendance, IExamFeeService examFees)
     {
         _db = db;
+        _examFees = examFees;
         _fees = fees;
         _attendance = attendance;
     }
@@ -439,6 +443,12 @@ public class ReportService : IReportService
         var admissionDues = await GetAdmissionDuesAsync(query, ct);
         var totalAdmissionDue = admissionDues.Sum(a => a.AdmissionDue);
 
+        // Exam fees owed, under the same branch and course filters.
+        var examFeeDues = await _examFees.GetDuesAsync(
+            string.IsNullOrWhiteSpace(query.Branch) ? null : query.Branch.Trim(), ct,
+            query.CourseId > 0 ? query.CourseId : null);
+        var totalExamFeeDue = examFeeDues.Sum(e => e.Due);
+
         if (rows.Count == 0)
         {
             var admissionOnlyBranchTotals = admissionDues
@@ -450,7 +460,7 @@ public class ReportService : IReportService
             return Result<PendingPaymentsReportDto>.Success(new PendingPaymentsReportDto(
                 query.From, query.To, query.Branch, query.CourseId, courseName,
                 [], [], admissionOnlyBranchTotals, 0m, DateTime.Now,
-                admissionDues, totalAdmissionDue));
+                admissionDues, totalAdmissionDue, examFeeDues, totalExamFeeDue));
         }
 
         // Teacher names for every slot in play, in one query rather than per student.
@@ -578,7 +588,7 @@ public class ReportService : IReportService
             query.From, query.To, query.Branch, query.CourseId, courseName,
             neverPaidSorted, regularSorted, branchTotalsSorted,
             branchTotalsSorted.Sum(b => b.TotalOutstanding), DateTime.Now,
-            admissionDues, totalAdmissionDue));
+            admissionDues, totalAdmissionDue, examFeeDues, totalExamFeeDue));
     }
 
     /// <summary>
@@ -1330,7 +1340,8 @@ public class ReportService : IReportService
             payments.Count,
             payments,
             markDtos,
-            DateTime.Now));
+            DateTime.Now,
+            (await _examFees.GetStudentAsync(student.Id, ct)).Value));
     }
 
     /// <summary>
@@ -2133,6 +2144,13 @@ public class ReportService : IReportService
             })
             .ToListAsync(ct);
 
+        /* ---- exam fees: branch copied onto the payment ------------------- */
+        var examFeePayments = await _db.ExamFeePayments
+            .AsNoTracking()
+            .Where(e => e.PaidOn >= query.From && e.PaidOn <= query.To)
+            .Select(e => new { e.Branch, e.PaidOn, e.Amount })
+            .ToListAsync(ct);
+
         /* ---- admission referral commission: branch copied onto the credit */
         var referrals = await _db.ReferralCredits
             .AsNoTracking()
@@ -2191,6 +2209,11 @@ public class ReportService : IReportService
             Bucket(r.Branch, r.Paid).ReceptionistPay += r.Amount;
         }
 
+        foreach (var e in examFeePayments)
+        {
+            Bucket(e.Branch, e.PaidOn).ExamFees += e.Amount;
+        }
+
         foreach (var r in referrals)
         {
             Bucket(r.Branch, r.CreditedOn).ReferralCommission += r.Amount;
@@ -2213,9 +2236,10 @@ public class ReportService : IReportService
 
                 // Teacher payouts are absent on purpose - see BranchReportDto.
                 kv.Value.AdmissionFees + kv.Value.FeesCollected + kv.Value.LateFines
-                    + kv.Value.OtherIncome
+                    + kv.Value.OtherIncome + kv.Value.ExamFees
                     - kv.Value.Expenses - kv.Value.ReceptionistPay - kv.Value.ReferralCommission,
-                kv.Value.ReferralCommission))
+                kv.Value.ReferralCommission,
+                kv.Value.ExamFees))
             .OrderBy(r => r.Branch == Unassigned)      // real branches first
             .ThenBy(r => r.Branch)
             .ThenBy(r => r.PeriodStart)
@@ -2234,7 +2258,8 @@ public class ReportService : IReportService
                 g.Sum(r => r.OtherIncome),
                 g.Sum(r => r.ReceptionistPay),
                 g.Sum(r => r.Net),
-                g.Sum(r => r.ReferralCommission)))
+                g.Sum(r => r.ReferralCommission),
+                g.Sum(r => r.ExamFees)))
             .OrderBy(t => t.Branch == Unassigned)
             .ThenBy(t => t.Branch)
             .ToList();
@@ -2250,7 +2275,8 @@ public class ReportService : IReportService
             branchTotals.Sum(t => t.OtherIncome),
             branchTotals.Sum(t => t.ReceptionistPay),
             branchTotals.Sum(t => t.Net),
-            branchTotals.Sum(t => t.ReferralCommission));
+            branchTotals.Sum(t => t.ReferralCommission),
+            branchTotals.Sum(t => t.ExamFees));
 
         // Every branch on record, not just those with activity in the range, so the
         // filter does not shrink as the dates move.
@@ -2304,5 +2330,6 @@ public class ReportService : IReportService
         public decimal OtherIncome;
         public decimal ReceptionistPay;
         public decimal ReferralCommission;
+        public decimal ExamFees;
     }
 }

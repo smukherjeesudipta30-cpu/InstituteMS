@@ -24,7 +24,9 @@ public enum IncomeSection
     /// <summary>Receptionists' monthly pay (<c>ReceptionistPayment</c>).</summary>
     ReceptionistPay = 8,
     /// <summary>Admission referral commission credited to teachers and receptionists (<c>ReferralCredit</c>).</summary>
-    ReferralCommission = 9
+    ReferralCommission = 9,
+    /// <summary>Exam fees collected (<c>ExamFeePayment</c>).</summary>
+    ExamFees = 10
 }
 
 /// <summary>
