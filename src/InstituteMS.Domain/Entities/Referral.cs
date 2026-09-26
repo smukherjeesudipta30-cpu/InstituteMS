@@ -37,6 +37,18 @@ public class ReferralCredit
     public DateTime CreatedOn { get; set; }
 }
 
+/// <summary>
+/// Maps to <c>dbo.StudentReferrer</c> — one of the people who referred a student.
+/// The referral amount is split equally between everyone listed for the student.
+/// </summary>
+public class StudentReferrer
+{
+    public int Id { get; set; }
+    public int StudentId { get; set; }
+    public string ReferrerType { get; set; } = string.Empty;
+    public int ReferrerId { get; set; }
+}
+
 public static class ReferrerTypes
 {
     public const string Teacher = "Teacher";
@@ -44,4 +56,7 @@ public static class ReferrerTypes
 
     /// <summary>A direct / walk-in admission: recorded as deliberately unreferred, never credited.</summary>
     public const string None = "None";
+
+    /// <summary>On a student: referred by the people in <see cref="StudentReferrer"/>.</summary>
+    public const string Referred = "Referred";
 }

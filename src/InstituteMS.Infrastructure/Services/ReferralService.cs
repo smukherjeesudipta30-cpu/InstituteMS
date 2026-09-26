@@ -101,23 +101,50 @@ public class ReferralService : IReferralService
             .ToList();
     }
 
-    public async Task<string?> ValidateReferrerAsync(string? type, int? id, CancellationToken ct = default)
+    public async Task<Result<ReferrerSelection>> ResolveReferrersAsync(
+        string? referrerType, IReadOnlyList<ReferrerRef>? referrers, CancellationToken ct = default)
     {
-        // A direct admission is a valid, deliberate choice: nobody is credited.
-        if (type == ReferrerTypes.None)
-            return null;
+        var people = (referrers ?? [])
+            .Where(r => r is not null && !string.IsNullOrWhiteSpace(r.Type))
+            .Select(r => new ReferrerRef(r.Type.Trim(), r.Id))
+            .Distinct()
+            .ToList();
 
-        if (string.IsNullOrWhiteSpace(type) || id is not > 0)
-            return "Please select who referred this student.";
-
-        var ok = type switch
+        // A direct / walk-in admission is a deliberate choice: nobody is credited.
+        if (referrerType == ReferrerTypes.None)
         {
-            ReferrerTypes.Teacher => await _db.Teachers.AnyAsync(t => t.Id == id && t.IsActive, ct),
-            ReferrerTypes.Receptionist => await _db.Receptionists.AnyAsync(r => r.Id == id && r.IsActive, ct),
-            _ => false
-        };
+            return people.Count == 0
+                ? Result<ReferrerSelection>.Success(new ReferrerSelection(true, [], null))
+                : Result<ReferrerSelection>.Failure(
+                    "Choose either \"No referral\" or the people who referred the student, not both.");
+        }
 
-        return ok ? null : "The selected referrer is not an active teacher or receptionist.";
+        if (people.Count == 0)
+            return Result<ReferrerSelection>.Failure("Please select who referred this student.");
+
+        if (people.Any(p => p.Type is not (ReferrerTypes.Teacher or ReferrerTypes.Receptionist)))
+            return Result<ReferrerSelection>.Failure("A referrer must be a teacher or a receptionist.");
+
+        var teacherIds = people.Where(p => p.Type == ReferrerTypes.Teacher).Select(p => p.Id).ToList();
+        var receptionistIds = people.Where(p => p.Type == ReferrerTypes.Receptionist).Select(p => p.Id).ToList();
+
+        var teachers = await _db.Teachers.AsNoTracking()
+            .Where(t => teacherIds.Contains(t.Id) && t.IsActive)
+            .ToDictionaryAsync(t => t.Id, t => t.Name, ct);
+        var receptionists = await _db.Receptionists.AsNoTracking()
+            .Where(r => receptionistIds.Contains(r.Id) && r.IsActive)
+            .ToDictionaryAsync(r => r.Id, r => (string?)r.Name, ct);
+
+        if (teachers.Count != teacherIds.Count || receptionists.Count != receptionistIds.Count)
+            return Result<ReferrerSelection>.Failure(
+                "Every selected referrer must be an active teacher or receptionist.");
+
+        var summary = string.Join(", ", people.Select(p => p.Type == ReferrerTypes.Teacher
+            ? $"{teachers[p.Id]} (Teacher)"
+            : $"{receptionists[p.Id]} (Receptionist)"));
+
+        return Result<ReferrerSelection>.Success(new ReferrerSelection(
+            false, people, summary.Length > 500 ? summary[..497] + "..." : summary));
     }
 
     /* ---------------------------------------------------------- credits */
@@ -125,50 +152,66 @@ public class ReferralService : IReferralService
     public async Task CreditAdmissionPaymentAsync(
         int admissionFeePaymentId, string? actor, CancellationToken ct = default)
     {
-        // Once per payment: the unique index enforces it too.
-        if (await _db.ReferralCredits.AnyAsync(r => r.AdmissionFeePaymentId == admissionFeePaymentId, ct))
-            return;
-
         var payment = await _db.AdmissionFeePayments.AsNoTracking()
             .FirstOrDefaultAsync(p => p.Id == admissionFeePaymentId, ct);
         if (payment is null || payment.Amount <= 0m) return;
 
         var student = await _db.Students.AsNoTracking()
             .Where(s => s.Id == payment.StudentId)
-            .Select(s => new { s.Id, s.Name, s.RegistrationId, s.Branch, s.ReferrerType, s.ReferrerId, s.ReferralPercent })
+            .Select(s => new { s.Id, s.Name, s.RegistrationId, s.Branch, s.ReferralPercent })
             .FirstOrDefaultAsync(ct);
+        if (student?.ReferralPercent is not > 0m) return;
 
-        if (student?.ReferrerType is null || student.ReferrerId is not int referrerId
-            || student.ReferralPercent is not > 0m)
+        var referrers = await _db.StudentReferrers.AsNoTracking()
+            .Where(r => r.StudentId == student.Id)
+            .OrderBy(r => r.Id)
+            .ToListAsync(ct);
+        if (referrers.Count == 0) return;
+
+        // Once per payment: the unique index (payment + person) enforces it too.
+        if (await _db.ReferralCredits.AnyAsync(r => r.AdmissionFeePaymentId == payment.Id, ct))
             return;
 
         var percent = student.ReferralPercent.Value;
-        var amount = Math.Round(payment.Amount * percent / 100m, 2, MidpointRounding.AwayFromZero);
-        if (amount <= 0m) return;
+        var total = Math.Round(payment.Amount * percent / 100m, 2, MidpointRounding.AwayFromZero);
+        if (total <= 0m) return;
 
-        _db.ReferralCredits.Add(new ReferralCredit
+        /* Split equally. Shares are whole paise; any paisa left over by the
+           division goes to the first referrers listed, so the shares always add
+           up to exactly the slab amount - never a paisa more or less. */
+        var paise = (long)(total * 100m);
+        var baseShare = paise / referrers.Count;
+        var leftover = paise % referrers.Count;
+        var shares = referrers
+            .Select((r, i) => (Referrer: r, Amount: (baseShare + (i < leftover ? 1 : 0)) / 100m))
+            .Where(s => s.Amount > 0m)
+            .ToList();
+
+        foreach (var (referrer, amount) in shares)
         {
-            StudentId = student.Id,
-            RegistrationId = student.RegistrationId,
-            AdmissionFeePaymentId = payment.Id,
-            ReferrerType = student.ReferrerType,
-            ReferrerId = referrerId,
-            Branch = student.Branch,
-            PaymentAmount = payment.Amount,
-            Percent = percent,
-            Amount = amount,
-            CreditedOn = payment.PaidOn,
-            CreatedBy = actor,
-            CreatedOn = DateTime.Now
-        });
+            _db.ReferralCredits.Add(new ReferralCredit
+            {
+                StudentId = student.Id,
+                RegistrationId = student.RegistrationId,
+                AdmissionFeePaymentId = payment.Id,
+                ReferrerType = referrer.ReferrerType,
+                ReferrerId = referrer.ReferrerId,
+                Branch = student.Branch,
+                PaymentAmount = payment.Amount,
+                Percent = percent,
+                Amount = amount,
+                CreditedOn = payment.PaidOn,
+                CreatedBy = actor,
+                CreatedOn = DateTime.Now
+            });
+        }
 
         await _db.SaveChangesAsync(ct);
 
-        // Best effort: a chat failure must never undo the credit already saved.
+        // Best effort: a chat failure must never undo the credits already saved.
         try
         {
-            await NotifyAsync(student.ReferrerType, referrerId, student.Name, student.RegistrationId,
-                payment.Amount, percent, amount, actor, ct);
+            await NotifyAsync(shares, student.Name, student.RegistrationId, payment.Amount, percent, total, actor, ct);
         }
         catch (Exception ex)
         {
@@ -177,25 +220,37 @@ public class ReferralService : IReferralService
     }
 
     private async Task NotifyAsync(
-        string referrerType, int referrerId, string? studentName, string? registrationId,
-        decimal paymentAmount, decimal percent, decimal amount, string? actor, CancellationToken ct)
+        IReadOnlyList<(StudentReferrer Referrer, decimal Amount)> shares,
+        string? studentName, string? registrationId,
+        decimal paymentAmount, decimal percent, decimal total, string? actor, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(actor)) return;
 
-        var (referrerName, referrerLogin) = referrerType == ReferrerTypes.Teacher
-            ? await _db.Teachers.AsNoTracking().Where(t => t.Id == referrerId)
-                .Select(t => new ValueTuple<string?, string?>(t.Name, t.LoginId)).FirstOrDefaultAsync(ct)
-            : await _db.Receptionists.AsNoTracking().Where(r => r.Id == referrerId)
-                .Select(r => new ValueTuple<string?, string?>(r.Name, r.LoginId)).FirstOrDefaultAsync(ct);
+        var teacherIds = shares.Where(s => s.Referrer.ReferrerType == ReferrerTypes.Teacher)
+            .Select(s => s.Referrer.ReferrerId).ToList();
+        var receptionistIds = shares.Where(s => s.Referrer.ReferrerType == ReferrerTypes.Receptionist)
+            .Select(s => s.Referrer.ReferrerId).ToList();
 
-        var destination = referrerType == ReferrerTypes.Teacher
-            ? "added to their earnings"
-            : "to be paid with their next monthly pay";
+        var teachers = await _db.Teachers.AsNoTracking().Where(t => teacherIds.Contains(t.Id))
+            .ToDictionaryAsync(t => t.Id, t => (Name: t.Name, Login: t.LoginId), ct);
+        var receptionists = await _db.Receptionists.AsNoTracking().Where(r => receptionistIds.Contains(r.Id))
+            .ToDictionaryAsync(r => r.Id, r => (Name: (string?)r.Name, Login: r.LoginId), ct);
 
-        var text = $"Admission referral: {referrerName} earns ₹{amount:0.##} ({percent:0.##}% of the ₹{paymentAmount:0.##} " +
-                   $"admission fee collected from {studentName} ({registrationId})), {destination}.";
+        (string? Name, string? Login) Who(StudentReferrer r) => r.ReferrerType == ReferrerTypes.Teacher
+            ? teachers.GetValueOrDefault(r.ReferrerId)
+            : receptionists.GetValueOrDefault(r.ReferrerId);
 
-        // The referrer, plus everyone who oversees the money.
+        var lines = shares.Select(s => s.Referrer.ReferrerType == ReferrerTypes.Teacher
+            ? $"• {Who(s.Referrer).Name}: ₹{s.Amount:0.##}, added to their earnings"
+            : $"• {Who(s.Referrer).Name}: ₹{s.Amount:0.##}, to be paid with their monthly pay");
+
+        var splitNote = shares.Count > 1 ? $", split equally between {shares.Count} referrers" : string.Empty;
+
+        var text = $"Admission referral: ₹{total:0.##} ({percent:0.##}% of the ₹{paymentAmount:0.##} admission fee " +
+                   $"collected from {studentName} ({registrationId})){splitNote}.\n" +
+                   string.Join("\n", lines);
+
+        // The referrers, plus everyone who oversees the money.
         var staff = await _db.Users.AsNoTracking()
             // Email, not LoginId: chat knows people by their email, and on older
             // rows LoginId holds whoever created the account, not its owner.
@@ -206,16 +261,16 @@ public class ReferralService : IReferralService
         var recipients = staff
             .Where(u => UserRoles.Split(u.Roles).Any(r =>
                 r is UserRoles.Admin or UserRoles.SuperAdmin or UserRoles.Editor))
-            .Select(u => u.Email!)
-            .Append(referrerLogin)
+            .Select(u => u.Email)
+            .Concat(shares.Select(s => Who(s.Referrer).Login))
             .Where(l => !string.IsNullOrWhiteSpace(l)
                         && !string.Equals(l, actor, StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        foreach (var loginId in recipients)
+        foreach (var email in recipients)
         {
-            var conversation = await _chat.StartOrGetDirectConversationAsync(actor, loginId!, ct);
+            var conversation = await _chat.StartOrGetDirectConversationAsync(actor, email!, ct);
             if (!conversation.Succeeded) continue;
 
             await _chat.SendMessageAsync(actor, conversation.Value, new SendMessageRequest { Body = text }, ct);

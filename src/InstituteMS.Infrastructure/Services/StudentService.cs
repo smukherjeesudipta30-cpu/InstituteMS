@@ -540,12 +540,20 @@ public class StudentService : IStudentService
         /* Every new admission names who referred the student. Only here, not in
            the shared validator: students admitted before referrals existed are
            edited without one, and a referrer is never changed after admission. */
-        var referrerError = await _referrals.ValidateReferrerAsync(request.ReferrerType, request.ReferrerId, ct);
-        if (referrerError is not null)
-            return Result<StudentCreatedDto>.Failure(referrerError, ResultStatus.BadRequest);
+        // One or more referrers, or a deliberate direct admission. A single
+        // ReferrerType/ReferrerId pair from an older client is still accepted.
+        var requested = request.Referrers is { Count: > 0 }
+            ? request.Referrers
+            : request.ReferrerType is ReferrerTypes.Teacher or ReferrerTypes.Receptionist && request.ReferrerId is int single
+                ? [new ReferrerRef(request.ReferrerType, single)]
+                : [];
+
+        var selection = await _referrals.ResolveReferrersAsync(request.ReferrerType, requested, ct);
+        if (!selection.Succeeded)
+            return Result<StudentCreatedDto>.Failure(selection.Error!, ResultStatus.BadRequest);
 
         // The rate is fixed now, from the slabs as they stand at admission.
-        var isDirect = request.ReferrerType == ReferrerTypes.None;
+        var isDirect = selection.Value!.IsDirect;
         var referralPercent = isDirect ? 0m : await _referrals.PercentForFeeAsync(request.AdmissionFees ?? 0m, ct);
         AdmissionFeePayment? admissionPayment = null;
 
@@ -576,8 +584,9 @@ public class StudentService : IStudentService
 
             Apply(request, entity);
             entity.Branch = branch?.Name;
-            entity.ReferrerType = request.ReferrerType;
-            entity.ReferrerId = isDirect ? null : request.ReferrerId;
+            entity.ReferrerType = isDirect ? ReferrerTypes.None : ReferrerTypes.Referred;
+            entity.ReferrerId = null;
+            entity.ReferrerSummary = selection.Value.Summary;
             entity.ReferralPercent = referralPercent;
 
             /* Null means "paying the whole thing", which is what every admission did
@@ -591,6 +600,14 @@ public class StudentService : IStudentService
 
             _db.Students.Add(entity);
             await _db.SaveChangesAsync(ct);
+
+            // Everyone who referred the student; the referral is split between them.
+            _db.StudentReferrers.AddRange(selection.Value.People.Select(p => new StudentReferrer
+            {
+                StudentId = entity.Id,
+                ReferrerType = p.Type,
+                ReferrerId = p.Id
+            }));
 
             /* The receipt for whatever was actually handed over at the counter. Only
                when there was something: an admission taken entirely on credit is a
@@ -1076,11 +1093,7 @@ public class StudentService : IStudentService
             s.PersonalEmail,
             s.ReferrerType,
             s.ReferrerId,
-            s.ReferrerType == ReferrerTypes.Teacher
-                ? _db.Teachers.Where(t => t.Id == s.ReferrerId).Select(t => t.Name).FirstOrDefault()
-                : s.ReferrerType == ReferrerTypes.Receptionist
-                    ? _db.Receptionists.Where(r => r.Id == s.ReferrerId).Select(r => r.Name).FirstOrDefault()
-                    : null,
+            s.ReferrerSummary,
             s.ReferralPercent));
 
     /// <summary>Copies the request onto the entity. Shared by create and update.</summary>

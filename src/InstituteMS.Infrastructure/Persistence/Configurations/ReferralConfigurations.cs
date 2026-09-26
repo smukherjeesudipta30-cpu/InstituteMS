@@ -16,6 +16,17 @@ public class ReferralSlabConfiguration : IEntityTypeConfiguration<ReferralSlab>
     }
 }
 
+public class StudentReferrerConfiguration : IEntityTypeConfiguration<StudentReferrer>
+{
+    public void Configure(EntityTypeBuilder<StudentReferrer> b)
+    {
+        b.ToTable("StudentReferrer");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.ReferrerType).HasMaxLength(15).IsRequired();
+        b.HasIndex(x => new { x.StudentId, x.ReferrerType, x.ReferrerId }).IsUnique();
+    }
+}
+
 public class ReferralCreditConfiguration : IEntityTypeConfiguration<ReferralCredit>
 {
     public void Configure(EntityTypeBuilder<ReferralCredit> b)
@@ -29,6 +40,6 @@ public class ReferralCreditConfiguration : IEntityTypeConfiguration<ReferralCred
         b.Property(x => x.Percent).HasColumnName("Percent").HasPrecision(5, 2);
         b.Property(x => x.Amount).HasPrecision(12, 2);
         b.Property(x => x.CreatedBy).HasMaxLength(250);
-        b.HasIndex(x => x.AdmissionFeePaymentId).IsUnique();
+        b.HasIndex(x => new { x.AdmissionFeePaymentId, x.ReferrerType, x.ReferrerId }).IsUnique();
     }
 }

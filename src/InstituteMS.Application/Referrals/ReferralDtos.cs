@@ -15,6 +15,12 @@ public record ReferralSettingsSaveRequest
     public IReadOnlyList<ReferralSlabDto> Slabs { get; init; } = [];
 }
 
+/// <summary>One person named as a referrer: <c>Teacher</c> or <c>Receptionist</c>, and their id.</summary>
+public record ReferrerRef(string Type, int Id);
+
+/// <summary>A validated choice of referrers for an admission.</summary>
+public record ReferrerSelection(bool IsDirect, IReadOnlyList<ReferrerRef> People, string? Summary);
+
 /// <summary>A teacher or receptionist who can be named as a student's referrer.</summary>
 public record ReferrerOptionDto(string Type, int Id, string Name, string? Branch);
 
@@ -46,8 +52,14 @@ public interface IReferralService
     /// <summary>The percentage an admission fee earns under the current slabs (0 below the lowest).</summary>
     Task<decimal> PercentForFeeAsync(decimal admissionFee, CancellationToken ct = default);
 
-    /// <summary>Null when the referrer exists and is active; otherwise why not.</summary>
-    Task<string?> ValidateReferrerAsync(string? type, int? id, CancellationToken ct = default);
+    /// <summary>
+    /// Checks an admission's referrer choice: either a direct admission
+    /// (<paramref name="referrerType"/> = "None", nobody listed) or one or more
+    /// active teachers/receptionists. Returns the de-duplicated people and a
+    /// display summary of their names.
+    /// </summary>
+    Task<Result<ReferrerSelection>> ResolveReferrersAsync(
+        string? referrerType, IReadOnlyList<ReferrerRef>? referrers, CancellationToken ct = default);
 
     /// <summary>
     /// Records the referrer's share of one admission-fee payment (and saves it),

@@ -291,14 +291,15 @@ public class ReceptionistService : IReceptionistService
 
     /// <summary>
     /// Pays the receptionist's admission referral credits on this payment: every
-    /// credit not yet paid, earned up to the end of the pay cycle this payment
-    /// covers. Credits already on this payment stay on it, so re-saving a
-    /// correction never pays them twice or drops them.
+    /// credit not yet paid, earned up to the end of the CALENDAR month this
+    /// payment is for (an admission any day in September is paid with
+    /// September's pay - unlike the extra-shift adjustment, which follows the
+    /// 26th-to-25th pay cycle). Credits already on this payment stay on it, so
+    /// re-saving a correction never pays them twice or drops them.
     /// </summary>
     private async Task AttachReferralCreditsAsync(ReceptionistPayment payment, CancellationToken ct)
     {
-        var startDay = await GetPayCycleStartDayAsync(ct);
-        var (_, cycleEnd) = PayCycleRange(payment.PayMonth, startDay);
+        var cycleEnd = CalendarMonthEnd(payment.PayMonth);
 
         var unpaid = await _db.ReferralCredits
             .Where(r => r.ReferrerType == ReferrerTypes.Receptionist
@@ -316,12 +317,14 @@ public class ReceptionistService : IReceptionistService
         await _db.SaveChangesAsync(ct);
     }
 
+    private static DateOnly CalendarMonthEnd(DateOnly anyDayInMonth) =>
+        new DateOnly(anyDayInMonth.Year, anyDayInMonth.Month, 1).AddMonths(1).AddDays(-1);
+
     public async Task<Result<decimal>> GetPendingReferralBonusAsync(
         int receptionistId, DateOnly forMonth, CancellationToken ct = default)
     {
         var month = MonthStart(forMonth);
-        var startDay = await GetPayCycleStartDayAsync(ct);
-        var (_, cycleEnd) = PayCycleRange(month, startDay);
+        var cycleEnd = CalendarMonthEnd(month);
 
         var existingId = await _db.ReceptionistPayments.AsNoTracking()
             .Where(p => p.ReceptionistId == receptionistId && p.PayMonth == month)

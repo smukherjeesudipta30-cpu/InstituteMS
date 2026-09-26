@@ -35,6 +35,7 @@ public class AppDbContext : DbContext
     public DbSet<ExamAnswerCopy> ExamAnswerCopies => Set<ExamAnswerCopy>();
     public DbSet<ReferralSlab> ReferralSlabs => Set<ReferralSlab>();
     public DbSet<ReferralCredit> ReferralCredits => Set<ReferralCredit>();
+    public DbSet<StudentReferrer> StudentReferrers => Set<StudentReferrer>();
     public DbSet<ExamSchedule> ExamSchedules => Set<ExamSchedule>();
     public DbSet<CertificateIssue> CertificateIssues => Set<CertificateIssue>();
     public DbSet<Receptionist> Receptionists => Set<Receptionist>();

@@ -113,6 +113,13 @@ public record StudentSaveRequest
     public int? ReferrerId { get; init; }
 
     /// <summary>
+    /// Everyone who referred the student (one or more). The referral amount is
+    /// split equally between them. Leave empty with ReferrerType "None" for a
+    /// direct admission. A single ReferrerType/ReferrerId pair is still accepted.
+    /// </summary>
+    public IReadOnlyList<InstituteMS.Application.Referrals.ReferrerRef>? Referrers { get; init; }
+
+    /// <summary>
     /// The Avijan portal sign-in. Leave both blank on create and the server
     /// generates them from the student's name, the way the legacy form did.
     /// </summary>

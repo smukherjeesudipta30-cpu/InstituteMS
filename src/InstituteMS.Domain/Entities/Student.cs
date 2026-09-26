@@ -50,6 +50,9 @@ public class Student
     public string? ReferrerType { get; set; }
     public int? ReferrerId { get; set; }
 
+    /// <summary>The referrers' names as they stood at admission, for display.</summary>
+    public string? ReferrerSummary { get; set; }
+
     /// <summary>The referral rate locked in at admission from the slab table.</summary>
     public decimal? ReferralPercent { get; set; }
 
