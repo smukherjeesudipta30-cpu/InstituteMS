@@ -103,6 +103,10 @@ public class ReferralService : IReferralService
 
     public async Task<string?> ValidateReferrerAsync(string? type, int? id, CancellationToken ct = default)
     {
+        // A direct admission is a valid, deliberate choice: nobody is credited.
+        if (type == ReferrerTypes.None)
+            return null;
+
         if (string.IsNullOrWhiteSpace(type) || id is not > 0)
             return "Please select who referred this student.";
 

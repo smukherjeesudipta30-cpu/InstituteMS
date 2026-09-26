@@ -545,7 +545,8 @@ public class StudentService : IStudentService
             return Result<StudentCreatedDto>.Failure(referrerError, ResultStatus.BadRequest);
 
         // The rate is fixed now, from the slabs as they stand at admission.
-        var referralPercent = await _referrals.PercentForFeeAsync(request.AdmissionFees ?? 0m, ct);
+        var isDirect = request.ReferrerType == ReferrerTypes.None;
+        var referralPercent = isDirect ? 0m : await _referrals.PercentForFeeAsync(request.AdmissionFees ?? 0m, ct);
         AdmissionFeePayment? admissionPayment = null;
 
         // EnableRetryOnFailure is on for the context, so a user-initiated transaction
@@ -576,7 +577,7 @@ public class StudentService : IStudentService
             Apply(request, entity);
             entity.Branch = branch?.Name;
             entity.ReferrerType = request.ReferrerType;
-            entity.ReferrerId = request.ReferrerId;
+            entity.ReferrerId = isDirect ? null : request.ReferrerId;
             entity.ReferralPercent = referralPercent;
 
             /* Null means "paying the whole thing", which is what every admission did

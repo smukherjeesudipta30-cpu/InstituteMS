@@ -41,4 +41,7 @@ public static class ReferrerTypes
 {
     public const string Teacher = "Teacher";
     public const string Receptionist = "Receptionist";
+
+    /// <summary>A direct / walk-in admission: recorded as deliberately unreferred, never credited.</summary>
+    public const string None = "None";
 }
