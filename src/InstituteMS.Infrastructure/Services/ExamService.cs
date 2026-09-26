@@ -172,6 +172,24 @@ public class ExamService : IExamService
                 ResultStatus.Conflict);
         }
 
+        // Once a result stands on this paper, what it IS must not change under
+        // that result: moving it to another course, turning a theory into a
+        // practical, or changing its total would silently rewrite marks already
+        // given. Title, dates, duration and pass mark stay editable, so the same
+        // paper can still be reopened for new students; a different exam for
+        // new students is a new paper.
+        var hasResults = await _db.ExamAttempts.AnyAsync(a => a.ExamId == examId && a.SubmittedOn != null, ct);
+        if (hasResults
+            && (request.CourseId != paper.CourseId
+                || !string.Equals(request.PaperType, paper.PaperType, StringComparison.OrdinalIgnoreCase)
+                || request.TotalMarks != paper.TotalMarks))
+        {
+            return Result<bool>.Failure(
+                "Students already have results on this paper, so its course, type and total marks can no " +
+                "longer change. Create a new paper for a different exam.",
+                ResultStatus.Conflict);
+        }
+
         paper.Title = request.Title.Trim();
         paper.Subject = request.Subject?.Trim();
         paper.CourseId = request.CourseId;
@@ -1391,6 +1409,8 @@ public class ExamService : IExamService
 
         foreach (var courseId in courseIds)
         {
+            PairSplitTerms(attempts.Where(x => x.Attempt.CourseId == courseId).Select(x => x.Attempt).ToList());
+
             var terms = new List<TermResultDto>();
 
             // Terms are not capped, so the list comes from what actually exists for
@@ -1471,6 +1491,33 @@ public class ExamService : IExamService
 
         return Result<StudentExamResultsDto>.Success(new StudentExamResultsDto(
             regId, student?.Name, courses, DateTime.Now));
+    }
+
+    /// <summary>
+    /// When the office files a course's theory and practical under different
+    /// term numbers for what is really one examination, the student would see
+    /// two half-finished exams ("Exam 1: theory only", "Exam 2: practical
+    /// only"). A term holding only a theory is paired with a term holding only
+    /// a practical, in term order, and shown as one — the same reading the
+    /// admit card and the certificate already take of this mismatch. Only the
+    /// in-memory, untracked copies are regrouped; nothing is saved.
+    /// </summary>
+    internal static void PairSplitTerms(IReadOnlyList<ExamAttempt> courseAttempts)
+    {
+        bool Has(int term, string type) => courseAttempts.Any(a =>
+            a.TermNumber == term && string.Equals(a.PaperType, type, StringComparison.OrdinalIgnoreCase));
+
+        var terms = courseAttempts.Where(a => a.TermNumber.HasValue)
+            .Select(a => a.TermNumber!.Value).Distinct().OrderBy(t => t).ToList();
+
+        var theoryOnly = terms.Where(t => Has(t, "Theory") && !Has(t, "Practical")).ToList();
+        var practicalOnly = terms.Where(t => Has(t, "Practical") && !Has(t, "Theory")).ToList();
+
+        for (var i = 0; i < Math.Min(theoryOnly.Count, practicalOnly.Count); i++)
+        {
+            foreach (var a in courseAttempts.Where(a => a.TermNumber == practicalOnly[i]))
+                a.TermNumber = theoryOnly[i];
+        }
     }
 
     /// <summary>One of the four slots, whether or not it has been sat yet.</summary>

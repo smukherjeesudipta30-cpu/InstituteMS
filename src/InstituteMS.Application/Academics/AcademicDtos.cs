@@ -59,7 +59,11 @@ public record MarkListItemDto(
     /// <summary>Totals across the subjects that were filled in.</summary>
     int TotalFullMarks,
     int TotalObtainedMarks,
-    decimal PercentScored);
+    decimal PercentScored,
+    // "Register" — typed on the Marks screen, editable here. "ExamPortal" — a
+    // theory sat online and/or a practical entered on the Exams screen; shown
+    // read-only here (its id is negative), corrected from the Exams screen.
+    string Source = "Register");
 
 public record MarkSaveRequest
 {

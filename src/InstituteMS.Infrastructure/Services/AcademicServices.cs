@@ -267,17 +267,92 @@ public class MarkService : IMarkService
                 (m.Subject4 != null && m.Subject4.Contains(term)));
         }
 
-        var totalCount = await marks.CountAsync(ct);
+        // Two stores hold marks: this register, and the examination portal
+        // (ExamAttempt). Showing only the register left every student examined
+        // through the portal missing from this list, so both are listed and
+        // paged together. Both are small enough to merge in memory.
+        var register = await ToDtosAsync(await marks.ToListAsync(ct), ct);
+        var portal = await GetPortalRowsAsync(query, ct);
 
-        var rows = await marks
-            .OrderByDescending(m => m.ExamDate).ThenByDescending(m => m.Id)
+        var all = register.Concat(portal)
+            .OrderByDescending(m => m.ExamDate)
+            .ThenByDescending(m => m.Id)
+            .ToList();
+
+        var items = all
             .Skip((query.Page - 1) * query.PageSize)
             .Take(query.PageSize)
+            .ToList();
+
+        return PagedResult<MarkListItemDto>.Create(items, query.Page, query.PageSize, all.Count);
+    }
+
+    /// <summary>
+    /// Examination-portal results as rows of this list: one per student per
+    /// examination (a theory paper and its practical), read-only. The id is
+    /// negative so it can never be mistaken for, or edited as, a register row.
+    /// </summary>
+    private async Task<List<MarkListItemDto>> GetPortalRowsAsync(MarkQuery query, CancellationToken ct)
+    {
+        var attempts = await _db.ExamAttempts.AsNoTracking()
+            .Where(a => a.SubmittedOn != null && a.Score != null)
             .ToListAsync(ct);
 
-        var items = await ToDtosAsync(rows, ct);
+        var reg = query.RegistrationId?.Trim();
+        if (!string.IsNullOrEmpty(reg))
+            attempts = attempts.Where(a => a.StudentRegistrationId.Contains(reg, StringComparison.OrdinalIgnoreCase)).ToList();
 
-        return PagedResult<MarkListItemDto>.Create(items, query.Page, query.PageSize, totalCount);
+        var term = query.Search?.Trim();
+        if (!string.IsNullOrEmpty(term))
+            attempts = attempts.Where(a =>
+                a.StudentRegistrationId.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || (a.PaperType ?? string.Empty).Contains(term, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        if (attempts.Count == 0) return [];
+
+        // Same pairing as the student's own results: a theory and a practical
+        // filed under different term numbers are one examination.
+        foreach (var group in attempts.GroupBy(a => (a.StudentRegistrationId, a.CourseId)))
+            ExamService.PairSplitTerms(group.ToList());
+
+        var regIds = attempts.Select(a => a.StudentRegistrationId).Distinct().ToList();
+        var courseIds = attempts.Where(a => a.CourseId.HasValue).Select(a => a.CourseId!.Value).Distinct().ToList();
+
+        var names = await _db.Students.AsNoTracking()
+            .Where(s => s.RegistrationId != null && regIds.Contains(s.RegistrationId))
+            .Select(s => new { s.RegistrationId, s.Name })
+            .ToListAsync(ct);
+
+        var courses = await _db.Courses.AsNoTracking()
+            .Where(c => courseIds.Contains(c.Cid))
+            .ToDictionaryAsync(c => c.Cid, c => c.Name, ct);
+
+        return attempts
+            .GroupBy(a => (a.StudentRegistrationId, a.CourseId, a.TermNumber))
+            .Select(g =>
+            {
+                var papers = g.OrderBy(a => a.PaperType == "Theory" ? 0 : 1).ToList();
+                var subjects = papers
+                    .Select(a => new MarkSubjectDto(a.PaperType, a.TotalMarks, a.Score))
+                    .ToList();
+
+                var full = papers.Sum(a => a.TotalMarks ?? 0);
+                var obtained = papers.Sum(a => a.Score ?? 0);
+                var latest = papers.Max(a => a.SubmittedOn)!.Value;
+
+                return new MarkListItemDto(
+                    -papers.Min(a => a.AttemptId),
+                    g.Key.StudentRegistrationId,
+                    names.FirstOrDefault(n => string.Equals(n.RegistrationId, g.Key.StudentRegistrationId, StringComparison.OrdinalIgnoreCase))?.Name,
+                    g.Key.CourseId is int cid ? courses.GetValueOrDefault(cid) : null,
+                    DateOnly.FromDateTime(latest),
+                    subjects,
+                    full,
+                    obtained,
+                    full <= 0 ? 0m : decimal.Round(obtained * 100m / full, 2, MidpointRounding.AwayFromZero),
+                    "ExamPortal");
+            })
+            .ToList();
     }
 
     public async Task<Result<MarkListItemDto>> GetByIdAsync(int id, CancellationToken ct = default)
