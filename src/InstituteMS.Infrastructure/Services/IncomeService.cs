@@ -344,7 +344,10 @@ public class IncomeService : IIncomeService
                     r.Id, r.PaidOn, null,
                     Name(names, r.RegistrationId), r.RegistrationId,
                     Course(names, r.RegistrationId), null,
-                    $"Exam fee ({r.PaymentMode})", r.Amount)).ToList();
+                    string.IsNullOrEmpty(r.CreatedBy)
+                        ? $"Exam fee ({r.PaymentMode})"
+                        : $"Exam fee ({r.PaymentMode}) · received by {r.CreatedBy}",
+                    r.Amount)).ToList();
 
                 return PagedResult<IncomeDetailDto>.Create(items, query.Page, query.PageSize, total);
             }

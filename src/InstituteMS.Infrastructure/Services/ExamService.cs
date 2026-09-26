@@ -2010,6 +2010,15 @@ public class ExamService : IExamService
 
         var regId = own.Value!;
 
+        /* The exam fee must be paid before the admit card is released. Checked
+           here, not only on screen, so the card cannot be fetched around it.
+           A course with no exam fee set is not held back. */
+        var fee = await _examFees.GetMineAsync(email, ct);
+        if (fee.Succeeded && fee.Value!.ExamFee is not null && fee.Value.Due > 0m)
+            return Result<IReadOnlyList<AdmitCardDto>>.Failure(
+                $"Please pay your exam fee (₹{fee.Value.Due:0.##} still due) at the institute office to download your admit card.",
+                ResultStatus.Forbidden);
+
         var student = await _db.Students.AsNoTracking()
             .Where(s => s.RegistrationId == regId)
             .Select(s => new { s.Name, s.GuardianName, s.CourseId })

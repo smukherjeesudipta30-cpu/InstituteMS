@@ -184,6 +184,62 @@ public class ExamFeeService : IExamFeeService
         return Result<bool>.Success(true);
     }
 
+    public async Task<Result<StudentExamFeeDto>> MoveFromOtherIncomeAsync(
+        ExamFeeMoveRequest request, string? actor, CancellationToken ct = default)
+    {
+        var income = await _db.OtherIncomes
+            .Include(i => i.Ext)
+            .FirstOrDefaultAsync(i => i.Id == request.OtherIncomeId, ct);
+
+        if (income is null)
+            return Result<StudentExamFeeDto>.Failure("That Other income entry no longer exists.", ResultStatus.NotFound);
+
+        var amount = income.Amount ?? 0m;
+        if (amount <= 0m)
+            return Result<StudentExamFeeDto>.Failure("That entry has no amount to move.");
+
+        var status = await StatusAsync(request.StudentId, ct);
+        if (status is null)
+            return Result<StudentExamFeeDto>.Failure("Student not found.", ResultStatus.NotFound);
+
+        if (status.ExamFee is null)
+            return Result<StudentExamFeeDto>.Failure(
+                $"No exam fee is set for {status.CourseName} at {status.Branch ?? "this branch"} yet. " +
+                "Set it on the Exam Fees screen first, then move the entry.");
+
+        if (amount > status.Due)
+            return Result<StudentExamFeeDto>.Failure(
+                $"The entry is {amount:0.##} but {status.StudentName} only owes {status.Due:0.##} in exam fee. " +
+                "If it covers something else too, correct the Other income entry first.");
+
+        var note = $"Moved from Other income: {income.Purpose}";
+
+        // Kept as it was received: its own date, branch, and whoever recorded it.
+        _db.ExamFeePayments.Add(new ExamFeePayment
+        {
+            StudentId = request.StudentId,
+            RegistrationId = status.RegistrationId,
+            CourseId = status.CourseId,
+            Branch = income.Ext?.Branch ?? status.Branch,
+            Amount = amount,
+            PaymentMode = "Cash",
+            PaidOn = income.IncomeDate ?? DateOnly.FromDateTime(DateTime.Today),
+            Note = note.Length > 300 ? note[..300] : note,
+            CreatedBy = income.Ext?.CreatedBy ?? actor,
+            CreatedOn = DateTime.Now
+        });
+
+        _db.OtherIncomes.Remove(income);
+
+        // One save: the entry moves, or nothing changes.
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation("Other income {IncomeId} ({Amount}) moved to exam fee of student {StudentId} by {Actor}",
+            request.OtherIncomeId, amount, request.StudentId, actor);
+
+        return Result<StudentExamFeeDto>.Success((await StatusAsync(request.StudentId, ct))!);
+    }
+
     public async Task<Result<StudentExamFeeDto>> SetOverrideAsync(
         int studentId, ExamFeeOverrideRequest request, string? actor, CancellationToken ct = default)
     {
@@ -300,6 +356,18 @@ public class ExamFeeService : IExamFeeService
             .OrderByDescending(p => p.PaidOn).ThenByDescending(p => p.Id)
             .Select(p => new ExamFeePaymentDto(p.Id, p.PaidOn, p.Amount, p.PaymentMode, p.Note, p.CreatedBy))
             .ToListAsync(ct);
+
+        // Who received each payment, by name where the login is known.
+        var logins = payments.Select(p => p.RecordedBy).Where(l => !string.IsNullOrEmpty(l)).Distinct().ToList();
+        var names = await _db.Users.AsNoTracking()
+            .Where(u => u.Email != null && logins.Contains(u.Email))
+            .Select(u => new { u.Email, u.Name })
+            .ToListAsync(ct);
+        payments = payments.Select(p => p with
+        {
+            RecordedBy = names.FirstOrDefault(n => string.Equals(n.Email, p.RecordedBy, StringComparison.OrdinalIgnoreCase))?.Name
+                         ?? p.RecordedBy
+        }).ToList();
 
         var paid = payments.Sum(p => p.Amount);
         var scheduled = (await ScheduledStudentIdsAsync(s.Id, ct)).Contains(s.Id);

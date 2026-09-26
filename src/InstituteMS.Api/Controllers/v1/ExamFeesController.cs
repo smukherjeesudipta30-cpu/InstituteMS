@@ -58,6 +58,13 @@ public class ExamFeesController : ApiControllerBase
     public async Task<IActionResult> DeletePayment(int paymentId, CancellationToken ct)
         => Envelope(await _fees.DeletePaymentAsync(paymentId, ct), "Exam fee payment removed.");
 
+    /// <summary>Moves an exam fee typed into Other income onto a student's exam fee.</summary>
+    [HttpPost("move-from-other-income")]
+    [ProducesResponseType(typeof(ApiResponse<StudentExamFeeDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<StudentExamFeeDto>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> MoveFromOtherIncome([FromBody] ExamFeeMoveRequest request, CancellationToken ct)
+        => Envelope(await _fees.MoveFromOtherIncomeAsync(request, CurrentUserName, ct), "Moved to the student's exam fee.");
+
     /// <summary>Students scheduled for an exam who still owe exam fee.</summary>
     [HttpGet("dues")]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ExamFeeDueRowDto>>), StatusCodes.Status200OK)]

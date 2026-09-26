@@ -94,9 +94,12 @@ public class StudentService : IStudentService
     }
 
     public async Task<IReadOnlyList<StudentLookupDto>> GetLookupAsync(
-        string? search, CancellationToken ct = default)
+        string? search, CancellationToken ct = default, bool includeCompleted = false)
     {
-        var students = _db.Students.AsNoTracking().Where(s => s.IsActive == true);
+        // Completed students too when asked - e.g. matching an old exam fee to
+        // someone who has since finished their course.
+        var students = _db.Students.AsNoTracking()
+            .Where(s => s.IsActive == true || (includeCompleted && s.IsComplete == true));
 
         if (!string.IsNullOrWhiteSpace(search))
         {

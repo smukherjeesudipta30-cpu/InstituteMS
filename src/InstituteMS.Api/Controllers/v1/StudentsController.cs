@@ -56,8 +56,8 @@ public class StudentsController : ApiControllerBase
     /// <summary>Name/registration search for the re-registration picker (legacy <c>SearchDatRegistration</c>).</summary>
     [HttpGet("lookup")]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<StudentLookupDto>>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> Lookup([FromQuery] string? search, CancellationToken ct)
-        => Envelope(await _students.GetLookupAsync(search, ct));
+    public async Task<IActionResult> Lookup([FromQuery] string? search, [FromQuery] bool includeCompleted, CancellationToken ct)
+        => Envelope(await _students.GetLookupAsync(search, ct, includeCompleted));
 
     /// <summary>
     /// Preview of the registration and bill numbers the next admission will get.

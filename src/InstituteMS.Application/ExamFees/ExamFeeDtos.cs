@@ -46,6 +46,13 @@ public record ExamFeeCollectRequest
     public string? Note { get; init; }
 }
 
+/// <summary>Turns an exam fee typed into Other income into this student's exam fee payment.</summary>
+public record ExamFeeMoveRequest
+{
+    public int OtherIncomeId { get; init; }
+    public int StudentId { get; init; }
+}
+
 public record ExamFeeOverrideRequest
 {
     /// <summary>Null clears the override, so the course/branch rate applies again.</summary>
@@ -81,6 +88,14 @@ public interface IExamFeeService
         int studentId, ExamFeeCollectRequest request, string? actor, CancellationToken ct = default);
 
     Task<Result<bool>> DeletePaymentAsync(int paymentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Moves an exam fee that was typed into Other income onto a student as their
+    /// exam fee payment (same date, amount, branch and person who received it) and
+    /// removes it from Other income - so it is neither lost nor counted twice.
+    /// </summary>
+    Task<Result<StudentExamFeeDto>> MoveFromOtherIncomeAsync(
+        ExamFeeMoveRequest request, string? actor, CancellationToken ct = default);
 
     Task<Result<StudentExamFeeDto>> SetOverrideAsync(
         int studentId, ExamFeeOverrideRequest request, string? actor, CancellationToken ct = default);

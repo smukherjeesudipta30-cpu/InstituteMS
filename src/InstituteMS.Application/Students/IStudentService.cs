@@ -14,7 +14,8 @@ public interface IStudentService
     /// </summary>
     Task<Result<StudentListItemDto>> GetByRegistrationIdAsync(string registrationId, CancellationToken ct = default);
 
-    Task<IReadOnlyList<StudentLookupDto>> GetLookupAsync(string? search, CancellationToken ct = default);
+    /// <summary>Active students by name or registration id; <paramref name="includeCompleted"/> adds those who finished their course.</summary>
+    Task<IReadOnlyList<StudentLookupDto>> GetLookupAsync(string? search, CancellationToken ct = default, bool includeCompleted = false);
 
     Task<Result<StudentCreatedDto>> CreateAsync(StudentSaveRequest request, string? actor, CancellationToken ct = default);
 
