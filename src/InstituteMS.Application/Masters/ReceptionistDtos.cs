@@ -219,20 +219,22 @@ public record ExtraShiftDayDto(
 
 /// <summary>
 /// The net extra-shift adjustment for one receptionist's upcoming payment — a
-/// transfer, not money created from nothing: a day they covered for an absent
-/// colleague adds that day's actual rostered hours at their <b>own</b> hourly
-/// rate; a day a colleague covered <b>for them</b> deducts their own hours for
-/// that day at the same rate, since they did not work it. The hourly rate
+/// transfer, not money created from nothing: a shift they covered for an absent
+/// colleague (on a day off, or on top of their own shift that day) adds that
+/// shift's hours at their <b>own</b> hourly rate; a shift a colleague covered
+/// <b>for them</b> deducts its hours at the same rate, since they did not work
+/// it. Presence is read shift by shift from the In/Out scan times. The hourly rate
 /// comes from the receptionist's standard monthly pay — the fees master
 /// figure, not a recorded payment, which can lag behind or not exist yet —
-/// divided by the previous pay cycle's actual rostered hours (the week-long Staff Rota
-/// pattern replayed across every calendar day of that cycle), not a flat
+/// divided by this pay cycle's actual rostered hours (the week-long Staff Rota
+/// pattern replayed across every calendar day of the cycle), not a flat
 /// shift count — see <see cref="IReceptionistService.GetExtraShiftBonusAsync"/>.
 /// Computed by the server alone — never entered, never edited.
 /// </summary>
 public record ExtraShiftBonusDto(
     int ReceptionistId,
     decimal HourlyRate,
+    // Hours rostered across the pay cycle being paid (name kept for API compatibility).
     decimal LastCycleHours,
     // The Receptionist.MonthlyPay the hourly rate above was computed from.
     decimal StandardPay,

@@ -93,7 +93,11 @@ public static class DependencyInjection
         services.AddScoped<StudentLoginGenerator>();
 
         services.AddScoped<ITeacherExamService, TeacherExamService>();
-        services.AddHttpClient<IExamQuestionGenerator, GeminiExamQuestionGenerator>();
+        // The default 100s HttpClient timeout is too tight for a free-tier model
+        // under load — generating a study guide plus a full question set can
+        // genuinely take longer than that with no real problem occurring.
+        services.AddHttpClient<IExamQuestionGenerator, AiExamQuestionGenerator>(
+            c => c.Timeout = TimeSpan.FromSeconds(240));
 
         return services;
     }

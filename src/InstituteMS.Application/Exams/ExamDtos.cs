@@ -346,7 +346,67 @@ public record PracticalRosterRowDto(
     int? Score,
     int TotalMarks,
     DateTime? EnteredOn,
-    string? EnteredBy);
+    string? EnteredBy,
+    // The result's attempt, when there is one — an online sitting's can be
+    // opened read-only with GetAttemptReviewAsync.
+    int? AttemptId = null,
+    // "Portal" (sat online, marked by the portal) or "Entered" (hand-marked).
+    string? Source = null,
+    // True when this theory paper is scheduled offline for the student, so a
+    // mark can only be entered once an answer copy is on file.
+    bool IsOfflineTheory = false,
+    int AnswerCopyCount = 0);
+
+/* ======================================= reviewing a submitted paper */
+
+/// <summary>One question of a submitted online paper, as the student sat it.</summary>
+/// <remarks>
+/// <see cref="CorrectOption"/> is filled in for staff only. A paper is reused
+/// for other students, so the student's own view shows whether each answer was
+/// right but never what the right answer was.
+/// </remarks>
+public record ExamAttemptReviewItemDto(
+    int QuestionNo,
+    string QuestionText,
+    string OptionA,
+    string OptionB,
+    string OptionC,
+    string OptionD,
+    string? ChosenOption,
+    bool IsCorrect,
+    int Marks,
+    string? CorrectOption);
+
+/// <summary>A submitted online paper, read-only, question by question.</summary>
+public record ExamAttemptReviewDto(
+    int AttemptId,
+    int ExamId,
+    string Title,
+    string RegistrationId,
+    string? StudentName,
+    int Score,
+    int TotalMarks,
+    int CorrectCount,
+    int QuestionCount,
+    DateTime? SubmittedOn,
+    IReadOnlyList<ExamAttemptReviewItemDto> Questions);
+
+/* ========================== offline theory: the uploaded answer script */
+
+/// <summary>One uploaded page or scan of a student's offline answer script.</summary>
+public record ExamAnswerCopyDto(
+    int Id,
+    string FileName,
+    string ContentType,
+    int SizeBytes,
+    string? UploadedBy,
+    DateTime UploadedOn);
+
+/// <summary>A file handed to the answer-copy upload, before it is validated.</summary>
+public record AnswerCopyUpload(string FileName, string? ContentType, long Length, Stream Content);
+
+/// <summary>An answer copy's bytes, for download.</summary>
+public record AnswerCopyFile(string FileName, string ContentType, byte[] Content);
 
 /* ================================ scheduling and the access code (admin) */
 
@@ -661,4 +721,24 @@ public interface IExamService
     /// </summary>
     Task<Result<StudentExamResultsDto>> GetMyCourseResultsAsync(
         string email, CancellationToken ct = default);
+
+    /// <summary>
+    /// A submitted online paper, question by question, read-only. With an
+    /// <paramref name="ownerEmail"/> it is the student's own view — only their
+    /// own attempts, and without the correct options; without one it is the
+    /// staff view, which shows everything.
+    /// </summary>
+    Task<Result<ExamAttemptReviewDto>> GetAttemptReviewAsync(
+        int attemptId, string? ownerEmail, CancellationToken ct = default);
+
+    Task<Result<IReadOnlyList<ExamAnswerCopyDto>>> GetAnswerCopiesAsync(
+        int examId, string registrationId, CancellationToken ct = default);
+
+    Task<Result<IReadOnlyList<ExamAnswerCopyDto>>> UploadAnswerCopiesAsync(
+        int examId, string registrationId, IReadOnlyList<AnswerCopyUpload> files,
+        string? actor, CancellationToken ct = default);
+
+    Task<Result<AnswerCopyFile>> GetAnswerCopyFileAsync(int copyId, CancellationToken ct = default);
+
+    Task<Result<bool>> DeleteAnswerCopyAsync(int copyId, CancellationToken ct = default);
 }

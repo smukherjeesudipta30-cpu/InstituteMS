@@ -210,3 +210,50 @@ public class ExamSchedule
 
     public ExamPaper? Paper { get; set; }
 }
+
+/// <summary>
+/// Maps to <c>dbo.ExamAttemptAnswer</c> — one question of a submitted online
+/// theory attempt, copied in full at the moment it was submitted. The attempt's
+/// own <c>Answers</c> string only holds question ids, which point at a question
+/// bank an Admin can still edit or delete; this copy is what keeps a student's
+/// paper, exactly as they sat it, available to read back later. Written once,
+/// never updated.
+/// </summary>
+public class ExamAttemptAnswer
+{
+    public int Id { get; set; }
+    public int AttemptId { get; set; }
+    public int QuestionNo { get; set; }
+    public string QuestionText { get; set; } = string.Empty;
+    public string OptionA { get; set; } = string.Empty;
+    public string OptionB { get; set; } = string.Empty;
+    public string OptionC { get; set; } = string.Empty;
+    public string OptionD { get; set; } = string.Empty;
+    public char CorrectOption { get; set; }
+
+    /// <summary>Null when the question was left unanswered.</summary>
+    public char? ChosenOption { get; set; }
+
+    public int Marks { get; set; }
+    public bool IsCorrect { get; set; }
+}
+
+/// <summary>
+/// Maps to <c>dbo.ExamAnswerCopy</c> — one uploaded page (photo) or scan (PDF)
+/// of a student's handwritten answer script for a theory paper sat offline.
+/// At least one must be on file before that paper's mark can be entered.
+/// Held in the database, like student photos, so it needs no file storage of
+/// its own on the host.
+/// </summary>
+public class ExamAnswerCopy
+{
+    public int Id { get; set; }
+    public int ExamId { get; set; }
+    public string StudentRegistrationId { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public string ContentType { get; set; } = string.Empty;
+    public byte[] Content { get; set; } = [];
+    public int SizeBytes { get; set; }
+    public string? UploadedBy { get; set; }
+    public DateTime UploadedOn { get; set; }
+}

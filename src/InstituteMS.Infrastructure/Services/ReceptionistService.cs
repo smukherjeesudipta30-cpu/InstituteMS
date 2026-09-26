@@ -794,44 +794,49 @@ public class ReceptionistService : IReceptionistService
 
         var ids = people.Select(p => p.Id).ToList();
 
-        // --- 1. every active shift's actual duration, in hours.
-        var shiftHours = await _db.AttendanceShifts.AsNoTracking()
+        // --- 1. every active shift, with its actual clock window.
+        var shifts = await _db.AttendanceShifts.AsNoTracking()
             .Where(s => s.IsActive)
-            .ToDictionaryAsync(s => s.Id, s => ShiftHours(s.StartTime, s.EndTime), ct);
+            .Select(s => new { s.Id, s.StartTime, s.EndTime })
+            .ToListAsync(ct);
 
-        // --- 2. everyone's weekly rota reduced to hours-rostered-per-day-of-week
-        // (summed, since one day-of-week can carry more than one shift).
+        var shiftById = shifts.ToDictionary(s => s.Id);
+
+        // --- 2. everyone's weekly rota as (staff, day-of-week) -> the shifts
+        // they are down for; one day-of-week can carry more than one shift.
         var roster = await _db.StaffShiftAssignments.AsNoTracking()
             .Where(a => a.StaffType == "Receptionist" && a.IsActive && ids.Contains(a.StaffId))
             .Select(a => new { a.StaffId, a.DayOfWeek, a.ShiftId })
             .ToListAsync(ct);
 
-        var hoursByStaffDay = roster
-            .GroupBy(a => (a.StaffId, a.DayOfWeek))
-            .ToDictionary(g => g.Key, g => g.Sum(a => shiftHours.TryGetValue(a.ShiftId, out var h) ? h : 0m));
+        var rostered = roster
+            .Where(a => shiftById.ContainsKey(a.ShiftId))
+            .Select(a => (a.StaffId, a.DayOfWeek, a.ShiftId))
+            .ToHashSet();
 
-        decimal HoursFor(int staffId, byte dow) =>
-            hoursByStaffDay.TryGetValue((staffId, dow), out var h) ? h : 0m;
+        decimal HoursFor(int staffId, byte dow) => shifts
+            .Where(s => rostered.Contains((staffId, dow, s.Id)))
+            .Sum(s => ShiftHours(s.StartTime, s.EndTime));
 
         // --- 3. everyone's own hourly rate: their MASTER standard monthly pay
         // (Receptionist.MonthlyPay, set on the fees master screen — never a
         // recorded payment, which can lag behind, be corrected after the fact,
-        // or simply not exist yet for a new hire) divided by the actual hours
-        // the weekly rota put them down for across the PREVIOUS pay cycle.
-        var (prevStart, prevEnd) = PayCycleRange(monthStart.AddDays(-1), payCycleStartDay);
-
-        var lastCycleHours = new Dictionary<int, decimal>();
+        // or simply not exist yet for a new hire) divided by the hours the
+        // weekly rota puts them down for across THIS pay cycle — the same
+        // cycle whose pay is being adjusted. Kept unrounded: rounding the rate
+        // first and multiplying after lost paise on every covered shift, so
+        // only the final amounts are rounded.
+        var cycleHours = new Dictionary<int, decimal>();
         var hourlyRate = new Dictionary<int, decimal>();
 
         foreach (var p in people)
         {
             var hrs = 0m;
-            for (var d = prevStart; d <= prevEnd; d = d.AddDays(1))
+            for (var d = monthStart; d <= monthEnd; d = d.AddDays(1))
                 hrs += HoursFor(p.Id, (byte)d.DayOfWeek);
 
-            lastCycleHours[p.Id] = hrs;
-
-            hourlyRate[p.Id] = p.MonthlyPay <= 0m || hrs <= 0m ? 0m : Math.Round(p.MonthlyPay / hrs, 2);
+            cycleHours[p.Id] = hrs;
+            hourlyRate[p.Id] = p.MonthlyPay <= 0m || hrs <= 0m ? 0m : p.MonthlyPay / hrs;
         }
 
         var coveredForOthers = people.ToDictionary(p => p.Id, _ => new List<ExtraShiftDayDto>());
@@ -839,46 +844,72 @@ public class ReceptionistService : IReceptionistService
 
         if (countEnd >= monthStart)
         {
-            // --- 4. who scanned in ("In") on which day, everyone at the branch.
-            var presentByDay = (await _db.StaffAttendance.AsNoTracking()
-                .Where(a => a.StaffType == "Receptionist" && a.Direction == "In"
+            // --- 4. every In/Out scan at the branch, turned into time-on-site
+            // sessions per person per day.
+            var scans = await _db.StaffAttendance.AsNoTracking()
+                .Where(a => a.StaffType == "Receptionist"
                     && a.Branch == branch && a.OnDate >= monthStart && a.OnDate <= countEnd
                     && ids.Contains(a.StaffId))
-                .Select(a => new { a.StaffId, a.OnDate })
-                .Distinct()
-                .ToListAsync(ct))
-                .GroupBy(a => a.OnDate)
-                .ToDictionary(g => g.Key, g => g.Select(a => a.StaffId).ToHashSet());
+                .Select(a => new { a.StaffId, a.OnDate, a.Direction, a.ScannedOn })
+                .ToListAsync(ct);
+
+            var sessions = scans
+                .GroupBy(a => (a.StaffId, a.OnDate))
+                .ToDictionary(
+                    g => g.Key,
+                    g => BuildSessions(
+                        g.OrderBy(a => a.ScannedOn).Select(a => (a.Direction, TimeOnly.FromDateTime(a.ScannedOn))),
+                        shifts.Select(s => s.EndTime)));
+
+            // Present for a shift = on site for at least half of it. Attendance
+            // is a day's In/Out scans with no shift attached, so this is what
+            // tells a person who stayed on for a colleague's evening apart from
+            // one who only did their own morning, and a proper cover apart from
+            // someone who dropped in for a few minutes.
+            bool PresentFor(int staffId, DateOnly date, TimeOnly start, TimeOnly end)
+            {
+                if (!sessions.TryGetValue((staffId, date), out var mine)) return false;
+                var overlap = mine.Sum(s => OverlapHours(s.From, s.To, start, end));
+                return overlap * 2 >= ShiftHours(start, end);
+            }
 
             for (var date = monthStart; date <= countEnd; date = date.AddDays(1))
             {
                 var dow = (byte)date.DayOfWeek;
-                var presentToday = presentByDay.TryGetValue(date, out var pr) ? pr : new HashSet<int>();
 
-                // Rostered for today but did not scan in.
-                var absentees = people
-                    .Where(p => HoursFor(p.Id, dow) > 0m && !presentToday.Contains(p.Id))
-                    .OrderBy(p => p.Id)
-                    .ToList();
-
-                // Not rostered for today but scanned in anyway.
-                var coverers = people
-                    .Where(p => HoursFor(p.Id, dow) == 0m && presentToday.Contains(p.Id))
-                    .OrderBy(p => p.Id)
-                    .ToList();
-
-                var pairCount = Math.Min(absentees.Count, coverers.Count);
-                for (var i = 0; i < pairCount; i++)
+                // Each shift is settled on its own: who was down for it and
+                // missed it, and who was there for it without being down for it
+                // — including someone doing it on top of their own shift that day.
+                foreach (var shift in shifts.OrderBy(s => s.StartTime))
                 {
-                    var absent = absentees[i];
-                    var coverer = coverers[i];
-                    var hours = HoursFor(absent.Id, dow);
+                    var hours = ShiftHours(shift.StartTime, shift.EndTime);
 
-                    coveredByOthers[absent.Id].Add(new ExtraShiftDayDto(
-                        date, coverer.Name, branch, hours, Math.Round(hours * hourlyRate[absent.Id], 2)));
+                    var absentees = people
+                        .Where(p => rostered.Contains((p.Id, dow, shift.Id))
+                            && !PresentFor(p.Id, date, shift.StartTime, shift.EndTime))
+                        .OrderBy(p => p.Id)
+                        .ToList();
 
-                    coveredForOthers[coverer.Id].Add(new ExtraShiftDayDto(
-                        date, absent.Name, branch, hours, Math.Round(hours * hourlyRate[coverer.Id], 2)));
+                    if (absentees.Count == 0) continue;
+
+                    var coverers = people
+                        .Where(p => !rostered.Contains((p.Id, dow, shift.Id))
+                            && PresentFor(p.Id, date, shift.StartTime, shift.EndTime))
+                        .OrderBy(p => p.Id)
+                        .ToList();
+
+                    var pairCount = Math.Min(absentees.Count, coverers.Count);
+                    for (var i = 0; i < pairCount; i++)
+                    {
+                        var absent = absentees[i];
+                        var coverer = coverers[i];
+
+                        coveredByOthers[absent.Id].Add(new ExtraShiftDayDto(
+                            date, coverer.Name, branch, hours, Math.Round(hours * hourlyRate[absent.Id], 2)));
+
+                        coveredForOthers[coverer.Id].Add(new ExtraShiftDayDto(
+                            date, absent.Name, branch, hours, Math.Round(hours * hourlyRate[coverer.Id], 2)));
+                    }
                 }
             }
         }
@@ -887,12 +918,55 @@ public class ReceptionistService : IReceptionistService
         {
             var gains = coveredForOthers[p.Id];
             var losses = coveredByOthers[p.Id];
-            var netBonus = Math.Round(gains.Sum(d => d.Amount) - losses.Sum(d => d.Amount), 2);
+
+            // The sum of the lines shown on the payslip and in the chat notice,
+            // so anyone adding them up by hand lands on exactly this figure.
+            var netBonus = gains.Sum(d => d.Amount) - losses.Sum(d => d.Amount);
 
             return new ExtraShiftBonusDto(
-                p.Id, hourlyRate[p.Id], lastCycleHours[p.Id], p.MonthlyPay,
+                p.Id, Math.Round(hourlyRate[p.Id], 2), cycleHours[p.Id], p.MonthlyPay,
                 gains.Count, losses.Count, netBonus, gains, losses);
         });
+    }
+
+    /// <summary>
+    /// Pairs a day's scans into on-site sessions. An In with no Out after it is
+    /// closed at the end of the shift it was scanned into (the first shift
+    /// ending after it) — a forgotten Out scan should not stretch one shift
+    /// into the rest of the day, nor erase it.
+    /// </summary>
+    private static List<(TimeOnly From, TimeOnly To)> BuildSessions(
+        IEnumerable<(string Direction, TimeOnly At)> scans, IEnumerable<TimeOnly> shiftEnds)
+    {
+        var ends = shiftEnds.OrderBy(e => e).ToList();
+        var result = new List<(TimeOnly From, TimeOnly To)>();
+        TimeOnly? openFrom = null;
+
+        TimeOnly CloseAt(TimeOnly from) => ends.FirstOrDefault(e => e > from, from);
+
+        foreach (var (direction, at) in scans)
+        {
+            if (direction == "In")
+            {
+                if (openFrom is { } prev) result.Add((prev, CloseAt(prev)));
+                openFrom = at;
+            }
+            else if (openFrom is { } from)
+            {
+                result.Add((from, at));
+                openFrom = null;
+            }
+        }
+
+        if (openFrom is { } last) result.Add((last, CloseAt(last)));
+        return result;
+    }
+
+    private static decimal OverlapHours(TimeOnly aFrom, TimeOnly aTo, TimeOnly bFrom, TimeOnly bTo)
+    {
+        var from = aFrom > bFrom ? aFrom : bFrom;
+        var to = aTo < bTo ? aTo : bTo;
+        return to > from ? (decimal)(to - from).TotalHours : 0m;
     }
 
     private static decimal ShiftHours(TimeOnly start, TimeOnly end)

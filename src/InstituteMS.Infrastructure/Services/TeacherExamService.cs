@@ -179,6 +179,17 @@ public class TeacherExamService : ITeacherExamService
         if (!generated.Succeeded)
             return Result<int>.Failure(generated.Error ?? "Could not generate questions.", generated.Status);
 
+        // The sitting is scheduled for an exact number of questions; a short
+        // set (a reply cut off, or questions dropped as unusable) must not
+        // quietly become a shorter exam. Extras beyond the count are dropped.
+        if (generated.Value!.Count < request.QuestionCount)
+            return Result<int>.Failure(
+                $"The AI returned only {generated.Value.Count} usable questions of the {request.QuestionCount} " +
+                "asked for. Nothing was scheduled — please try again.",
+                ResultStatus.BadRequest);
+
+        var questionSet = generated.Value.Take(request.QuestionCount).ToList();
+
         // Best-effort: a study guide is a bonus, not the point of scheduling,
         // so a failure here (or no key at all) never blocks the sitting itself.
         var studyGuide = await _generator.GenerateStudyGuideAsync(assignment.CourseName, ct);
@@ -196,7 +207,7 @@ public class TeacherExamService : ITeacherExamService
         await _db.SaveChangesAsync(ct);
 
         var order = 1;
-        foreach (var q in generated.Value!)
+        foreach (var q in questionSet)
         {
             _db.TeacherExamQuestions.Add(new TeacherExamQuestion
             {

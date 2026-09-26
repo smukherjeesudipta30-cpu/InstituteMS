@@ -908,6 +908,29 @@ public class ExamService : IExamService
         attempt.QuestionCount = questions.Count;
         attempt.AutoSubmitted = late;
 
+        // The paper exactly as it was sat, frozen with the student's choices, so
+        // it can still be read back after the question bank changes.
+        _db.ExamAttemptAnswers.AddRange(questions.OrderBy(q => q.QuestionNo).Select(q =>
+        {
+            char? chosen = answers.TryGetValue(q.QuestionId, out var picked) ? char.ToUpperInvariant(picked) : null;
+            var correct = char.ToUpperInvariant(q.CorrectOption);
+
+            return new ExamAttemptAnswer
+            {
+                AttemptId = attempt.AttemptId,
+                QuestionNo = q.QuestionNo,
+                QuestionText = q.QuestionText,
+                OptionA = q.OptionA,
+                OptionB = q.OptionB,
+                OptionC = q.OptionC ?? string.Empty,
+                OptionD = q.OptionD ?? string.Empty,
+                CorrectOption = correct,
+                ChosenOption = chosen,
+                Marks = q.Marks,
+                IsCorrect = chosen == correct
+            };
+        }));
+
         await _db.SaveChangesAsync(ct);
 
         return Result<ExamResultDto>.Success(BuildResult(attempt, paper));
@@ -937,6 +960,191 @@ public class ExamService : IExamService
         return Result<IReadOnlyList<ExamResultDto>>.Success(results);
     }
 
+    /* ================================ reviewing a submitted online paper */
+
+    public async Task<Result<ExamAttemptReviewDto>> GetAttemptReviewAsync(
+        int attemptId, string? ownerEmail, CancellationToken ct = default)
+    {
+        var attempt = await _db.ExamAttempts.AsNoTracking()
+            .FirstOrDefaultAsync(a => a.AttemptId == attemptId, ct);
+
+        if (attempt is null || attempt.SubmittedOn is null)
+            return Result<ExamAttemptReviewDto>.Failure("That paper has not been submitted.", ResultStatus.NotFound);
+
+        var isStudent = ownerEmail is not null;
+
+        if (isStudent)
+        {
+            var own = await _reports.ResolveOwnRegistrationIdAsync(ownerEmail!, ct);
+            if (!own.Succeeded)
+                return Result<ExamAttemptReviewDto>.Failure(own.Error!, own.Status);
+
+            // The id comes from the client, so a student can only ever open their own.
+            if (!string.Equals(attempt.StudentRegistrationId, own.Value, StringComparison.OrdinalIgnoreCase))
+                return Result<ExamAttemptReviewDto>.Failure("That paper belongs to someone else.", ResultStatus.Forbidden);
+        }
+
+        var items = await _db.ExamAttemptAnswers.AsNoTracking()
+            .Where(x => x.AttemptId == attemptId)
+            .OrderBy(x => x.QuestionNo)
+            .ToListAsync(ct);
+
+        if (items.Count == 0)
+            return Result<ExamAttemptReviewDto>.Failure(
+                "There is no saved copy of this paper — it was marked by hand, not sat online.",
+                ResultStatus.NotFound);
+
+        var paper = await _db.ExamPapers.AsNoTracking().FirstAsync(p => p.ExamId == attempt.ExamId, ct);
+
+        var studentName = await _db.Students.AsNoTracking()
+            .Where(s => s.RegistrationId == attempt.StudentRegistrationId)
+            .Select(s => s.Name)
+            .FirstOrDefaultAsync(ct);
+
+        return Result<ExamAttemptReviewDto>.Success(new ExamAttemptReviewDto(
+            attempt.AttemptId, attempt.ExamId, paper.Title, attempt.StudentRegistrationId, studentName,
+            attempt.Score ?? 0, attempt.TotalMarks ?? paper.TotalMarks,
+            attempt.CorrectCount ?? 0, attempt.QuestionCount ?? items.Count, attempt.SubmittedOn,
+            items.Select(x => new ExamAttemptReviewItemDto(
+                x.QuestionNo, x.QuestionText, x.OptionA, x.OptionB, x.OptionC, x.OptionD,
+                x.ChosenOption?.ToString(), x.IsCorrect, x.Marks,
+                isStudent ? null : x.CorrectOption.ToString())).ToList()));
+    }
+
+    /* =========================== offline theory: the uploaded answer script */
+
+    private const int MaxAnswerCopies = 10;
+    private const int MaxAnswerImageBytes = 3 * 1024 * 1024;
+    private const int MaxAnswerPdfBytes = 5 * 1024 * 1024;
+
+    public async Task<Result<IReadOnlyList<ExamAnswerCopyDto>>> GetAnswerCopiesAsync(
+        int examId, string registrationId, CancellationToken ct = default)
+    {
+        var reg = registrationId.Trim();
+
+        var copies = await _db.ExamAnswerCopies.AsNoTracking()
+            .Where(c => c.ExamId == examId && c.StudentRegistrationId == reg)
+            .OrderBy(c => c.Id)
+            .Select(c => new ExamAnswerCopyDto(c.Id, c.FileName, c.ContentType, c.SizeBytes, c.UploadedBy, c.UploadedOn))
+            .ToListAsync(ct);
+
+        return Result<IReadOnlyList<ExamAnswerCopyDto>>.Success(copies);
+    }
+
+    public async Task<Result<IReadOnlyList<ExamAnswerCopyDto>>> UploadAnswerCopiesAsync(
+        int examId, string registrationId, IReadOnlyList<AnswerCopyUpload> files,
+        string? actor, CancellationToken ct = default)
+    {
+        var reg = registrationId.Trim();
+
+        if (files.Count == 0)
+            return Result<IReadOnlyList<ExamAnswerCopyDto>>.Failure("Choose at least one photo or PDF to upload.");
+
+        var paper = await _db.ExamPapers.AsNoTracking().FirstOrDefaultAsync(p => p.ExamId == examId, ct);
+        if (paper is null)
+            return Result<IReadOnlyList<ExamAnswerCopyDto>>.Failure("That exam paper no longer exists.", ResultStatus.NotFound);
+
+        if (!string.Equals(paper.PaperType, "Theory", StringComparison.OrdinalIgnoreCase))
+            return Result<IReadOnlyList<ExamAnswerCopyDto>>.Failure("Answer copies are only kept for theory papers.");
+
+        var offlineHere = await _db.ExamSchedules.AsNoTracking()
+            .AnyAsync(s => s.ExamId == examId && s.StudentRegistrationId == reg && s.Mode == "Offline", ct);
+
+        if (!offlineHere)
+            return Result<IReadOnlyList<ExamAnswerCopyDto>>.Failure(
+                "This student's theory paper is not scheduled as offline, so there is no written copy to upload.");
+
+        var already = await _db.ExamAnswerCopies.CountAsync(c => c.ExamId == examId && c.StudentRegistrationId == reg, ct);
+        if (already + files.Count > MaxAnswerCopies)
+            return Result<IReadOnlyList<ExamAnswerCopyDto>>.Failure(
+                $"At most {MaxAnswerCopies} files can be kept per student per paper ({already} already uploaded).");
+
+        var now = DateTime.Now;
+        var added = new List<ExamAnswerCopy>();
+
+        foreach (var file in files)
+        {
+            using var buffer = new MemoryStream();
+            await file.Content.CopyToAsync(buffer, ct);
+            var bytes = buffer.ToArray();
+
+            if (bytes.Length == 0)
+                return Result<IReadOnlyList<ExamAnswerCopyDto>>.Failure($"'{file.FileName}' is empty.");
+
+            // The bytes decide the type, not the name or the browser's claim.
+            var type = SniffAnswerCopyType(bytes);
+            if (type is null)
+                return Result<IReadOnlyList<ExamAnswerCopyDto>>.Failure(
+                    $"'{file.FileName}' is not a JPEG/PNG photo or a PDF.");
+
+            var limit = type == "application/pdf" ? MaxAnswerPdfBytes : MaxAnswerImageBytes;
+            if (bytes.Length > limit)
+                return Result<IReadOnlyList<ExamAnswerCopyDto>>.Failure(
+                    $"'{file.FileName}' is {bytes.Length / 1024 / 1024.0:0.0} MB; the limit is {limit / 1024 / 1024} MB.");
+
+            added.Add(new ExamAnswerCopy
+            {
+                ExamId = examId,
+                StudentRegistrationId = reg,
+                FileName = Path.GetFileName(file.FileName),
+                ContentType = type,
+                Content = bytes,
+                SizeBytes = bytes.Length,
+                UploadedBy = actor,
+                UploadedOn = now
+            });
+        }
+
+        _db.ExamAnswerCopies.AddRange(added);
+        await _db.SaveChangesAsync(ct);
+
+        return await GetAnswerCopiesAsync(examId, reg, ct);
+    }
+
+    public async Task<Result<AnswerCopyFile>> GetAnswerCopyFileAsync(int copyId, CancellationToken ct = default)
+    {
+        var copy = await _db.ExamAnswerCopies.AsNoTracking()
+            .Where(c => c.Id == copyId)
+            .Select(c => new AnswerCopyFile(c.FileName, c.ContentType, c.Content))
+            .FirstOrDefaultAsync(ct);
+
+        return copy is null
+            ? Result<AnswerCopyFile>.Failure("That answer copy no longer exists.", ResultStatus.NotFound)
+            : Result<AnswerCopyFile>.Success(copy);
+    }
+
+    public async Task<Result<bool>> DeleteAnswerCopyAsync(int copyId, CancellationToken ct = default)
+    {
+        var copy = await _db.ExamAnswerCopies.FirstOrDefaultAsync(c => c.Id == copyId, ct);
+        if (copy is null)
+            return Result<bool>.Failure("That answer copy no longer exists.", ResultStatus.NotFound);
+
+        // Once a mark stands on it, the last copy is the evidence for that mark
+        // and stays; extra pages can still be removed.
+        var remaining = await _db.ExamAnswerCopies
+            .CountAsync(c => c.ExamId == copy.ExamId && c.StudentRegistrationId == copy.StudentRegistrationId, ct);
+
+        var marked = await _db.ExamAttempts.AnyAsync(a => a.ExamId == copy.ExamId
+            && a.StudentRegistrationId == copy.StudentRegistrationId && a.SubmittedOn != null, ct);
+
+        if (marked && remaining <= 1)
+            return Result<bool>.Failure(
+                "This is the only answer copy behind a mark already entered, so it cannot be removed. " +
+                "Upload the replacement first, then remove this one.");
+
+        _db.ExamAnswerCopies.Remove(copy);
+        await _db.SaveChangesAsync(ct);
+        return Result<bool>.Success(true);
+    }
+
+    private static string? SniffAnswerCopyType(byte[] b)
+    {
+        if (b.Length >= 4 && b[0] == 0x25 && b[1] == 0x50 && b[2] == 0x44 && b[3] == 0x46) return "application/pdf";
+        if (b.Length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return "image/jpeg";
+        if (b.Length >= 8 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) return "image/png";
+        return null;
+    }
+
     /* ============================================ admin: practical marks */
 
     /// <summary>
@@ -963,8 +1171,16 @@ public class ExamService : IExamService
         var marks = await _db.ExamAttempts
             .AsNoTracking()
             .Where(a => a.ExamId == examId)
-            .Select(a => new { a.StudentRegistrationId, a.Score, a.SubmittedOn, a.EnteredBy })
+            .Select(a => new { a.AttemptId, a.StudentRegistrationId, a.Score, a.SubmittedOn, a.EnteredBy, a.Source })
             .ToListAsync(ct);
+
+        var copyCounts = isTheory
+            ? await _db.ExamAnswerCopies.AsNoTracking()
+                .Where(c => c.ExamId == examId)
+                .GroupBy(c => c.StudentRegistrationId)
+                .Select(g => new { RegistrationId = g.Key, Count = g.Count() })
+                .ToDictionaryAsync(x => x.RegistrationId, x => x.Count, StringComparer.OrdinalIgnoreCase, ct)
+            : new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         var scheduledHere = await _db.ExamSchedules.AsNoTracking()
             .Where(s => s.ExamId == examId)
@@ -974,13 +1190,15 @@ public class ExamService : IExamService
         // On a theory paper the hand sheet is only the students sitting it
         // offline — the online ones are marked by the portal — plus anyone
         // already marked, so a correction survives after the course completes.
+        var scheduledOffline = scheduledHere
+            .Where(s => string.Equals(s.Mode, "Offline", StringComparison.OrdinalIgnoreCase))
+            .Select(s => s.StudentRegistrationId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         HashSet<string>? offlineOnly = null;
         if (isTheory)
         {
-            offlineOnly = scheduledHere
-                .Where(s => string.Equals(s.Mode, "Offline", StringComparison.OrdinalIgnoreCase))
-                .Select(s => s.StudentRegistrationId)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            offlineOnly = new HashSet<string>(scheduledOffline, StringComparer.OrdinalIgnoreCase);
             foreach (var m in marks) offlineOnly.Add(m.StudentRegistrationId);
         }
 
@@ -1000,7 +1218,10 @@ public class ExamService : IExamService
 
                 return new PracticalRosterRowDto(
                     s.RegistrationId!, s.Name, mark?.Score, paper.TotalMarks,
-                    mark?.SubmittedOn, mark?.EnteredBy);
+                    mark?.SubmittedOn, mark?.EnteredBy,
+                    mark?.AttemptId, mark?.Source,
+                    isTheory && scheduledOffline.Contains(s.RegistrationId!),
+                    copyCounts.TryGetValue(s.RegistrationId!, out var copies) ? copies : 0);
             }).ToList();
 
         return Result<IReadOnlyList<PracticalRosterRowDto>>.Success(rows);
@@ -1057,6 +1278,16 @@ public class ExamService : IExamService
                 return Result<bool>.Failure(
                     $"{student.Name}'s theory paper is not scheduled as offline. " +
                     "Schedule it offline first, or let the online sitting mark it.");
+
+            // The written script is the evidence behind an offline theory mark,
+            // so the mark cannot be entered until a copy of it is on file.
+            var hasCopy = await _db.ExamAnswerCopies.AsNoTracking()
+                .AnyAsync(c => c.ExamId == paper.ExamId && c.StudentRegistrationId == regId, ct);
+
+            if (!hasCopy)
+                return Result<bool>.Failure(
+                    $"Upload {student.Name}'s theory answer copy first — a mark cannot be " +
+                    "entered for an offline theory paper without it.");
         }
 
         var now = DateTime.Now;

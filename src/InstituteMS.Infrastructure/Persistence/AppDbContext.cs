@@ -31,6 +31,8 @@ public class AppDbContext : DbContext
     public DbSet<ExamPaper> ExamPapers => Set<ExamPaper>();
     public DbSet<ExamQuestion> ExamQuestions => Set<ExamQuestion>();
     public DbSet<ExamAttempt> ExamAttempts => Set<ExamAttempt>();
+    public DbSet<ExamAttemptAnswer> ExamAttemptAnswers => Set<ExamAttemptAnswer>();
+    public DbSet<ExamAnswerCopy> ExamAnswerCopies => Set<ExamAnswerCopy>();
     public DbSet<ExamSchedule> ExamSchedules => Set<ExamSchedule>();
     public DbSet<CertificateIssue> CertificateIssues => Set<CertificateIssue>();
     public DbSet<Receptionist> Receptionists => Set<Receptionist>();

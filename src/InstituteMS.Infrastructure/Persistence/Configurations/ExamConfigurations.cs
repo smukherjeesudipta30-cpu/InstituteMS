@@ -129,3 +129,39 @@ public class ExamScheduleConfiguration : IEntityTypeConfiguration<ExamSchedule>
             .OnDelete(DeleteBehavior.Cascade);
     }
 }
+
+public class ExamAttemptAnswerConfiguration : IEntityTypeConfiguration<ExamAttemptAnswer>
+{
+    public void Configure(EntityTypeBuilder<ExamAttemptAnswer> b)
+    {
+        b.ToTable("ExamAttemptAnswer");
+        b.HasKey(x => x.Id);
+
+        b.Property(x => x.QuestionText).IsRequired();
+        b.Property(x => x.OptionA).IsRequired();
+        b.Property(x => x.OptionB).IsRequired();
+        b.Property(x => x.OptionC).IsRequired();
+        b.Property(x => x.OptionD).IsRequired();
+        b.Property(x => x.CorrectOption).HasColumnType("char(1)");
+        b.Property(x => x.ChosenOption).HasColumnType("char(1)");
+
+        b.HasIndex(x => x.AttemptId);
+    }
+}
+
+public class ExamAnswerCopyConfiguration : IEntityTypeConfiguration<ExamAnswerCopy>
+{
+    public void Configure(EntityTypeBuilder<ExamAnswerCopy> b)
+    {
+        b.ToTable("ExamAnswerCopy");
+        b.HasKey(x => x.Id);
+
+        b.Property(x => x.StudentRegistrationId).HasColumnName("StuRegId").HasMaxLength(50).IsRequired();
+        b.Property(x => x.FileName).HasMaxLength(200).IsRequired();
+        b.Property(x => x.ContentType).HasMaxLength(100).IsRequired();
+        b.Property(x => x.Content).IsRequired();
+        b.Property(x => x.UploadedBy).HasMaxLength(250);
+
+        b.HasIndex(x => new { x.ExamId, x.StudentRegistrationId });
+    }
+}

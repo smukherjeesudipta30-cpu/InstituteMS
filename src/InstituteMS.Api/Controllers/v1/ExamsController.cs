@@ -144,6 +144,70 @@ public class ExamsController : ApiControllerBase
         => Envelope(await _exams.SavePracticalMarkAsync(request, CurrentUserName, ct), "Mark saved.");
 
     /// <summary>
+    /// A student's submitted online paper, question by question, read-only —
+    /// their answer, whether it was right, and the correct option.
+    /// </summary>
+    [HttpGet("attempts/{attemptId:int}/review")]
+    [ProducesResponseType(typeof(ApiResponse<ExamAttemptReviewDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> AttemptReview(int attemptId, CancellationToken ct)
+        => Envelope(await _exams.GetAttemptReviewAsync(attemptId, ownerEmail: null, ct));
+
+    /// <summary>The uploaded answer script for one student's offline theory paper.</summary>
+    [HttpGet("{examId:int}/answer-copies")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ExamAnswerCopyDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> AnswerCopies(int examId, [FromQuery] string registrationId, CancellationToken ct)
+        => Envelope(await _exams.GetAnswerCopiesAsync(examId, registrationId, ct));
+
+    /// <summary>
+    /// Uploads a student's offline theory answer script — JPEG/PNG photos (one
+    /// per page) or a PDF scan. Required before that paper's mark can be entered.
+    /// </summary>
+    [HttpPost("{examId:int}/answer-copies")]
+    [RequestSizeLimit(40 * 1024 * 1024)]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ExamAnswerCopyDto>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ExamAnswerCopyDto>>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UploadAnswerCopies(
+        int examId, [FromQuery] string registrationId, [FromForm] List<IFormFile> files, CancellationToken ct)
+    {
+        var streams = new List<Stream>();
+        try
+        {
+            var uploads = files.Select(f =>
+            {
+                var s = f.OpenReadStream();
+                streams.Add(s);
+                return new AnswerCopyUpload(f.FileName, f.ContentType, f.Length, s);
+            }).ToList();
+
+            return Envelope(
+                await _exams.UploadAnswerCopiesAsync(examId, registrationId, uploads, CurrentUserName, ct),
+                "Answer copy uploaded.");
+        }
+        finally
+        {
+            foreach (var s in streams) await s.DisposeAsync();
+        }
+    }
+
+    /// <summary>One answer copy's file, to view or download.</summary>
+    [HttpGet("answer-copies/{copyId:int}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> AnswerCopyFile(int copyId, CancellationToken ct)
+    {
+        var result = await _exams.GetAnswerCopyFileAsync(copyId, ct);
+        return result.Succeeded
+            ? File(result.Value!.Content, result.Value.ContentType, result.Value.FileName)
+            : Envelope(result);
+    }
+
+    [HttpDelete("answer-copies/{copyId:int}")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> DeleteAnswerCopy(int copyId, CancellationToken ct)
+        => Envelope(await _exams.DeleteAnswerCopyAsync(copyId, ct), "Answer copy removed.");
+
+    /// <summary>
     /// The paper's scheduling sheet: every student on its course, with the date and
     /// time they sit it and the six-digit code that opens it.
     /// </summary>
@@ -309,6 +373,17 @@ public class MyExamsController : ApiControllerBase
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ExamResultDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Results(CancellationToken ct)
         => Envelope(await _exams.GetMyResultsAsync(CurrentUserName ?? string.Empty, ct));
+
+    /// <summary>
+    /// The student's own submitted paper, read-only: each question, their answer
+    /// and whether it was right. The correct options are not included — the
+    /// same paper is sat by other students.
+    /// </summary>
+    [HttpGet("results/{attemptId:int}/review")]
+    [ProducesResponseType(typeof(ApiResponse<ExamAttemptReviewDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> Review(int attemptId, CancellationToken ct)
+        => Envelope(await _exams.GetAttemptReviewAsync(attemptId, CurrentUserName ?? string.Empty, ct));
 
     /// <summary>
     /// The student's standing course by course: each term read as one theory plus

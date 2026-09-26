@@ -14,7 +14,7 @@ public record GeneratedQuestion(
 /// Generates a fresh set of multiple-choice questions for a course, on demand,
 /// each time a sitting is scheduled — no reusable bank, so retakes never repeat
 /// the same paper. Implemented against an AI provider; see
-/// <c>InstituteMS.Infrastructure.Services.AnthropicExamQuestionGenerator</c>.
+/// <c>InstituteMS.Infrastructure.Services.AiExamQuestionGenerator</c>.
 /// </summary>
 public interface IExamQuestionGenerator
 {
