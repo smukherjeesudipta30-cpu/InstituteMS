@@ -1,6 +1,7 @@
 using System.Globalization;
 using InstituteMS.Application.Chat;
 using InstituteMS.Application.Common;
+using InstituteMS.Application.Holidays;
 using InstituteMS.Application.Masters;
 using InstituteMS.Domain.Entities;
 using InstituteMS.Infrastructure.Persistence;
@@ -22,11 +23,13 @@ public class ReceptionistService : IReceptionistService
 {
     private readonly AppDbContext _db;
     private readonly IChatService _chat;
+    private readonly IHolidayService _holidays;
 
-    public ReceptionistService(AppDbContext db, IChatService chat)
+    public ReceptionistService(AppDbContext db, IChatService chat, IHolidayService holidays)
     {
         _db = db;
         _chat = chat;
+        _holidays = holidays;
     }
 
     /// <summary>Any date inside a month, reduced to the first of it.</summary>
@@ -1045,6 +1048,13 @@ public class ReceptionistService : IReceptionistService
     private async Task<HashSet<DateOnly>> InstituteClosedDaysAsync(DateOnly from, DateOnly to, CancellationToken ct)
     {
         if (to < from) return [];
+
+        // A year's holiday list is saved the first time it is opened. Pay for a
+        // year nobody has opened on the Holidays page yet must still see its
+        // closed days, so open each year covered here first — a no-op for a year
+        // already loaded, and never an overwrite of Admin's edits.
+        for (var year = from.Year; year <= to.Year; year++)
+            await _holidays.GetYearAsync(year, ct);
 
         var days = await _db.Holidays.AsNoTracking()
             .Where(h => h.IsInstituteHoliday && h.HolidayDate >= from && h.HolidayDate <= to)
