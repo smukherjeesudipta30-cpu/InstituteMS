@@ -412,6 +412,25 @@ public record TeacherEarningsReportDto(
     DateTime GeneratedOn);
 
 /// <summary>
+/// Several teachers' accounts for one date range: each teacher's own
+/// <see cref="TeacherEarningsReportDto"/> (so the figures match their Earnings
+/// screen exactly), and the totals across all of them.
+/// </summary>
+public record TeachersEarningsReportDto(
+    DateOnly From,
+    DateOnly To,
+    IReadOnlyList<TeacherEarningsReportDto> Teachers,
+    decimal TotalEarned,
+    decimal TotalDeduction,
+    decimal NetEarned,
+    decimal TotalPaid,
+    decimal Pending,
+    DateTime GeneratedOn);
+
+/// <summary>A generated report file, e.g. a PDF, ready to send as a download.</summary>
+public record ReportFileDto(byte[] Content, string ContentType, string FileName);
+
+/// <summary>
 /// One calendar month's missed-scan-out penalty, with the reason spelled out so it
 /// reads the same to the teacher looking at their own account as it does to the
 /// office. The owner's rule: below 3 missed scan-outs in a month, nothing is
@@ -658,6 +677,21 @@ public interface IReportService
 
     Task<Result<TeacherEarningsReportDto>> GetTeacherEarningsAsync(
         int teacherId, DateOnly from, DateOnly to, CancellationToken ct = default);
+
+    /// <summary>
+    /// Several teachers' accounts for one range, side by side — each exactly as
+    /// <see cref="GetTeacherEarningsAsync"/> computes it, plus the grand totals.
+    /// </summary>
+    Task<Result<TeachersEarningsReportDto>> GetTeachersEarningsAsync(
+        IReadOnlyList<int> teacherIds, DateOnly from, DateOnly to, CancellationToken ct = default);
+
+    /// <summary>The same report as a PDF: a summary table, then each teacher's earnings and payments.</summary>
+    Task<Result<ReportFileDto>> GetTeachersEarningsPdfAsync(
+        IReadOnlyList<int> teacherIds, DateOnly from, DateOnly to, CancellationToken ct = default);
+
+    /// <summary>The same report as an Excel workbook: a Summary sheet and an Earnings sheet.</summary>
+    Task<Result<ReportFileDto>> GetTeachersEarningsExcelAsync(
+        IReadOnlyList<int> teacherIds, DateOnly from, DateOnly to, CancellationToken ct = default);
 
     /// <summary>Whether the missed-scan-out deduction is currently switched on.</summary>
     Task<PayrollSettingsDto> GetPayrollSettingsAsync(CancellationToken ct = default);

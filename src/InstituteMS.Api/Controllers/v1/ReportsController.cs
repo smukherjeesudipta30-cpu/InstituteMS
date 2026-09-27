@@ -163,6 +163,54 @@ public class ReportsController : ApiControllerBase
     }
 
     /// <summary>
+    /// Several teachers' accounts for one range — earned, deduction, paid and
+    /// balance for each, with every earning line — plus the totals.
+    /// </summary>
+    /// <remarks>
+    /// Admin and the front desk only: unlike <see cref="TeacherEarnings"/>, a
+    /// Teacher has no own-record version of this, since it lists colleagues.
+    /// </remarks>
+    [HttpGet("teachers-earnings")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist}")]
+    [ProducesResponseType(typeof(ApiResponse<TeachersEarningsReportDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<TeachersEarningsReportDto>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> TeachersEarnings(
+        [FromQuery] int[] teacherIds, [FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken ct)
+        => Envelope(await _reports.GetTeachersEarningsAsync(teacherIds, from, to, ct));
+
+    /// <summary>The same report as a downloadable PDF.</summary>
+    [HttpGet("teachers-earnings/pdf")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> TeachersEarningsPdf(
+        [FromQuery] int[] teacherIds, [FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken ct)
+    {
+        var result = await _reports.GetTeachersEarningsPdfAsync(teacherIds, from, to, ct);
+
+        if (!result.Succeeded || result.Value is null)
+            return Envelope(Result<bool>.Failure(result.Error!, result.Status));
+
+        return File(result.Value.Content, result.Value.ContentType, result.Value.FileName);
+    }
+
+    /// <summary>The same report as an Excel workbook.</summary>
+    [HttpGet("teachers-earnings/excel")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> TeachersEarningsExcel(
+        [FromQuery] int[] teacherIds, [FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken ct)
+    {
+        var result = await _reports.GetTeachersEarningsExcelAsync(teacherIds, from, to, ct);
+
+        if (!result.Succeeded || result.Value is null)
+            return Envelope(Result<bool>.Failure(result.Error!, result.Status));
+
+        return File(result.Value.Content, result.Value.ContentType, result.Value.FileName);
+    }
+
+    /// <summary>
     /// One teacher's honorarium pay slip for a single calendar month, built from
     /// whatever was actually recorded paid that month.
     /// </summary>

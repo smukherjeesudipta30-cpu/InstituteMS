@@ -5,6 +5,7 @@ using InstituteMS.Application.ExamFees;
 using InstituteMS.Application.Fees;
 using InstituteMS.Application.Reports;
 using InstituteMS.Domain.Entities;
+using InstituteMS.Infrastructure.Documents;
 using InstituteMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -1042,6 +1043,70 @@ public class ReportService : IReportService
             teacher.Id, teacher.Name, teacher.Phone, from, to,
             totalEarned, totalDeduction, netEarned, totalPaid, netEarned - totalPaid,
             earningRows, paymentRows, deductions, DateTime.Now));
+    }
+
+    public async Task<Result<TeachersEarningsReportDto>> GetTeachersEarningsAsync(
+        IReadOnlyList<int> teacherIds, DateOnly from, DateOnly to, CancellationToken ct = default)
+    {
+        var ids = (teacherIds ?? []).Where(id => id > 0).Distinct().ToList();
+
+        if (ids.Count == 0)
+            return Result<TeachersEarningsReportDto>.Failure("Select at least one teacher.");
+
+        if (to < from)
+            return Result<TeachersEarningsReportDto>.Failure("The 'to' date cannot be before the 'from' date.");
+
+        /* Each teacher through the single-teacher report itself, not a second copy
+           of its arithmetic: fee share, referral credits, the missed-scan-out
+           deduction and payments are then always the same figures the teacher's
+           own Earnings screen shows. One at a time - they share the DbContext. */
+        var teachers = new List<TeacherEarningsReportDto>();
+        foreach (var id in ids)
+        {
+            var one = await GetTeacherEarningsAsync(id, from, to, ct);
+            if (one.Succeeded) teachers.Add(one.Value!);
+        }
+
+        if (teachers.Count == 0)
+            return Result<TeachersEarningsReportDto>.Failure("None of the selected teachers exist any more.", ResultStatus.NotFound);
+
+        teachers = teachers.OrderBy(t => t.TeacherName, StringComparer.OrdinalIgnoreCase).ToList();
+
+        return Result<TeachersEarningsReportDto>.Success(new TeachersEarningsReportDto(
+            from, to, teachers,
+            teachers.Sum(t => t.TotalEarned),
+            teachers.Sum(t => t.TotalDeduction),
+            teachers.Sum(t => t.NetEarned),
+            teachers.Sum(t => t.TotalPaid),
+            teachers.Sum(t => t.Pending),
+            DateTime.Now));
+    }
+
+    public async Task<Result<ReportFileDto>> GetTeachersEarningsPdfAsync(
+        IReadOnlyList<int> teacherIds, DateOnly from, DateOnly to, CancellationToken ct = default)
+    {
+        var report = await GetTeachersEarningsAsync(teacherIds, from, to, ct);
+        if (!report.Succeeded)
+            return Result<ReportFileDto>.Failure(report.Error!, report.Status);
+
+        var pdf = TeachersEarningsPdf.Build(report.Value!);
+        var fileName = $"Teacher_Earnings_{from:yyyy-MM-dd}_to_{to:yyyy-MM-dd}.pdf";
+
+        return Result<ReportFileDto>.Success(new ReportFileDto(pdf, "application/pdf", fileName));
+    }
+
+    public async Task<Result<ReportFileDto>> GetTeachersEarningsExcelAsync(
+        IReadOnlyList<int> teacherIds, DateOnly from, DateOnly to, CancellationToken ct = default)
+    {
+        var report = await GetTeachersEarningsAsync(teacherIds, from, to, ct);
+        if (!report.Succeeded)
+            return Result<ReportFileDto>.Failure(report.Error!, report.Status);
+
+        var xlsx = TeachersEarningsExcel.Build(report.Value!);
+        var fileName = $"Teacher_Earnings_{from:yyyy-MM-dd}_to_{to:yyyy-MM-dd}.xlsx";
+
+        return Result<ReportFileDto>.Success(new ReportFileDto(
+            xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName));
     }
 
     public async Task<PayrollSettingsDto> GetPayrollSettingsAsync(CancellationToken ct = default)
