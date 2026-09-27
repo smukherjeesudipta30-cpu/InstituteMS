@@ -153,6 +153,19 @@ public class ChatController : ApiControllerBase
         int conversationId, [FromBody] SendMessageRequest request, CancellationToken ct)
         => Envelope(await _chat.SendMessageAsync(CurrentUserName ?? string.Empty, conversationId, request, ct));
 
+    /// <summary>
+    /// Deletes selected messages — for everyone (the caller's own messages only)
+    /// or just from the caller's own view.
+    /// </summary>
+    [HttpPost("conversations/{conversationId:int}/messages/delete")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponse<ChatMessagesDeletedDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<ChatMessagesDeletedDto>), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ApiResponse<ChatMessagesDeletedDto>), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteMessages(
+        int conversationId, [FromBody] DeleteChatMessagesRequest request, CancellationToken ct)
+        => Envelope(await _chat.DeleteMessagesAsync(CurrentUserName ?? string.Empty, conversationId, request, ct));
+
     /// <summary>An attachment in a conversation the caller may access — same rule as reading messages there.</summary>
     [HttpGet("conversations/{conversationId:int}/messages/{messageId:int}/attachment")]
     [Authorize]

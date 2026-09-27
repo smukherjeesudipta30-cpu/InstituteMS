@@ -13,6 +13,7 @@ public class ProprietorHonorariumConfiguration : IEntityTypeConfiguration<Propri
         b.Property(x => x.MonthlyAmount).HasPrecision(12, 2);
         b.Property(x => x.Note).HasMaxLength(500);
         b.Property(x => x.CreatedBy).HasMaxLength(250);
-        b.HasIndex(x => x.EffectiveFrom).IsUnique();
+        b.Property(x => x.Branch).HasMaxLength(100);
+        b.HasIndex(x => new { x.Branch, x.EffectiveFrom }).IsUnique();
     }
 }

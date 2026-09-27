@@ -110,7 +110,28 @@ public class ChatMessage
     public string? AttachmentContent { get; set; }
     public long? AttachmentSize { get; set; }
 
+    /// <summary>
+    /// Set when the sender deleted it for everyone. The row stays, so the thread
+    /// can still show "This message was deleted" in its place, but its body and
+    /// attachment are wiped at the same moment: a deleted message must not be
+    /// recoverable by anyone reading the table later.
+    /// </summary>
+    public DateTime? DeletedOn { get; set; }
+    public string? DeletedBy { get; set; }
+
     public ChatConversation? Conversation { get; set; }
+}
+
+/// <summary>
+/// "Delete for me": one person has hidden one message from their own view of
+/// the thread. Everyone else still sees it, so nothing on the message itself
+/// changes; it is filtered out only when this person reads the conversation.
+/// </summary>
+public class ChatMessageHidden
+{
+    public int MessageId { get; set; }
+    public string UserEmail { get; set; } = string.Empty;
+    public DateTime HiddenOn { get; set; }
 }
 
 /// <summary>

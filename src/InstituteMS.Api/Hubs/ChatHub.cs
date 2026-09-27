@@ -148,17 +148,36 @@ public class ChatHub : Hub
     }
 
     /// <summary>
-    /// Relays "X is typing" to the one person on the other end of a direct chat.
-    /// Ephemeral and unstored — the client shows it for a moment and lets it
-    /// lapse, so nothing needs a matching "stopped typing" to be reliable.
+    /// Starts or stops "X is typing" for everyone else in one conversation —
+    /// direct, group or guest thread alike. Refused silently unless the caller
+    /// may access that conversation, so it cannot be used to probe or spam a
+    /// thread they are not in. Still ephemeral: clients also let a start lapse
+    /// on their own, so a lost "stop" (a closed tab) never leaves it stuck.
     /// </summary>
     [Authorize]
-    public async Task Typing(string targetEmail, int conversationId)
+    public async Task SetTyping(int conversationId, bool isTyping)
     {
         var email = Context.User?.FindFirstValue(ClaimTypes.Email);
-        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(targetEmail)) return;
+        if (string.IsNullOrWhiteSpace(email)) return;
 
-        await Clients.Group(PersonalGroup(targetEmail)).SendAsync("Typing", email, conversationId);
+        var name = await _chat.GetTypingNameAsync(email, conversationId);
+        if (name is null) return;
+
+        await Clients.OthersInGroup(ConversationGroup(conversationId))
+            .SendAsync("TypingChanged", conversationId, email, name, isTyping);
+    }
+
+    /// <summary>The guest widget's <see cref="SetTyping"/> — proved by its guest token instead of a sign-in.</summary>
+    [AllowAnonymous]
+    public async Task SetGuestTyping(int conversationId, string guestToken, bool isTyping)
+    {
+        if (string.IsNullOrWhiteSpace(guestToken)) return;
+
+        var name = await _chat.GetGuestTypingNameAsync(conversationId, guestToken);
+        if (name is null) return;
+
+        await Clients.OthersInGroup(ConversationGroup(conversationId))
+            .SendAsync("TypingChanged", conversationId, (string?)null, name, isTyping);
     }
 
     /// <summary>

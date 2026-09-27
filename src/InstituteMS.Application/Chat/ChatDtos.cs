@@ -54,7 +54,32 @@ public record ChatMessageDto(
     /// display (a count, or a list) than a single tick, which is a fuller
     /// feature than a read receipt needs to be right now.
     /// </summary>
-    bool IsSeen = false);
+    bool IsSeen = false,
+    /// <summary>The sender deleted it for everyone — Body and the attachment fields come back empty.</summary>
+    bool IsDeleted = false);
+
+/// <summary>
+/// Deletes one or more messages in one conversation. <see cref="ForEveryone"/>
+/// is allowed only when every one of them is the caller's own; otherwise they
+/// are hidden from the caller's own view only.
+/// </summary>
+public record DeleteChatMessagesRequest
+{
+    public IReadOnlyList<int> MessageIds { get; init; } = [];
+    public bool ForEveryone { get; init; }
+}
+
+public class DeleteChatMessagesRequestValidator : AbstractValidator<DeleteChatMessagesRequest>
+{
+    public DeleteChatMessagesRequestValidator()
+    {
+        RuleFor(x => x.MessageIds)
+            .Must(m => m.Count > 0).WithMessage("Select at least one message.")
+            .Must(m => m.Count <= 100).WithMessage("Delete at most 100 messages at a time.");
+    }
+}
+
+public record ChatMessagesDeletedDto(int ConversationId, IReadOnlyList<int> MessageIds, bool ForEveryone);
 
 /// <summary>
 /// A file attached to an outgoing message. <see cref="Base64"/> may carry a
@@ -256,6 +281,23 @@ public interface IChatService
     Task<Result<bool>> MarkReadAsync(
         string email, int conversationId, CancellationToken ct = default);
 
+    /// <summary>
+    /// Delete for everyone (the caller's own messages only) or delete for me
+    /// (any message the caller can see). Pushed live either way — to the whole
+    /// conversation for everyone, to the caller's own other tabs for "me".
+    /// </summary>
+    Task<Result<ChatMessagesDeletedDto>> DeleteMessagesAsync(
+        string email, int conversationId, DeleteChatMessagesRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// The display name to show in "X is typing", or null when the caller may
+    /// not access the conversation — the hub relays nothing then.
+    /// </summary>
+    Task<string?> GetTypingNameAsync(string email, int conversationId, CancellationToken ct = default);
+
+    /// <summary>The guest widget's equivalent of <see cref="GetTypingNameAsync"/>, proved by its token.</summary>
+    Task<string?> GetGuestTypingNameAsync(int conversationId, string guestToken, CancellationToken ct = default);
+
     /// <summary>An attachment in a conversation the caller may access — same rule as reading messages there.</summary>
     Task<Result<ChatAttachmentDto>> GetAttachmentAsync(
         string email, int conversationId, int messageId, CancellationToken ct = default);
@@ -397,4 +439,10 @@ public interface IChatNotifier
     /// without the sender needing to reopen it.
     /// </summary>
     Task MessagesReadAsync(int conversationId, string readerEmail, int lastReadMessageId, CancellationToken ct = default);
+
+    /// <summary>Messages were deleted for everyone — every open copy of the thread swaps them for a placeholder.</summary>
+    Task MessagesDeletedAsync(int conversationId, IReadOnlyList<int> messageIds, CancellationToken ct = default);
+
+    /// <summary>One person hid messages for themselves — only their own other tabs/devices need to drop them.</summary>
+    Task MessagesHiddenAsync(string email, int conversationId, IReadOnlyList<int> messageIds, CancellationToken ct = default);
 }

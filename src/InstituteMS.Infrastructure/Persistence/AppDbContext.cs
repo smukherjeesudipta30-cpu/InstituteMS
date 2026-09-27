@@ -75,6 +75,7 @@ public class AppDbContext : DbContext
     public DbSet<ChatConversation> ChatConversations => Set<ChatConversation>();
     public DbSet<ChatParticipant> ChatParticipants => Set<ChatParticipant>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<ChatMessageHidden> ChatMessagesHidden => Set<ChatMessageHidden>();
     public DbSet<ChatPushSubscription> ChatPushSubscriptions => Set<ChatPushSubscription>();
     public DbSet<ChatFcmSubscription> ChatFcmSubscriptions => Set<ChatFcmSubscription>();
 

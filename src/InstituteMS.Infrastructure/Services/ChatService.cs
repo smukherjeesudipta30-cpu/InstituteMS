@@ -127,6 +127,12 @@ public class ChatService : IChatService
     {
         var isMine = viewerIsGuestOnThisConversation ? m.SenderEmail is null : m.SenderEmail == viewerEmail;
 
+        if (m.DeletedOn is not null)
+        {
+            return new(m.Id, m.ConversationId, m.SenderEmail, m.SenderDisplayName, m.SenderRole, string.Empty, m.SentOn,
+                isMine, IsDeleted: true);
+        }
+
         return new(m.Id, m.ConversationId, m.SenderEmail, m.SenderDisplayName, m.SenderRole, m.Body, m.SentOn,
             isMine, m.AttachmentFileName, m.AttachmentContentType, m.AttachmentSize,
             IsSeen: isMine && otherLastRead is not null && otherLastRead >= m.Id);
@@ -400,8 +406,12 @@ public class ChatService : IChatService
             .Select(p => new ChatParticipantDto(p.UserEmail, p.DisplayName, p.Role, p.Contact))
             .ToListAsync(ct);
 
+        // The newest message this viewer can still see — one they hid for
+        // themselves must not keep showing as the preview.
         var last = await _db.ChatMessages.AsNoTracking()
-            .Where(m => m.ConversationId == c.Id)
+            .Where(m => m.ConversationId == c.Id
+                        && (viewerEmail == null
+                            || !_db.ChatMessagesHidden.Any(h => h.MessageId == m.Id && h.UserEmail == viewerEmail)))
             .OrderByDescending(m => m.Id)
             .FirstOrDefaultAsync(ct);
 
@@ -415,6 +425,7 @@ public class ChatService : IChatService
             unread = await _db.ChatMessages.AsNoTracking()
                 .Where(m => m.ConversationId == c.Id
                             && m.SenderEmail == null
+                            && m.DeletedOn == null
                             && (c.StaffLastReadMessageId == null || m.Id > c.StaffLastReadMessageId))
                 .CountAsync(ct);
         }
@@ -432,12 +443,15 @@ public class ChatService : IChatService
                 : await _db.ChatMessages.AsNoTracking()
                     .Where(m => m.ConversationId == c.Id
                                 && m.SenderEmail != viewerEmail
-                                && (myLastRead == null || m.Id > myLastRead))
+                                && m.DeletedOn == null
+                                && (myLastRead == null || m.Id > myLastRead)
+                                && !_db.ChatMessagesHidden.Any(h => h.MessageId == m.Id && h.UserEmail == viewerEmail))
                     .CountAsync(ct);
         }
 
         var preview = last is null
             ? null
+            : last.DeletedOn is not null ? DeletedPlaceholder
             : last.Body.Length > 120 ? last.Body[..120] + "…" : last.Body;
 
         return new ChatConversationSummaryDto(
@@ -698,7 +712,8 @@ public class ChatService : IChatService
         }
 
         var messages = await _db.ChatMessages.AsNoTracking()
-            .Where(m => m.ConversationId == conversationId)
+            .Where(m => m.ConversationId == conversationId
+                        && !_db.ChatMessagesHidden.Any(h => h.MessageId == m.Id && h.UserEmail == me.Email))
             .OrderBy(m => m.Id)
             .ToListAsync(ct);
 
@@ -920,6 +935,113 @@ public class ChatService : IChatService
         }
 
         return Result<bool>.Success(true);
+    }
+
+    /* ----------------------------------------------------------- deletion */
+
+    private const string DeletedPlaceholder = "This message was deleted";
+
+    public async Task<Result<ChatMessagesDeletedDto>> DeleteMessagesAsync(
+        string email, int conversationId, DeleteChatMessagesRequest request, CancellationToken ct = default)
+    {
+        var me = await ResolveIdentityAsync(email, ct);
+        if (me is null)
+            return Result<ChatMessagesDeletedDto>.Failure("No account found.", ResultStatus.Unauthorized);
+
+        if (!await CanAccessAsync(me, conversationId, ct))
+        {
+            return Result<ChatMessagesDeletedDto>.Failure(
+                "That conversation is not available to you.", ResultStatus.Forbidden);
+        }
+
+        var ids = request.MessageIds.Distinct().ToList();
+
+        // Every id must belong to THIS conversation — the route's conversation is
+        // what the access check above covered, so a message from anywhere else
+        // is refused outright rather than silently skipped.
+        var messages = await _db.ChatMessages
+            .Where(m => m.ConversationId == conversationId && ids.Contains(m.Id))
+            .ToListAsync(ct);
+
+        if (messages.Count != ids.Count)
+        {
+            return Result<ChatMessagesDeletedDto>.Failure(
+                "One or more of those messages could not be found.", ResultStatus.NotFound);
+        }
+
+        if (request.ForEveryone)
+        {
+            // Only the sender may take a message back from everyone else — not a
+            // group member, and not staff moderating someone else's words.
+            if (messages.Any(m => m.SenderEmail != me.Email))
+            {
+                return Result<ChatMessagesDeletedDto>.Failure(
+                    "You can only delete your own messages for everyone.", ResultStatus.Forbidden);
+            }
+
+            var now = DateTime.Now;
+            foreach (var m in messages.Where(m => m.DeletedOn is null))
+            {
+                m.DeletedOn = now;
+                m.DeletedBy = me.Email;
+                m.Body = string.Empty;
+                m.AttachmentFileName = null;
+                m.AttachmentContentType = null;
+                m.AttachmentContent = null;
+                m.AttachmentSize = null;
+            }
+
+            await _db.SaveChangesAsync(ct);
+            await _notifier.MessagesDeletedAsync(conversationId, ids, ct);
+
+            // Conversation previews may now read "This message was deleted".
+            var participantEmails = await _db.ChatParticipants.AsNoTracking()
+                .Where(p => p.ConversationId == conversationId && p.UserEmail != null)
+                .Select(p => p.UserEmail!)
+                .ToListAsync(ct);
+
+            await _notifier.ConversationsChangedAsync(participantEmails, ct);
+
+            var isGuestThread = await _db.ChatConversations.AsNoTracking()
+                .AnyAsync(c => c.Id == conversationId && c.Type == ChatConversationType.Guest, ct);
+            if (isGuestThread) await _notifier.GuestInboxChangedAsync(ct);
+        }
+        else
+        {
+            var alreadyHidden = await _db.ChatMessagesHidden.AsNoTracking()
+                .Where(h => h.UserEmail == me.Email && ids.Contains(h.MessageId))
+                .Select(h => h.MessageId)
+                .ToListAsync(ct);
+
+            var now = DateTime.Now;
+            foreach (var id in ids.Except(alreadyHidden))
+                _db.ChatMessagesHidden.Add(new ChatMessageHidden { MessageId = id, UserEmail = me.Email, HiddenOn = now });
+
+            await _db.SaveChangesAsync(ct);
+
+            // The caller's own other tabs and devices drop them too; nobody else
+            // is told anything, since nothing changed for them.
+            await _notifier.MessagesHiddenAsync(me.Email, conversationId, ids, ct);
+            await _notifier.ConversationsChangedAsync([me.Email], ct);
+        }
+
+        return Result<ChatMessagesDeletedDto>.Success(
+            new ChatMessagesDeletedDto(conversationId, ids, request.ForEveryone));
+    }
+
+    /* ------------------------------------------------------------- typing */
+
+    public async Task<string?> GetTypingNameAsync(string email, int conversationId, CancellationToken ct = default)
+    {
+        var me = await ResolveIdentityAsync(email, ct);
+        if (me is null || !await CanAccessAsync(me, conversationId, ct)) return null;
+        return me.DisplayName;
+    }
+
+    public async Task<string?> GetGuestTypingNameAsync(int conversationId, string guestToken, CancellationToken ct = default)
+    {
+        var guest = await FindGuestAsync(conversationId, guestToken, ct);
+        return guest?.DisplayName;
     }
 
     public async Task<bool> CanCallAsync(string email, string targetEmail, CancellationToken ct = default)

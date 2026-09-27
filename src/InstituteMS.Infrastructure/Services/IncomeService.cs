@@ -86,10 +86,10 @@ public class IncomeService : IIncomeService
 
         var totalIncome = fees + admissions + otherIncome + examFees;
 
-        /* The proprietor's honorarium is a cost of the institute as a whole: it
-           is not charged to any one branch, so a branch-scoped report leaves it
-           out rather than loading all of it onto one branch. */
-        var honorarium = branch is null ? await HonorariumByMonthAsync(from, to, ct) : [];
+        /* The proprietor's honorarium is set per branch, or with no branch for
+           the institute as a whole. A branch report carries only that branch's
+           amount; the whole-institute report carries every one of them. */
+        var honorarium = await HonorariumByMonthAsync(from, to, branch, ct);
         var honorariumTotal = honorarium.Sum(h => h.Amount);
 
         /* ---- teacher cost is counted ONCE ---------------------------------
@@ -389,12 +389,19 @@ public class IncomeService : IIncomeService
 
             case IncomeSection.ProprietorHonorarium:
             {
-                var months = branch is null ? await HonorariumByMonthAsync(from, to, ct) : [];
-                var items = months
+                // One line per month per branch, so the whole-institute view shows
+                // where each amount is charged rather than one merged figure.
+                var rates = await HonorariumRatesQuery(branch).ToListAsync(ct);
+                var items = rates
+                    .GroupBy(r => r.Branch)
+                    .SelectMany(g => HonorariumService.Allocate(g.ToList(), from, to)
+                        .Select(m => (g.Key, m.Month, m.Amount)))
                     .OrderByDescending(m => m.Month)
+                    .ThenBy(m => m.Key)
                     .Select((m, i) => new IncomeDetailDto(
                         i + 1, m.Month, null, null, null, null, null,
-                        "Proprietor honorarium, " + m.Month.ToString("MMM yyyy", CultureInfo.InvariantCulture),
+                        "Proprietor honorarium, " + m.Month.ToString("MMM yyyy", CultureInfo.InvariantCulture)
+                            + " · " + (m.Key ?? "Whole institute"),
                         m.Amount))
                     .ToList();
                 return PagedResult<IncomeDetailDto>.Create(
@@ -407,12 +414,22 @@ public class IncomeService : IIncomeService
 
     /* ------------------------------------------------------------- monthly */
 
-    /// <summary>The proprietor's honorarium per calendar month of the range (pro rata at the ends).</summary>
+    /// <summary>
+    /// The proprietor's honorarium per calendar month of the range (pro rata at
+    /// the ends) — that branch's only, or every branch plus the institute-wide
+    /// amount when no branch is given.
+    /// </summary>
     private async Task<List<(DateOnly Month, decimal Amount)>> HonorariumByMonthAsync(
-        DateOnly from, DateOnly to, CancellationToken ct)
+        DateOnly from, DateOnly to, string? branch, CancellationToken ct)
     {
-        var rates = await _db.ProprietorHonoraria.AsNoTracking().ToListAsync(ct);
-        return HonorariumService.Allocate(rates, from, to);
+        var rates = await HonorariumRatesQuery(branch).ToListAsync(ct);
+        return HonorariumService.AllocateByBranch(rates, from, to);
+    }
+
+    private IQueryable<Domain.Entities.ProprietorHonorarium> HonorariumRatesQuery(string? branch)
+    {
+        var q = _db.ProprietorHonoraria.AsNoTracking();
+        return branch is null ? q : q.Where(h => h.Branch == branch);
     }
 
     private async Task<IReadOnlyList<IncomeTrendPointDto>> GetMonthlyAsync(

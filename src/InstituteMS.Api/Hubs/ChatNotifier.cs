@@ -30,4 +30,12 @@ public class ChatNotifier : IChatNotifier
     public Task MessagesReadAsync(int conversationId, string readerEmail, int lastReadMessageId, CancellationToken ct = default) =>
         _hub.Clients.Group(ChatHub.ConversationGroup(conversationId))
             .SendAsync("MessagesRead", conversationId, readerEmail, lastReadMessageId, ct);
+
+    public Task MessagesDeletedAsync(int conversationId, IReadOnlyList<int> messageIds, CancellationToken ct = default) =>
+        _hub.Clients.Group(ChatHub.ConversationGroup(conversationId))
+            .SendAsync("MessagesDeleted", conversationId, messageIds, ct);
+
+    public Task MessagesHiddenAsync(string email, int conversationId, IReadOnlyList<int> messageIds, CancellationToken ct = default) =>
+        _hub.Clients.Group(ChatHub.PersonalGroup(email))
+            .SendAsync("MessagesHidden", conversationId, messageIds, ct);
 }

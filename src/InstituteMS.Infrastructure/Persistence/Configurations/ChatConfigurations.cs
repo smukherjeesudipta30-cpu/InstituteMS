@@ -74,8 +74,28 @@ public class ChatMessageConfiguration : IEntityTypeConfiguration<ChatMessage>
         // No max length: Base64 file content, sized in code against MaxAttachmentBytes.
         b.Property(x => x.AttachmentContent).HasColumnName("AttachmentContent");
         b.Property(x => x.AttachmentSize).HasColumnName("AttachmentSize");
+        b.Property(x => x.DeletedOn).HasColumnName("DeletedOn");
+        b.Property(x => x.DeletedBy).HasColumnName("DeletedBy").HasMaxLength(150);
 
         b.HasIndex(x => new { x.ConversationId, x.Id });
+    }
+}
+
+public class ChatMessageHiddenConfiguration : IEntityTypeConfiguration<ChatMessageHidden>
+{
+    public void Configure(EntityTypeBuilder<ChatMessageHidden> b)
+    {
+        b.ToTable("ChatMessageHidden");
+        b.HasKey(x => new { x.MessageId, x.UserEmail });
+
+        b.Property(x => x.MessageId).HasColumnName("MessageId");
+        b.Property(x => x.UserEmail).HasColumnName("UserEmail").HasMaxLength(150).IsRequired();
+        b.Property(x => x.HiddenOn).HasColumnName("HiddenOn");
+
+        b.HasOne<ChatMessage>()
+            .WithMany()
+            .HasForeignKey(x => x.MessageId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }
 
