@@ -97,8 +97,9 @@ public class HonorariumService : IHonorariumService
 
     /// <summary>
     /// The honorarium falling in [from, to], one entry per calendar month touched.
-    /// A month only partly inside the range is charged pro rata by days, so a
-    /// 1-15 September report carries half of September's amount.
+    /// It is a fixed one-time monthly payment, so every month the range touches
+    /// carries the full amount - a 1-15 September report carries all of
+    /// September's, never a pro-rata share by days.
     /// </summary>
     internal static List<(DateOnly Month, decimal Amount)> Allocate(
         IReadOnlyList<ProprietorHonorarium> rates, DateOnly from, DateOnly to)
@@ -112,15 +113,7 @@ public class HonorariumService : IHonorariumService
                 .OrderByDescending(r => r.EffectiveFrom).FirstOrDefault()?.MonthlyAmount ?? 0m;
             if (rate == 0m) continue;
 
-            var monthEnd = month.AddMonths(1).AddDays(-1);
-            var start = from > month ? from : month;
-            var end = to < monthEnd ? to : monthEnd;
-            var days = end.DayNumber - start.DayNumber + 1;
-
-            var amount = days == monthEnd.Day
-                ? rate
-                : decimal.Round(rate * days / monthEnd.Day, 2, MidpointRounding.AwayFromZero);
-            result.Add((month, amount));
+            result.Add((month, rate));
         }
 
         return result;

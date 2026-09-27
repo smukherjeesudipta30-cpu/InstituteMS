@@ -415,9 +415,9 @@ public class IncomeService : IIncomeService
     /* ------------------------------------------------------------- monthly */
 
     /// <summary>
-    /// The proprietor's honorarium per calendar month of the range (pro rata at
-    /// the ends) — that branch's only, or every branch plus the institute-wide
-    /// amount when no branch is given.
+    /// The proprietor's honorarium per calendar month of the range (the full
+    /// monthly amount for every month touched) — that branch's only, or every
+    /// branch plus the institute-wide amount when no branch is given.
     /// </summary>
     private async Task<List<(DateOnly Month, decimal Amount)>> HonorariumByMonthAsync(
         DateOnly from, DateOnly to, string? branch, CancellationToken ct)
