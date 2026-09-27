@@ -38,6 +38,8 @@ public class AppDbContext : DbContext
     public DbSet<StudentReferrer> StudentReferrers => Set<StudentReferrer>();
     public DbSet<ExamFeeRate> ExamFeeRates => Set<ExamFeeRate>();
     public DbSet<ProprietorHonorarium> ProprietorHonoraria => Set<ProprietorHonorarium>();
+    public DbSet<Holiday> Holidays => Set<Holiday>();
+    public DbSet<HolidayYearImport> HolidayYearImports => Set<HolidayYearImport>();
     public DbSet<ExamFeePayment> ExamFeePayments => Set<ExamFeePayment>();
     public DbSet<ExamSchedule> ExamSchedules => Set<ExamSchedule>();
     public DbSet<CertificateIssue> CertificateIssues => Set<CertificateIssue>();
