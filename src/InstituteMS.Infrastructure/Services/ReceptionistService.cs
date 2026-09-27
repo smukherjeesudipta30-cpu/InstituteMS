@@ -614,10 +614,15 @@ public class ReceptionistService : IReceptionistService
             .Where(d => d.PeriodType == periodType && d.PeriodStart == start && receptionistIds.Contains(d.ReceptionistId))
             .ToDictionaryAsync(d => d.ReceptionistId, ct);
 
+        // A day the institute is closed (Holiday.IsInstituteHoliday) is nobody's
+        // leave: no one is expected in, so not scanning in costs nothing.
+        var closedDays = await InstituteClosedDaysAsync(start, countEnd, ct);
+
         // Nothing to count yet when the whole period is still in the future.
         var calendarDayCount = countEnd < start ? 0 : countEnd.DayNumber - start.DayNumber + 1;
         var calendarDays = Enumerable.Range(0, calendarDayCount)
             .Select(offset => start.AddDays(offset))
+            .Where(day => !closedDays.Contains(day))
             .ToList();
 
         var rows = new List<ReceptionistLeaveReportLineDto>();
@@ -930,8 +935,14 @@ public class ReceptionistService : IReceptionistService
                 return overlap * 2 >= ShiftHours(start, end);
             }
 
+            // On a day the institute is closed nobody is absent and nobody is
+            // covering, so pay does not move between receptionists that day.
+            var closedDays = await InstituteClosedDaysAsync(monthStart, countEnd, ct);
+
             for (var date = monthStart; date <= countEnd; date = date.AddDays(1))
             {
+                if (closedDays.Contains(date)) continue;
+
                 var dow = (byte)date.DayOfWeek;
 
                 // Each shift is settled on its own: who was down for it and
@@ -1024,6 +1035,24 @@ public class ReceptionistService : IReceptionistService
         var from = aFrom > bFrom ? aFrom : bFrom;
         var to = aTo < bTo ? aTo : bTo;
         return to > from ? (decimal)(to - from).TotalHours : 0m;
+    }
+
+    /// <summary>
+    /// Dates in [from, to] on the holiday list with the institute closed. A
+    /// government or festival holiday the institute stays open on is not one of
+    /// them: a rostered receptionist missing that day is on leave as usual.
+    /// </summary>
+    private async Task<HashSet<DateOnly>> InstituteClosedDaysAsync(DateOnly from, DateOnly to, CancellationToken ct)
+    {
+        if (to < from) return [];
+
+        var days = await _db.Holidays.AsNoTracking()
+            .Where(h => h.IsInstituteHoliday && h.HolidayDate >= from && h.HolidayDate <= to)
+            .Select(h => h.HolidayDate)
+            .Distinct()
+            .ToListAsync(ct);
+
+        return days.ToHashSet();
     }
 
     private static decimal ShiftHours(TimeOnly start, TimeOnly end)
