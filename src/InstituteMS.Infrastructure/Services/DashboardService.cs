@@ -5,6 +5,7 @@ using InstituteMS.Application.Income;
 using InstituteMS.Domain.Common;
 using InstituteMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace InstituteMS.Infrastructure.Services;
 
@@ -23,13 +24,23 @@ public class DashboardService : IDashboardService
     /// <summary>How many alerts the dashboard card shows before it stops being a dashboard.</summary>
     private const int NotificationLimit = 10;
 
+    /// <summary>
+    /// How many cycles' Income reports run at once. Each is a full report (a few
+    /// dozen queries), so twelve of them one after another made the dashboard —
+    /// the first screen Admin sees — take 6-7 seconds; a handful side by side
+    /// brings that to about one, without flooding the database with connections.
+    /// </summary>
+    private const int ParallelCycleReports = 4;
+
     private readonly AppDbContext _db;
     private readonly IIncomeService _income;
+    private readonly IServiceScopeFactory _scopes;
 
-    public DashboardService(AppDbContext db, IIncomeService income)
+    public DashboardService(AppDbContext db, IIncomeService income, IServiceScopeFactory scopes)
     {
         _db = db;
         _income = income;
+        _scopes = scopes;
     }
 
     public async Task<DashboardSummaryDto> GetSummaryAsync(DateOnly? cycleMonth = null, CancellationToken ct = default)
@@ -47,6 +58,12 @@ public class DashboardService : IDashboardService
             : CycleLabelMonth(today, startDay);
 
         var counts = await GetCountsAsync(ct);
+
+        // Every cycle the cards and the chart need, computed together up front;
+        // the cards' cycle is the chart's last point, so it is computed once.
+        await PrefetchCycleReportsAsync(
+            Enumerable.Range(0, TrendMonths).Select(i => labelMonth.AddMonths(-i)), startDay, ct);
+
         var finance = await GetFinanceAsync(labelMonth, startDay, ct);
         var trend = await GetTrendAsync(labelMonth, startDay, ct);
         var enrolment = await GetCourseEnrolmentAsync(ct);
@@ -179,11 +196,50 @@ public class DashboardService : IDashboardService
     /// </summary>
     private async Task<IncomeReportDto> CycleReportAsync(DateOnly labelMonth, int startDay, CancellationToken ct)
     {
-        var (start, end) = CycleRange(labelMonth, startDay);
-        var report = (await _income.GetReportAsync(start, end, null, ct)).Value!;
+        if (_cycleReports.TryGetValue(labelMonth, out var cached)) return cached;
 
         _honorariumRates ??= await _db.ProprietorHonoraria.AsNoTracking().ToListAsync(ct);
-        var once = HonorariumService.AllocateByBranch(_honorariumRates, labelMonth, labelMonth).Sum(m => m.Amount);
+        return _cycleReports[labelMonth] = await BuildCycleReportAsync(_income, _honorariumRates, labelMonth, startDay, ct);
+    }
+
+    /// <summary>
+    /// Runs the given cycles' reports side by side, a few at a time, each on its
+    /// own scope — a DbContext cannot serve two queries at once — and keeps them
+    /// for <see cref="CycleReportAsync"/>. Same figures as running them in turn.
+    /// </summary>
+    private async Task PrefetchCycleReportsAsync(IEnumerable<DateOnly> cycles, int startDay, CancellationToken ct)
+    {
+        _honorariumRates ??= await _db.ProprietorHonoraria.AsNoTracking().ToListAsync(ct);
+        var rates = _honorariumRates;
+
+        using var gate = new SemaphoreSlim(ParallelCycleReports);
+        var work = cycles.Distinct().Where(c => !_cycleReports.ContainsKey(c)).Select(async cycle =>
+        {
+            await gate.WaitAsync(ct);
+            try
+            {
+                using var scope = _scopes.CreateScope();
+                var income = scope.ServiceProvider.GetRequiredService<IIncomeService>();
+                return (cycle, report: await BuildCycleReportAsync(income, rates, cycle, startDay, ct));
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }).ToList();
+
+        foreach (var (cycle, report) in await Task.WhenAll(work))
+            _cycleReports[cycle] = report;
+    }
+
+    private static async Task<IncomeReportDto> BuildCycleReportAsync(
+        IIncomeService income, List<Domain.Entities.ProprietorHonorarium> rates,
+        DateOnly labelMonth, int startDay, CancellationToken ct)
+    {
+        var (start, end) = CycleRange(labelMonth, startDay);
+        var report = (await income.GetReportAsync(start, end, null, ct)).Value!;
+
+        var once = HonorariumService.AllocateByBranch(rates, labelMonth, labelMonth).Sum(m => m.Amount);
         var excess = report.ProprietorHonorarium - once;
         if (excess == 0m) return report;
 
@@ -197,6 +253,9 @@ public class DashboardService : IDashboardService
 
     /// <summary>Loaded once per request: every cycle of the trend reads the same list.</summary>
     private List<Domain.Entities.ProprietorHonorarium>? _honorariumRates;
+
+    /// <summary>This request's cycle reports, by the month each cycle is named after.</summary>
+    private readonly Dictionary<DateOnly, IncomeReportDto> _cycleReports = new();
 
     /// <summary>
     /// The cycle's money, taken from the Income report itself rather than a second
