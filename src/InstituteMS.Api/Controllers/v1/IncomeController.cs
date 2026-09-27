@@ -1,6 +1,7 @@
 using InstituteMS.Application.Common;
 using InstituteMS.Application.Income;
 using InstituteMS.Domain.Common;
+using InstituteMS.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -15,15 +16,24 @@ namespace InstituteMS.Api.Controllers.v1;
 /// The legacy page had seven independent date ranges, one per panel, each with its
 /// own running total and no consolidated figure. Here a single range drives every
 /// section and the profit and loss is calculated server-side.
+///
+/// Admin (and SuperAdmin) see everything. A Receptionist sees the same report to
+/// validate it — every amount and total identical — except that the proprietor's
+/// honorarium is named "Administrative expenses": the renaming happens here, on
+/// the server, so the proprietor's pay is never named in anything sent to them.
 /// </remarks>
 [Route("api/v1/income")]
 [Tags("Income")]
-[Authorize(Roles = UserRoles.Admin)]
+[Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist}")]
 public class IncomeController : ApiControllerBase
 {
     private readonly IIncomeService _income;
 
     public IncomeController(IIncomeService income) => _income = income;
+
+    /// <summary>Admin and SuperAdmin see the honorarium by name; everyone else allowed here does not.</summary>
+    private bool SeesProprietorByName =>
+        User.IsInRole(UserRoles.SuperAdmin) || User.IsInRole(UserRoles.Admin);
 
     /// <summary>
     /// Consolidated report for one date range: income, cost, net, margin, the
@@ -47,11 +57,37 @@ public class IncomeController : ApiControllerBase
         [FromQuery] DateOnly to,
         [FromQuery] string? branch,
         CancellationToken ct)
-        => Envelope(await _income.GetReportAsync(from, to, branch, ct));
+    {
+        var result = await _income.GetReportAsync(from, to, branch, ct);
+
+        if (result.Succeeded && result.Value is { } report && !SeesProprietorByName)
+        {
+            // Same amount, same place in the cost total — only the name changes.
+            result = Result<IncomeReportDto>.Success(report with
+            {
+                ProprietorHonorarium = 0m,
+                Sections = report.Sections
+                    .Select(s => s.Section == IncomeSection.ProprietorHonorarium
+                        ? s with { Section = IncomeSection.AdministrativeExpenses, Label = IncomeService.AdministrativeExpensesLabel }
+                        : s)
+                    .ToList()
+            });
+        }
+
+        return Envelope(result);
+    }
 
     /// <summary>Paged detail rows behind one section of the report.</summary>
     [HttpGet("detail")]
     [ProducesResponseType(typeof(ApiResponse<PagedResult<IncomeDetailDto>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Detail([FromQuery] IncomeDetailQuery query, CancellationToken ct)
-        => Envelope(await _income.GetDetailAsync(query, ct));
+    {
+        // A Receptionist reaches these lines only through the neutral section, so
+        // they come back named "Administrative expenses" too.
+        if (query.Section == IncomeSection.ProprietorHonorarium && !SeesProprietorByName)
+            return Forbid();
+
+        return Envelope(await _income.GetDetailAsync(query, ct));
+    }
 }

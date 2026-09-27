@@ -51,8 +51,9 @@ public class IncomeService : IIncomeService
         var fees = await FeeQuery(from, to, branch).SumAsync(f => (decimal?)f.Installment ?? 0m, ct);
         var feeCount = await FeeQuery(from, to, branch).CountAsync(ct);
 
-        var admissions = await AdmissionQuery(from, to, branch).SumAsync(s => (decimal?)s.AdmissionFees ?? 0m, ct);
-        var admissionCount = await AdmissionQuery(from, to, branch).CountAsync(ct);
+        var admissionReceipts = await AdmissionReceiptsAsync(from, to, branch, ct);
+        var admissions = admissionReceipts.Sum(a => a.Amount);
+        var admissionCount = admissionReceipts.Count;
 
         var otherIncome = await OtherIncomeQuery(from, to, branch).SumAsync(i => (decimal?)i.Amount ?? 0m, ct);
 
@@ -202,19 +203,16 @@ public class IncomeService : IIncomeService
 
             case IncomeSection.Admissions:
             {
-                var source = AdmissionQuery(from, to, branch);
-                var total = await source.CountAsync(ct);
+                var all = await AdmissionReceiptsAsync(from, to, branch, ct);
 
-                var items = await source
-                    .OrderByDescending(s => s.DateOfJoining).ThenByDescending(s => s.Id)
+                var items = all
+                    .OrderByDescending(a => a.Date).ThenByDescending(a => a.Id)
                     .Skip(skip).Take(query.PageSize)
-                    .Select(s => new IncomeDetailDto(
-                        s.Id, s.DateOfJoining, s.BillNo, s.Name, s.RegistrationId,
-                        s.Course != null ? s.Course.Name : null, null,
-                        "Admission fee", s.AdmissionFees ?? 0m))
-                    .ToListAsync(ct);
+                    .Select(a => new IncomeDetailDto(
+                        a.Id, a.Date, a.BillNo, a.Name, a.RegistrationId, a.CourseName, null, a.Description, a.Amount))
+                    .ToList();
 
-                return PagedResult<IncomeDetailDto>.Create(items, query.Page, query.PageSize, total);
+                return PagedResult<IncomeDetailDto>.Create(items, query.Page, query.PageSize, all.Count);
             }
 
             case IncomeSection.OtherIncome:
@@ -388,9 +386,15 @@ public class IncomeService : IIncomeService
             }
 
             case IncomeSection.ProprietorHonorarium:
+            case IncomeSection.AdministrativeExpenses:
             {
                 // One line per month per branch, so the whole-institute view shows
-                // where each amount is charged rather than one merged figure.
+                // where each amount is charged rather than one merged figure. The
+                // Receptionist's view asks for it by its neutral name and gets the
+                // same lines under that name.
+                var label = query.Section == IncomeSection.AdministrativeExpenses
+                    ? AdministrativeExpensesLabel
+                    : "Proprietor honorarium";
                 var rates = await HonorariumRatesQuery(branch).ToListAsync(ct);
                 var items = rates
                     .GroupBy(r => r.Branch)
@@ -400,7 +404,7 @@ public class IncomeService : IIncomeService
                     .ThenBy(m => m.Key)
                     .Select((m, i) => new IncomeDetailDto(
                         i + 1, m.Month, null, null, null, null, null,
-                        "Proprietor honorarium, " + m.Month.ToString("MMM yyyy", CultureInfo.InvariantCulture)
+                        label + ", " + m.Month.ToString("MMM yyyy", CultureInfo.InvariantCulture)
                             + " · " + (m.Key ?? "Whole institute"),
                         m.Amount))
                     .ToList();
@@ -411,6 +415,9 @@ public class IncomeService : IIncomeService
                 return PagedResult<IncomeDetailDto>.Create([], query.Page, query.PageSize, 0);
         }
     }
+
+    /// <summary>What the proprietor's honorarium is called in any view other than Admin's.</summary>
+    public const string AdministrativeExpensesLabel = "Administrative expenses";
 
     /* ------------------------------------------------------------- monthly */
 
@@ -445,10 +452,10 @@ public class IncomeService : IIncomeService
             .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Installment ?? 0m)))
             .ToListAsync(ct);
 
-        var admissionByMonth = await AdmissionQuery(from, to, branch)
-            .GroupBy(s => new { s.DateOfJoining!.Value.Year, s.DateOfJoining!.Value.Month })
-            .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.AdmissionFees ?? 0m)))
-            .ToListAsync(ct);
+        var admissionByMonth = (await AdmissionReceiptsAsync(from, to, branch, ct))
+            .GroupBy(a => new { a.Date.Year, a.Date.Month })
+            .Select(g => new MonthBucket(g.Key.Year, g.Key.Month, g.Sum(x => x.Amount)))
+            .ToList();
 
         var otherByMonth = await OtherIncomeQuery(from, to, branch)
             .GroupBy(i => new { i.IncomeDate!.Value.Year, i.IncomeDate!.Value.Month })
@@ -553,27 +560,61 @@ public class IncomeService : IIncomeService
     /// restricted this to active students, so a student who has since left drops out
     /// of a historic report; that behaviour is preserved.
     /// </summary>
-    private IQueryable<Domain.Entities.Student> AdmissionQuery(DateOnly from, DateOnly to, string? branch = null)
+    /// <summary>One piece of admission money received in the range.</summary>
+    private sealed record AdmissionReceipt(
+        int Id, DateOnly Date, decimal Amount, string? BillNo, string? Name, string? RegistrationId,
+        string? CourseName, string Description);
+
+    /// <summary>
+    /// Admission money actually RECEIVED in the range — the same rule as the Fee
+    /// collections report, so the two always agree. Since the admission fee can be
+    /// part paid (migration 051), counting Student.AdmissionFees by joining date
+    /// counted money not yet received: two September 2026 admissions owing 500
+    /// each put the Income report 1,000 above the fee collections report for the
+    /// same range. Receipts are counted on the day they were paid; admissions from
+    /// before the receipt ledger have none, so those are read from the student row
+    /// (the amount received, dated by joining) exactly as the fee report does.
+    /// <para>
+    /// NOT filtered on IsActive, deliberately. Money received on admission stays
+    /// received: filtering on the student's CURRENT status made a past period's
+    /// income shrink every time somebody left — it was hiding 354,800 rupees from
+    /// 327 students who completed their course, 338 who paid fees for a while
+    /// before leaving, and 47 who enrolled and never came back.
+    /// </para>
+    /// </summary>
+    private async Task<List<AdmissionReceipt>> AdmissionReceiptsAsync(
+        DateOnly from, DateOnly to, string? branch, CancellationToken ct)
     {
-        /* NOT filtered on IsActive, deliberately.
-           ------------------------------------------------------------------
-           An admission fee is cash received on the day of admission. Nothing
-           that happens afterwards un-receives it, so filtering on the
-           student's CURRENT status made a past period's income shrink every
-           time somebody left: run the report in March and again in August and
-           the same range reported less the second time.
+        var receiptQuery = _db.AdmissionFeePayments.AsNoTracking()
+            .Where(p => p.PaidOn >= from && p.PaidOn <= to)
+            .Join(_db.Students.AsNoTracking(), p => p.StudentId, s => s.Id, (p, s) => new { p, s });
 
-           It was hiding 354,800 rupees of real income - 327 students who
-           COMPLETED their course and were closed off, 338 more who paid
-           monthly fees for a while before leaving, and 47 who enrolled and
-           never came back. All three paid to enrol.
+        if (branch is not null)
+            receiptQuery = receiptQuery.Where(x => x.s.Branch == branch);
 
-           It is also inconsistent with how costs are treated here: an expense
-           is not removed because the thing it bought was later discarded. */
-        var q = _db.Students.AsNoTracking()
-            .Where(s => s.DateOfJoining >= from && s.DateOfJoining <= to);
+        var receipts = await receiptQuery
+            .Select(x => new AdmissionReceipt(
+                x.p.Id, x.p.PaidOn, x.p.Amount, x.s.BillNo, x.s.Name, x.s.RegistrationId,
+                x.s.Course != null ? x.s.Course.Name : null,
+                x.p.IsAtAdmission ? "Admission fee" : "Admission fee instalment"))
+            .ToListAsync(ct);
 
-        return branch is null ? q : q.Where(s => s.Branch == branch);
+        var legacyQuery = _db.Students.AsNoTracking()
+            .Where(s => s.DateOfJoining != null && s.DateOfJoining >= from && s.DateOfJoining <= to
+                        && (s.AdmissionFeesPaid ?? s.AdmissionFees) > 0
+                        && !_db.AdmissionFeePayments.Any(p => p.StudentId == s.Id));
+
+        if (branch is not null)
+            legacyQuery = legacyQuery.Where(s => s.Branch == branch);
+
+        var legacy = await legacyQuery
+            .Select(s => new AdmissionReceipt(
+                // Negative so a legacy row can never share an id with a receipt row in the detail grid.
+                -s.Id, s.DateOfJoining!.Value, (s.AdmissionFeesPaid ?? s.AdmissionFees)!.Value, s.BillNo, s.Name,
+                s.RegistrationId, s.Course != null ? s.Course.Name : null, "Admission fee"))
+            .ToListAsync(ct);
+
+        return receipts.Concat(legacy).ToList();
     }
 
     /// <summary>Non-fee income, scoped by the branch recorded on the entry.</summary>

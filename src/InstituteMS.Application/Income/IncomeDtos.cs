@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using InstituteMS.Application.Common;
 
 namespace InstituteMS.Application.Income;
@@ -28,7 +29,14 @@ public enum IncomeSection
     /// <summary>Exam fees collected (<c>ExamFeePayment</c>).</summary>
     ExamFees = 10,
     /// <summary>The proprietor's monthly honorarium (<c>ProprietorHonorarium</c>); whole institute only.</summary>
-    ProprietorHonorarium = 11
+    ProprietorHonorarium = 11,
+
+    /// <summary>
+    /// The very same amount as <see cref="ProprietorHonorarium"/>, under the name
+    /// a Receptionist sees: they validate the Income report, so every figure and
+    /// total must match Admin's, but the proprietor's pay is not named to them.
+    /// </summary>
+    AdministrativeExpenses = 12
 }
 
 /// <summary>
@@ -85,9 +93,13 @@ public record IncomeReportDto(
     bool BranchScoped = false,
 
     /// <summary>
-    /// The proprietor's honorarium for the range, inside <see cref="TotalCost"/>.
-    /// Institute-wide, so always 0 on a branch-scoped report.
+    /// The proprietor's honorarium for the range, inside <see cref="TotalCost"/> —
+    /// that branch's on a branch-scoped report. Left out of the response entirely
+    /// when 0, which is also how a Receptionist's copy carries it: they get the
+    /// same amount under the neutral <see cref="IncomeSection.AdministrativeExpenses"/>
+    /// section instead, so even the raw data never names it.
     /// </summary>
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     decimal ProprietorHonorarium = 0m);
 
 public record IncomeSectionTotalDto(
