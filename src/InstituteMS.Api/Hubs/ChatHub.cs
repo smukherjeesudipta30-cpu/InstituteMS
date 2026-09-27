@@ -51,12 +51,8 @@ public class ChatHub : Hub
             await Groups.AddToGroupAsync(Context.ConnectionId, PersonalGroup(email));
             await Groups.AddToGroupAsync(Context.ConnectionId, PresenceGroup);
 
-            if (Context.User!.IsInRole(UserRoles.Admin)
-                || Context.User.IsInRole(UserRoles.Editor)
-                || Context.User.IsInRole(UserRoles.Receptionist))
-            {
+            if (IsStaff())
                 await Groups.AddToGroupAsync(Context.ConnectionId, GuestInboxGroup);
-            }
 
             var conversationIds = await _db.ChatParticipants
                 .AsNoTracking()
@@ -70,10 +66,11 @@ public class ChatHub : Hub
 
             await TouchLastSeenAsync(email);
 
-            // Only the person's FIRST live connection is a real state change —
-            // a second tab opening must not re-announce someone already online.
-            if (_presence.MarkConnected(email))
-                await _notifier.PresenceChangedAsync(email, PresenceOnline);
+            // Only the person's FIRST live connection makes them online — a
+            // second tab must not re-announce them. It can still end "away",
+            // since a connection that has just opened is someone using the app.
+            if (_presence.MarkConnected(email, Context.ConnectionId, out var awayChanged) || awayChanged)
+                await _notifier.PresenceChangedAsync(email, CurrentStatus(email));
         }
 
         await base.OnConnectedAsync();
@@ -97,14 +94,22 @@ public class ChatHub : Hub
     {
         var email = Context.User?.FindFirstValue(ClaimTypes.Email);
 
-        if (!string.IsNullOrWhiteSpace(email) && _presence.MarkDisconnected(email))
+        if (!string.IsNullOrWhiteSpace(email))
         {
-            var now = DateTime.Now;
-            await _db.Users
-                .Where(u => u.Email == email)
-                .ExecuteUpdateAsync(s => s.SetProperty(u => u.LastSeenOn, now));
+            if (_presence.MarkDisconnected(email, Context.ConnectionId, out var awayChanged))
+            {
+                var now = DateTime.Now;
+                await _db.Users
+                    .Where(u => u.Email == email)
+                    .ExecuteUpdateAsync(s => s.SetProperty(u => u.LastSeenOn, now));
 
-            await _notifier.PresenceChangedAsync(email, PresenceOffline, now.ToString("o"));
+                await _notifier.PresenceChangedAsync(email, PresenceOffline, now.ToString("o"));
+            }
+            else if (awayChanged)
+            {
+                // The one active tab closed and only away ones remain (or the reverse).
+                await _notifier.PresenceChangedAsync(email, CurrentStatus(email));
+            }
         }
 
         await base.OnDisconnectedAsync(exception);
@@ -126,8 +131,8 @@ public class ChatHub : Hub
            screen turns off or they switch to another app mid-call: the phone
            reports itself away then, but they are very much there. The away
            flag is still recorded, so it shows once the call ends. */
-        if (_presence.SetAway(email, away) && !IsInCall(email))
-            await _notifier.PresenceChangedAsync(email, away ? PresenceAway : PresenceOnline);
+        if (_presence.SetAway(email, Context.ConnectionId, away) && !IsInCall(email))
+            await _notifier.PresenceChangedAsync(email, CurrentStatus(email));
     }
 
     /// <summary>
@@ -196,9 +201,7 @@ public class ChatHub : Hub
             .AnyAsync(p => p.ConversationId == conversationId && p.UserEmail == email);
 
         var isStaffOnGuestThread = !isParticipant
-            && (Context.User!.IsInRole(UserRoles.Admin)
-                || Context.User.IsInRole(UserRoles.Editor)
-                || Context.User.IsInRole(UserRoles.Receptionist))
+            && IsStaff()
             && await _db.ChatConversations
                 .AsNoTracking()
                 .AnyAsync(c => c.Id == conversationId && c.Type == ChatConversationType.Guest);
@@ -300,8 +303,20 @@ public class ChatHub : Hub
     private bool IsInCall(string email) =>
         _presence.InCallEmails.Contains(email, StringComparer.OrdinalIgnoreCase);
 
-    private bool IsAway(string email) =>
-        _presence.AwayEmails.Contains(email, StringComparer.OrdinalIgnoreCase);
+    private bool IsAway(string email) => _presence.IsAway(email);
+
+    /// <summary>In-call wins over away, away over plain online — the same order the client shows.</summary>
+    private string CurrentStatus(string email) =>
+        IsInCall(email) ? PresenceOnCall : IsAway(email) ? PresenceAway : PresenceOnline;
+
+    /// <summary>
+    /// The shared guest inbox's staff, matching ChatService.IsStaff. SuperAdmin was
+    /// missing here, so a SuperAdmin never joined the inbox's live channel.
+    /// </summary>
+    private bool IsStaff() =>
+        Context.User is { } u
+        && (u.IsInRole(UserRoles.SuperAdmin) || u.IsInRole(UserRoles.Admin)
+            || u.IsInRole(UserRoles.Editor) || u.IsInRole(UserRoles.Receptionist));
 
     private const string PresenceAway = "away";
     private const string PresenceOffline = "offline";

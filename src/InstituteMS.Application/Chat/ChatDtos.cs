@@ -365,25 +365,29 @@ public record ChatPresenceSnapshotDto(
 /// </remarks>
 public interface IChatPresenceTracker
 {
-    /// <summary>True exactly when this was the person's first live connection.</summary>
-    bool MarkConnected(string email);
+    /// <summary>
+    /// True exactly when this was the person's first live connection. A new
+    /// connection counts as active, so <paramref name="awayChanged"/> is true
+    /// when it just brought back someone every other connection had as away.
+    /// </summary>
+    bool MarkConnected(string email, string connectionId, out bool awayChanged);
 
     /// <summary>
-    /// True exactly when this was the person's last live connection. Also
-    /// clears any away flag left over for them, so a later reconnect starts
-    /// active rather than reappearing already marked away.
+    /// True exactly when this was the person's last live connection.
+    /// <paramref name="awayChanged"/> is true when closing this one active
+    /// connection left only away ones behind (or the reverse).
     /// </summary>
-    bool MarkDisconnected(string email);
+    bool MarkDisconnected(string email, string connectionId, out bool awayChanged);
 
     /// <summary>
-    /// Records whether the person is away from an otherwise-live connection
-    /// (tab hidden, or no activity for a while) — set from whichever of their
-    /// tabs most recently reported a change. Returns true only when this
-    /// actually changed their away flag while they are still online; false
-    /// for a no-op (already in that state) or for someone with no live
-    /// connection at all, since away only means something on top of online.
+    /// Records whether one connection is away (tab hidden, app backgrounded, or
+    /// no activity for a while). The person is away only when every one of
+    /// their connections is. Returns true only when that overall state changed.
     /// </summary>
-    bool SetAway(string email, bool away);
+    bool SetAway(string email, string connectionId, bool away);
+
+    /// <summary>Whether every one of this person's live connections is away.</summary>
+    bool IsAway(string email);
 
     /// <summary>
     /// Records whether the person is on a call right now. Returns true only when
