@@ -1,6 +1,7 @@
 using System.Globalization;
 using InstituteMS.Application.Common;
 using InstituteMS.Application.Dashboard;
+using InstituteMS.Application.Income;
 using InstituteMS.Domain.Common;
 using InstituteMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -23,19 +24,31 @@ public class DashboardService : IDashboardService
     private const int NotificationLimit = 10;
 
     private readonly AppDbContext _db;
+    private readonly IIncomeService _income;
 
-    public DashboardService(AppDbContext db) => _db = db;
-
-    public async Task<DashboardSummaryDto> GetSummaryAsync(CancellationToken ct = default)
+    public DashboardService(AppDbContext db, IIncomeService income)
     {
+        _db = db;
+        _income = income;
+    }
+
+    public async Task<DashboardSummaryDto> GetSummaryAsync(DateOnly? cycleMonth = null, CancellationToken ct = default)
+    {
+        /* Money is shown by PAY CYCLE (26th to 25th by default, set by Admin),
+           the period teachers and receptionists are paid for, not by calendar
+           month. A cycle is named by the month it ends in, as on the pay forms. */
+        var startDay = await _db.PayrollSettings.AsNoTracking()
+            .Select(p => (int?)p.PayCycleStartDay)
+            .FirstOrDefaultAsync(ct) ?? 26;
+
         var today = DateOnly.FromDateTime(DateTime.Today);
-        var monthStart = new DateOnly(today.Year, today.Month, 1);
-        var nextMonthStart = monthStart.AddMonths(1);
-        var trendStart = monthStart.AddMonths(-(TrendMonths - 1));
+        var labelMonth = cycleMonth is { } m
+            ? new DateOnly(m.Year, m.Month, 1)
+            : CycleLabelMonth(today, startDay);
 
         var counts = await GetCountsAsync(ct);
-        var finance = await GetFinanceAsync(monthStart, nextMonthStart, ct);
-        var trend = await GetTrendAsync(trendStart, nextMonthStart, ct);
+        var finance = await GetFinanceAsync(labelMonth, startDay, ct);
+        var trend = await GetTrendAsync(labelMonth, startDay, ct);
         var enrolment = await GetCourseEnrolmentAsync(ct);
         var notices = await GetRecentNoticesAsync(ct);
         var admissions = await GetRecentAdmissionsAsync(ct);
@@ -134,34 +147,70 @@ public class DashboardService : IDashboardService
             courses, teachers, staffAccounts, studentAccounts, enquiries);
     }
 
-    private async Task<DashboardFinanceDto> GetFinanceAsync(
-        DateOnly monthStart, DateOnly nextMonthStart, CancellationToken ct)
+    /// <summary>The month the pay cycle running on <paramref name="day"/> ends in — the cycle's name.</summary>
+    internal static DateOnly CycleLabelMonth(DateOnly day, int startDay)
     {
-        var fees = await _db.MonthlyFees
-            .Where(f => f.FeeDate >= monthStart && f.FeeDate < nextMonthStart)
-            .SumAsync(f => (decimal?)f.Installment ?? 0m, ct);
+        var month = new DateOnly(day.Year, day.Month, 1);
+        // With a start day of 1 the cycle is the calendar month itself. Otherwise
+        // from the start day on, the running cycle ends next month.
+        return startDay > 1 && day.Day >= startDay ? month.AddMonths(1) : month;
+    }
 
-        var lateFines = await _db.LateFees
-            .Where(l => l.FineDate >= monthStart && l.FineDate < nextMonthStart)
-            .SumAsync(l => (decimal?)l.FineAmount ?? 0m, ct);
+    /// <summary>First and last day of the cycle named by <paramref name="labelMonth"/>.</summary>
+    internal static (DateOnly Start, DateOnly End) CycleRange(DateOnly labelMonth, int startDay)
+    {
+        var month = new DateOnly(labelMonth.Year, labelMonth.Month, 1);
+        if (startDay <= 1)
+            return (month, month.AddMonths(1).AddDays(-1));
 
-        var otherIncome = await _db.OtherIncomes
-            .Where(i => i.IncomeDate >= monthStart && i.IncomeDate < nextMonthStart)
-            .SumAsync(i => (decimal?)i.Amount ?? 0m, ct);
+        // Short months: a start day past the month's end falls on its last day.
+        var prev = month.AddMonths(-1);
+        var start = new DateOnly(prev.Year, prev.Month, Math.Min(startDay, DateTime.DaysInMonth(prev.Year, prev.Month)));
+        var end = new DateOnly(month.Year, month.Month, Math.Min(startDay - 1, DateTime.DaysInMonth(month.Year, month.Month)));
+        return (start, end);
+    }
 
-        var expenses = await _db.Expenses
-            .Where(e => e.ExpenseDate >= monthStart && e.ExpenseDate < nextMonthStart)
-            .SumAsync(e => (decimal?)e.Amount ?? 0m, ct);
+    /// <summary>
+    /// The Income report for one pay cycle, with the proprietor's honorarium
+    /// counted once. The report charges that fixed monthly amount in full for
+    /// every CALENDAR month a range touches, and a 26th-to-25th cycle touches two;
+    /// a cycle is one month's pay, so it carries the amount of the month it is
+    /// named after, once.
+    /// </summary>
+    private async Task<IncomeReportDto> CycleReportAsync(DateOnly labelMonth, int startDay, CancellationToken ct)
+    {
+        var (start, end) = CycleRange(labelMonth, startDay);
+        var report = (await _income.GetReportAsync(start, end, null, ct)).Value!;
 
-        var teacherFees = await _db.TeacherFees
-            .Where(t => t.PaidOn >= monthStart && t.PaidOn < nextMonthStart)
-            .SumAsync(t => (decimal?)t.Salary ?? 0m, ct);
+        _honorariumRates ??= await _db.ProprietorHonoraria.AsNoTracking().ToListAsync(ct);
+        var once = HonorariumService.AllocateByBranch(_honorariumRates, labelMonth, labelMonth).Sum(m => m.Amount);
+        var excess = report.ProprietorHonorarium - once;
+        if (excess == 0m) return report;
 
-        var teacherExpenses = await _db.TeacherExpenses
-            .Where(t => t.ExpenseDate >= monthStart && t.ExpenseDate < nextMonthStart)
-            .SumAsync(t => (decimal?)t.Amount ?? 0m, ct);
+        return report with
+        {
+            ProprietorHonorarium = once,
+            TotalCost = report.TotalCost - excess,
+            NetProfit = report.NetProfit + excess
+        };
+    }
 
-        var teacherPayout = teacherFees + teacherExpenses;
+    /// <summary>Loaded once per request: every cycle of the trend reads the same list.</summary>
+    private List<Domain.Entities.ProprietorHonorarium>? _honorariumRates;
+
+    /// <summary>
+    /// The cycle's money, taken from the Income report itself rather than a second
+    /// calculation, so the two always show the same figures: fees, admission and
+    /// exam fees and other income in; the teachers' share (counted once), expenses,
+    /// receptionist pay and every other cost out.
+    /// </summary>
+    private async Task<DashboardFinanceDto> GetFinanceAsync(DateOnly labelMonth, int startDay, CancellationToken ct)
+    {
+        var (start, end) = CycleRange(labelMonth, startDay);
+        var report = await CycleReportAsync(labelMonth, startDay, ct);
+
+        var examFees = report.Sections.FirstOrDefault(s => s.Section == IncomeSection.ExamFees)?.Amount ?? 0m;
+        var otherCosts = report.TotalCost - report.Expenses - report.TeacherPayouts - report.ReceptionistPay;
 
         var (outstanding, inArrears) = await GetOutstandingAsync(ct);
 
@@ -169,16 +218,12 @@ public class DashboardService : IDashboardService
             .Select(f => f.PaymentDate ?? f.FeeDate)
             .MaxAsync(ct);
 
-        // lateFines is deliberately NOT added: MonthlyFees.Installment is stored as
-        // installment + fine, so it is already inside `fees`. It is reported
-        // separately only as an "of which" breakdown.
-        var totalIncome = fees + otherIncome;
-        var totalCost = expenses + teacherPayout;
-
         return new DashboardFinanceDto(
-            fees, lateFines, otherIncome, expenses, teacherPayout,
-            totalIncome, totalCost, totalIncome - totalCost,
-            outstanding, inArrears, lastPaymentOn);
+            report.FeeCollections, report.LateFines, report.OtherIncome, report.Expenses, report.TeacherPayouts,
+            report.TotalIncome, report.TotalCost, report.NetProfit,
+            outstanding, inArrears, lastPaymentOn,
+            start, end, labelMonth.ToString("MMMM yyyy", CultureInfo.InvariantCulture),
+            report.AdmissionFees, examFees, report.ReceptionistPay, otherCosts, startDay);
     }
 
     /// <summary>
@@ -204,55 +249,29 @@ public class DashboardService : IDashboardService
         return (owed.Sum(), owed.Count);
     }
 
+    /// <summary>
+    /// The twelve pay cycles ending with the chosen one, each read from the Income
+    /// report like the cards above, so the chart and the cards never disagree.
+    /// </summary>
     private async Task<IReadOnlyList<MonthlyTrendPointDto>> GetTrendAsync(
-        DateOnly from, DateOnly to, CancellationToken ct)
+        DateOnly labelMonth, int startDay, CancellationToken ct)
     {
-        var feeByMonth = await _db.MonthlyFees
-            .Where(f => f.FeeDate >= from && f.FeeDate < to)
-            .GroupBy(f => new { f.FeeDate!.Value.Year, f.FeeDate!.Value.Month })
-            .Select(g => new MonthTotal(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Installment ?? 0m)))
-            .ToListAsync(ct);
-
-        var otherByMonth = await _db.OtherIncomes
-            .Where(i => i.IncomeDate >= from && i.IncomeDate < to)
-            .GroupBy(i => new { i.IncomeDate!.Value.Year, i.IncomeDate!.Value.Month })
-            .Select(g => new MonthTotal(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Amount ?? 0m)))
-            .ToListAsync(ct);
-
-        var expenseByMonth = await _db.Expenses
-            .Where(e => e.ExpenseDate >= from && e.ExpenseDate < to)
-            .GroupBy(e => new { e.ExpenseDate!.Value.Year, e.ExpenseDate!.Value.Month })
-            .Select(g => new MonthTotal(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Amount ?? 0m)))
-            .ToListAsync(ct);
-
-        var payoutByMonth = await _db.TeacherFees
-            .Where(t => t.PaidOn >= from && t.PaidOn < to)
-            .GroupBy(t => new { t.PaidOn!.Value.Year, t.PaidOn!.Value.Month })
-            .Select(g => new MonthTotal(g.Key.Year, g.Key.Month, g.Sum(x => (decimal?)x.Salary ?? 0m)))
-            .ToListAsync(ct);
-
-        // Materialise every month in the window so the chart has no gaps.
         var points = new List<MonthlyTrendPointDto>(TrendMonths);
 
-        for (var cursor = from; cursor < to; cursor = cursor.AddMonths(1))
+        for (var i = TrendMonths - 1; i >= 0; i--)
         {
-            // Fines are already inside the fee totals — see GetFinanceAsync.
-            var income = Total(feeByMonth, cursor) + Total(otherByMonth, cursor);
-            var expense = Total(expenseByMonth, cursor);
-            var payout = Total(payoutByMonth, cursor);
+            var cycle = labelMonth.AddMonths(-i);
+            var (start, end) = CycleRange(cycle, startDay);
+            var report = await CycleReportAsync(cycle, startDay, ct);
 
-            var label = CultureInfo.InvariantCulture.DateTimeFormat.GetAbbreviatedMonthName(cursor.Month);
-            points.Add(new MonthlyTrendPointDto(cursor.Year, cursor.Month, label, income, expense, payout));
+            var label = CultureInfo.InvariantCulture.DateTimeFormat.GetAbbreviatedMonthName(cycle.Month);
+            points.Add(new MonthlyTrendPointDto(
+                cycle.Year, cycle.Month, label,
+                report.TotalIncome, report.TotalCost - report.TeacherPayouts, report.TeacherPayouts));
         }
 
         return points;
-
-        static decimal Total(List<MonthTotal> source, DateOnly month) =>
-            source.FirstOrDefault(x => x.Year == month.Year && x.Month == month.Month)?.Total ?? 0m;
     }
-
-    /// <summary>Per-month rollup shared by the five trend queries.</summary>
-    private sealed record MonthTotal(int Year, int Month, decimal Total);
 
     private async Task<IReadOnlyList<CourseEnrolmentDto>> GetCourseEnrolmentAsync(CancellationToken ct)
     {

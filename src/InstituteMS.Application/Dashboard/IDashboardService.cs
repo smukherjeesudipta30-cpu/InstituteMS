@@ -4,7 +4,11 @@ namespace InstituteMS.Application.Dashboard;
 
 public interface IDashboardService
 {
-    Task<DashboardSummaryDto> GetSummaryAsync(CancellationToken ct = default);
+    /// <param name="cycleMonth">
+    /// Any day in the month a pay cycle ends in (September 2026 = the 26 Aug to
+    /// 25 Sep cycle); null for the cycle running today.
+    /// </param>
+    Task<DashboardSummaryDto> GetSummaryAsync(DateOnly? cycleMonth = null, CancellationToken ct = default);
 
     /// <summary>
     /// Marks one enquiry as dealt with, so it leaves the dashboard and the badge

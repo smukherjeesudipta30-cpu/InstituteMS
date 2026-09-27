@@ -81,9 +81,37 @@ public record DashboardFinanceDto(
     /// before the current month, so without this the dashboard would show a wall of
     /// zeros with no explanation.
     /// </summary>
-    DateOnly? LastPaymentOn);
+    DateOnly? LastPaymentOn,
 
-/// <summary>One point on the 12-month income-vs-cost chart.</summary>
+    /// <summary>
+    /// The pay cycle these figures cover (e.g. 26 Aug to 25 Sep with the default
+    /// start day of 26), named by the month it ends in — "September 2026" — the
+    /// same way the pay forms name it. The "ThisMonth" fields above are this cycle.
+    /// </summary>
+    DateOnly CycleStart = default,
+    DateOnly CycleEnd = default,
+    string CycleLabel = "",
+
+    /// <summary>Admission fees received in the cycle (inside the total income).</summary>
+    decimal AdmissionFees = 0m,
+    /// <summary>Exam fees received in the cycle (inside the total income).</summary>
+    decimal ExamFees = 0m,
+    /// <summary>Receptionists' pay in the cycle (inside the total cost).</summary>
+    decimal ReceptionistPay = 0m,
+    /// <summary>
+    /// Every other cost in the total — referral commission and administrative
+    /// expenses — as one unnamed figure, so the dashboard adds up exactly to the
+    /// Income report without naming anything a back-office viewer should not see.
+    /// </summary>
+    decimal OtherCosts = 0m,
+
+    /// <summary>The pay cycle start day (26 by default) — the cycle runs to the day before, next month.</summary>
+    int PayCycleStartDay = 26);
+
+/// <summary>
+/// One pay cycle on the 12-cycle income-vs-cost chart. Year and Month name the
+/// month the cycle ends in; Expense is every cost other than the teachers' share.
+/// </summary>
 public record MonthlyTrendPointDto(
     int Year,
     int Month,
