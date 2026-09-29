@@ -219,6 +219,11 @@ public class TeacherService : ITeacherService
     {
         var payouts = _db.TeacherFees.AsNoTracking().Where(f => f.TeacherId == teacherId);
 
+        // A teacher who takes no fee share has only 0 rows, kept to hold each
+        // bill's teacher count - they are not earnings, so not listed.
+        if (await _db.Teachers.AnyAsync(t => t.Id == teacherId && t.NoFeeShare, ct))
+            payouts = payouts.Where(f => f.Salary != 0m);
+
         if (from is { } start) payouts = payouts.Where(f => f.PaidOn >= start);
         if (to is { } end) payouts = payouts.Where(f => f.PaidOn <= end);
 

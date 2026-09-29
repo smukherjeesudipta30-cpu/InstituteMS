@@ -299,6 +299,9 @@ public class FeeService : IFeeService
         var salaryEach = LateFineCalculator.TeacherSalaryEach(
             request.InstallmentAmount, request.TeacherPercentage, teacherCount);
 
+        // Teachers paid another way (Teacher.NoFeeShare) still get their row, at 0.
+        var noShare = await NoFeeShareTeachersAsync(teacherIds, ct);
+
         var strategy = _db.Database.CreateExecutionStrategy();
 
         var recorded = await strategy.ExecuteAsync(async () =>
@@ -377,7 +380,8 @@ public class FeeService : IFeeService
                 CreatedOn = DateTime.Now
             });
 
-            // 4. one payout row per assigned teacher
+            // 4. one payout row per assigned teacher - 0 for one who takes no fee
+            // share, so the bill still counts them and a co-teacher's share holds.
             foreach (var teacherId in teacherIds)
             {
                 _db.TeacherFees.Add(new TeacherFee
@@ -385,7 +389,7 @@ public class FeeService : IFeeService
                     TeacherId = teacherId,
                     StudentRegistrationId = reg,
                     BillNo = billNo,
-                    Salary = salaryEach,
+                    Salary = noShare.Contains(teacherId) ? 0m : salaryEach,
                     PaidOn = request.FeeDate,
                     CreatedBy = actor,
                     CreatedOn = DateTime.Now
@@ -406,6 +410,18 @@ public class FeeService : IFeeService
         await SendReceiptAsync(recorded.Id, actor, ct);
 
         return Result<FeeRecordedDto>.Success(recorded);
+    }
+
+    /// <summary>Of these teachers, the ones who take no share of student fees (Teacher.NoFeeShare).</summary>
+    private async Task<HashSet<int>> NoFeeShareTeachersAsync(IEnumerable<int> teacherIds, CancellationToken ct)
+    {
+        var ids = teacherIds.Distinct().ToList();
+        if (ids.Count == 0) return [];
+
+        return (await _db.Teachers.AsNoTracking()
+            .Where(t => ids.Contains(t.Id) && t.NoFeeShare)
+            .Select(t => t.Id)
+            .ToListAsync(ct)).ToHashSet();
     }
 
     public async Task<Result<bool>> UpdatePaymentAsync(
@@ -475,9 +491,11 @@ public class FeeService : IFeeService
             }
 
             var payouts = await _db.TeacherFees.Where(t => t.BillNo == billNo).ToListAsync(ct);
+            var noShare = await NoFeeShareTeachersAsync(
+                payouts.Where(p => p.TeacherId is not null).Select(p => p.TeacherId!.Value), ct);
             foreach (var payout in payouts)
             {
-                payout.Salary = salaryEach;
+                payout.Salary = payout.TeacherId is int tid && noShare.Contains(tid) ? 0m : salaryEach;
                 payout.PaidOn = request.FeeDate;
             }
         }

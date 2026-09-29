@@ -87,28 +87,36 @@ public class HonorariumService : IHonorariumService
     /// amount must not end another branch's, so each is allocated on its own.
     /// </summary>
     internal static List<(DateOnly Month, decimal Amount)> AllocateByBranch(
-        IReadOnlyList<ProprietorHonorarium> rates, DateOnly from, DateOnly to) =>
+        IReadOnlyList<ProprietorHonorarium> rates, DateOnly from, DateOnly to, int payCycleStartDay) =>
         rates.GroupBy(r => r.Branch)
-            .SelectMany(g => Allocate(g.ToList(), from, to))
+            .SelectMany(g => Allocate(g.ToList(), from, to, payCycleStartDay))
             .GroupBy(m => m.Month)
             .Select(g => (g.Key, g.Sum(m => m.Amount)))
             .OrderBy(m => m.Key)
             .ToList();
 
     /// <summary>
-    /// The honorarium falling in [from, to], one entry per calendar month touched.
-    /// It is a fixed one-time monthly payment, so every month the range touches
-    /// carries the full amount - a 1-15 September report carries all of
-    /// September's, never a pro-rata share by days.
+    /// The honorarium in [from, to]: a fixed one-time monthly payment, paid per
+    /// PAY CYCLE (26th to 25th by default, named by the month it ends in). A
+    /// month's amount counts, in full, when its cycle ENDS inside the range - so
+    /// each month is charged exactly once whatever the dates: 26 Aug - 25 Sep
+    /// carries September's only, 1 - 30 Apr carries April's, and a year to 25 Sep
+    /// carries January to September. Never pro rata by days.
     /// </summary>
     internal static List<(DateOnly Month, decimal Amount)> Allocate(
-        IReadOnlyList<ProprietorHonorarium> rates, DateOnly from, DateOnly to)
+        IReadOnlyList<ProprietorHonorarium> rates, DateOnly from, DateOnly to, int payCycleStartDay)
     {
         var result = new List<(DateOnly, decimal)>();
         if (to < from || rates.Count == 0) return result;
 
-        for (var month = FirstOfMonth(from); month <= to; month = month.AddMonths(1))
+        var first = PayCycles.LabelMonth(from, payCycleStartDay);
+        var last = PayCycles.LabelMonth(to, payCycleStartDay);
+
+        for (var month = first; month <= last; month = month.AddMonths(1))
         {
+            var cycleEnd = PayCycles.Range(month, payCycleStartDay).End;
+            if (cycleEnd < from || cycleEnd > to) continue;
+
             var rate = rates.Where(r => r.EffectiveFrom <= month)
                 .OrderByDescending(r => r.EffectiveFrom).FirstOrDefault()?.MonthlyAmount ?? 0m;
             if (rate == 0m) continue;

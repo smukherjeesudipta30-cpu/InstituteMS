@@ -396,9 +396,10 @@ public class IncomeService : IIncomeService
                     ? AdministrativeExpensesLabel
                     : "Proprietor honorarium";
                 var rates = await HonorariumRatesQuery(branch).ToListAsync(ct);
+                var startDay = await PayCycleStartDayAsync(ct);
                 var items = rates
                     .GroupBy(r => r.Branch)
-                    .SelectMany(g => HonorariumService.Allocate(g.ToList(), from, to)
+                    .SelectMany(g => HonorariumService.Allocate(g.ToList(), from, to, startDay)
                         .Select(m => (g.Key, m.Month, m.Amount)))
                     .OrderByDescending(m => m.Month)
                     .ThenBy(m => m.Key)
@@ -422,16 +423,21 @@ public class IncomeService : IIncomeService
     /* ------------------------------------------------------------- monthly */
 
     /// <summary>
-    /// The proprietor's honorarium per calendar month of the range (the full
-    /// monthly amount for every month touched) — that branch's only, or every
-    /// branch plus the institute-wide amount when no branch is given.
+    /// The proprietor's honorarium in the range, one full monthly amount per pay
+    /// cycle that ends inside it (see <see cref="HonorariumService.Allocate"/>) —
+    /// that branch's only, or every branch plus the institute-wide amount when no
+    /// branch is given.
     /// </summary>
     private async Task<List<(DateOnly Month, decimal Amount)>> HonorariumByMonthAsync(
         DateOnly from, DateOnly to, string? branch, CancellationToken ct)
     {
         var rates = await HonorariumRatesQuery(branch).ToListAsync(ct);
-        return HonorariumService.AllocateByBranch(rates, from, to);
+        return HonorariumService.AllocateByBranch(rates, from, to, await PayCycleStartDayAsync(ct));
     }
+
+    /// <summary>The pay cycle start day Admin set (26 by default).</summary>
+    private async Task<int> PayCycleStartDayAsync(CancellationToken ct) =>
+        await _db.PayrollSettings.AsNoTracking().Select(p => (int?)p.PayCycleStartDay).FirstOrDefaultAsync(ct) ?? 26;
 
     private IQueryable<Domain.Entities.ProprietorHonorarium> HonorariumRatesQuery(string? branch)
     {

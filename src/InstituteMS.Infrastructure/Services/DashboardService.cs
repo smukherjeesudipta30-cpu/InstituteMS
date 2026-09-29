@@ -52,10 +52,14 @@ public class DashboardService : IDashboardService
             .Select(p => (int?)p.PayCycleStartDay)
             .FirstOrDefaultAsync(ct) ?? 26;
 
+        /* Only a COMPLETED cycle is shown: while October's cycle is running, the
+           newest is September's, and October appears once it ends. A request for
+           a later cycle falls back to the last completed one. */
         var today = DateOnly.FromDateTime(DateTime.Today);
-        var labelMonth = cycleMonth is { } m
+        var lastCompleted = PayCycles.LastCompletedLabelMonth(today, startDay);
+        var labelMonth = cycleMonth is { } m && new DateOnly(m.Year, m.Month, 1) <= lastCompleted
             ? new DateOnly(m.Year, m.Month, 1)
-            : CycleLabelMonth(today, startDay);
+            : lastCompleted;
 
         var counts = await GetCountsAsync(ct);
 
@@ -164,28 +168,9 @@ public class DashboardService : IDashboardService
             courses, teachers, staffAccounts, studentAccounts, enquiries);
     }
 
-    /// <summary>The month the pay cycle running on <paramref name="day"/> ends in — the cycle's name.</summary>
-    internal static DateOnly CycleLabelMonth(DateOnly day, int startDay)
-    {
-        var month = new DateOnly(day.Year, day.Month, 1);
-        // With a start day of 1 the cycle is the calendar month itself. Otherwise
-        // from the start day on, the running cycle ends next month.
-        return startDay > 1 && day.Day >= startDay ? month.AddMonths(1) : month;
-    }
-
     /// <summary>First and last day of the cycle named by <paramref name="labelMonth"/>.</summary>
-    internal static (DateOnly Start, DateOnly End) CycleRange(DateOnly labelMonth, int startDay)
-    {
-        var month = new DateOnly(labelMonth.Year, labelMonth.Month, 1);
-        if (startDay <= 1)
-            return (month, month.AddMonths(1).AddDays(-1));
-
-        // Short months: a start day past the month's end falls on its last day.
-        var prev = month.AddMonths(-1);
-        var start = new DateOnly(prev.Year, prev.Month, Math.Min(startDay, DateTime.DaysInMonth(prev.Year, prev.Month)));
-        var end = new DateOnly(month.Year, month.Month, Math.Min(startDay - 1, DateTime.DaysInMonth(month.Year, month.Month)));
-        return (start, end);
-    }
+    private static (DateOnly Start, DateOnly End) CycleRange(DateOnly labelMonth, int startDay) =>
+        PayCycles.Range(labelMonth, startDay);
 
     /// <summary>
     /// The Income report for one pay cycle, with the proprietor's honorarium
@@ -239,7 +224,9 @@ public class DashboardService : IDashboardService
         var (start, end) = CycleRange(labelMonth, startDay);
         var report = (await income.GetReportAsync(start, end, null, ct)).Value!;
 
-        var once = HonorariumService.AllocateByBranch(rates, labelMonth, labelMonth).Sum(m => m.Amount);
+        // The Income report now charges each cycle's honorarium exactly once itself,
+        // so this is a safeguard that finds nothing to correct.
+        var once = HonorariumService.AllocateByBranch(rates, start, end, startDay).Sum(m => m.Amount);
         var excess = report.ProprietorHonorarium - once;
         if (excess == 0m) return report;
 

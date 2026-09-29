@@ -20,6 +20,7 @@ public class TeacherConfiguration : IEntityTypeConfiguration<Teacher>
         b.Property(x => x.Qualification).HasColumnName("Qualification").HasMaxLength(200);
         b.Property(x => x.ComputerTraining).HasColumnName("ComputerTraining").HasMaxLength(200);
         b.Property(x => x.IsTechnical).HasColumnName("IsTechnical");
+        b.Property(x => x.NoFeeShare).HasColumnName("NoFeeShare");
         b.Property(x => x.Branch).HasColumnName("Branch").HasMaxLength(100);
         b.Property(x => x.IsActive).HasColumnName("IsActive");
         // The legacy application inserts into this table with "INSERT INTO t

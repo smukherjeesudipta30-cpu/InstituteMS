@@ -41,6 +41,14 @@ public class Teacher
     /// </summary>
     public bool IsTechnical { get; set; }
 
+    /// <summary>
+    /// Takes no share of student fees - paid another way (the proprietor, paid
+    /// only by the Proprietor Honorarium). Their students stay theirs; each fee
+    /// still records a payout row for them so the bill keeps its teacher count
+    /// and a co-teacher's share is unchanged, but that row is always 0.
+    /// </summary>
+    public bool NoFeeShare { get; set; }
+
     public string? CreatedBy { get; set; }
     public DateTime CreatedOn { get; set; }
     public string? ModifiedBy { get; set; }

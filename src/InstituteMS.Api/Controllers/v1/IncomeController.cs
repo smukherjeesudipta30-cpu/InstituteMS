@@ -1,5 +1,7 @@
 using InstituteMS.Application.Common;
 using InstituteMS.Application.Income;
+using InstituteMS.Application.Reports;
+using InstituteMS.Application.Reports;
 using InstituteMS.Domain.Common;
 using InstituteMS.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -28,8 +30,31 @@ namespace InstituteMS.Api.Controllers.v1;
 public class IncomeController : ApiControllerBase
 {
     private readonly IIncomeService _income;
+    private readonly IReportService _reports;
 
-    public IncomeController(IIncomeService income) => _income = income;
+    public IncomeController(IIncomeService income, IReportService reports)
+    {
+        _income = income;
+        _reports = reports;
+    }
+
+    /// <summary>
+    /// Money is reported only for COMPLETED pay cycles: while a cycle is still
+    /// running (e.g. 26 Sep to 25 Oct), nothing after the last completed one
+    /// (25 Sep) can be reported, so no one reads a part-cycle as final figures.
+    /// Returns the refusal message, or null when the range is allowed.
+    /// </summary>
+    private async Task<string?> PastLastCompletedCycleAsync(DateOnly to, CancellationToken ct)
+    {
+        var startDay = (await _reports.GetPayrollSettingsAsync(ct)).PayCycleStartDay;
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var lastEnd = PayCycles.LastCompletedEnd(today, startDay);
+        if (to <= lastEnd) return null;
+
+        var running = PayCycles.Range(PayCycles.LabelMonth(today, startDay), startDay);
+        return $"The pay cycle {running.Start:d MMM} to {running.End:d MMM yyyy} is not complete yet. " +
+               $"Reports run up to {lastEnd:d MMM yyyy}, the end of the last completed cycle.";
+    }
 
     /// <summary>Admin and SuperAdmin see the honorarium by name; everyone else allowed here does not.</summary>
     private bool SeesProprietorByName =>
@@ -58,6 +83,9 @@ public class IncomeController : ApiControllerBase
         [FromQuery] string? branch,
         CancellationToken ct)
     {
+        if (await PastLastCompletedCycleAsync(to, ct) is { } notYet)
+            return Envelope(Result<IncomeReportDto>.Failure(notYet));
+
         var result = await _income.GetReportAsync(from, to, branch, ct);
 
         if (result.Succeeded && result.Value is { } report && !SeesProprietorByName)
@@ -87,6 +115,9 @@ public class IncomeController : ApiControllerBase
         // they come back named "Administrative expenses" too.
         if (query.Section == IncomeSection.ProprietorHonorarium && !SeesProprietorByName)
             return Forbid();
+
+        if (await PastLastCompletedCycleAsync(query.To, ct) is { } notYet)
+            return Envelope(Result<bool>.Failure(notYet));
 
         return Envelope(await _income.GetDetailAsync(query, ct));
     }

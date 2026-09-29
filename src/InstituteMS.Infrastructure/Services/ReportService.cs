@@ -956,6 +956,11 @@ public class ReportService : IReportService
                         && f.PaidOn >= from
                         && f.PaidOn <= to);
 
+        // A teacher who takes no fee share has only 0 rows (kept for each bill's
+        // teacher count) - not earnings, so not listed.
+        if (teacher.NoFeeShare)
+            earningsQuery = earningsQuery.Where(f => f.Salary != 0m);
+
         var totalEarned = await earningsQuery.SumAsync(f => (decimal?)f.Salary ?? 0m, ct);
 
         var earnings = await earningsQuery
