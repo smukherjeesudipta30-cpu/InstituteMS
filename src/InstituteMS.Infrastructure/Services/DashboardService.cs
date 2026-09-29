@@ -103,16 +103,26 @@ public class DashboardService : IDashboardService
             .ToListAsync(ct);
 
     /// <summary>
-    /// The alerts this viewer may see. An Editor's password-change alert carries
-    /// their new password and is SuperAdmin's alone: an Admin (or Editor) neither
-    /// sees it, counts it in the badge, nor can mark it read. The alert records
-    /// the person's role in CourseName (see AuthService), which is what this reads.
+    /// Password-change alerts carry the new password, so an alert about anyone who
+    /// can reach this dashboard — SuperAdmin, Admin or Editor — is SuperAdmin's
+    /// alone. Hiding only an Editor's left the others open: an Editor could read a
+    /// new Admin or SuperAdmin password here and sign in as them. Receptionist,
+    /// Teacher and Student alerts stay visible to Admin and Editor as before.
+    /// </summary>
+    private static readonly string[] SuperAdminOnlyPasswordRoles =
+        [UserRoles.SuperAdmin, UserRoles.Admin, UserRoles.Editor];
+
+    /// <summary>
+    /// The alerts this viewer may see: an Admin or Editor neither sees a
+    /// SuperAdmin-only alert, counts it in the badge, nor can mark it read. The
+    /// alert records the person's role in CourseName (see AuthService), which is
+    /// what this reads — so existing alerts are covered too.
     /// </summary>
     private IQueryable<Domain.Entities.AdminNotification> VisibleNotifications(bool viewerIsSuperAdmin) =>
         viewerIsSuperAdmin
             ? _db.AdminNotifications
             : _db.AdminNotifications.Where(n => !(n.Type == Domain.Entities.AdminNotificationTypes.StaffPasswordChange
-                                                  && n.CourseName == UserRoles.Editor));
+                                                  && SuperAdminOnlyPasswordRoles.Contains(n.CourseName)));
 
     public async Task<Result<bool>> MarkNotificationReadAsync(
         int id, string? actor, bool viewerIsSuperAdmin = false, CancellationToken ct = default)
