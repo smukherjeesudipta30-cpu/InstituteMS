@@ -399,7 +399,7 @@ public class FeeService : IFeeService
             await _db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
 
-            return new FeeRecordedDto(fee.Id, billNo, salaryEach);
+            return new FeeRecordedDto(fee.Id, billNo, salaryEach, teacherIds.Count(t => !noShare.Contains(t)));
         });
 
         _logger.LogInformation(

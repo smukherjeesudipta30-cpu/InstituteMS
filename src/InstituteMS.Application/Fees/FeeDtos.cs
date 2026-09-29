@@ -128,7 +128,13 @@ public record FeeSaveRequest
     public string PaymentMode { get; init; } = "Cash";
 }
 
-public record FeeRecordedDto(int Id, string BillNo, decimal TeacherSalaryEach);
+/// <param name="TeacherSalaryEach">The share paid to each teacher who takes one.</param>
+/// <param name="SharingTeachers">
+/// How many of the bill's teachers take that share — fewer than the bill's
+/// teachers when one is paid another way (Teacher.NoFeeShare, the proprietor),
+/// 0 when none does, so the receipt message never promises money nobody gets.
+/// </param>
+public record FeeRecordedDto(int Id, string BillNo, decimal TeacherSalaryEach, int SharingTeachers);
 
 /// <summary>Money receipt (legacy <c>MonthlyCourseFees/PrintReport</c>).</summary>
 public record FeeReceiptDto(
