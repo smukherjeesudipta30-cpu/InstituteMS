@@ -290,6 +290,14 @@ public interface IChatService
         string email, int conversationId, DeleteChatMessagesRequest request, CancellationToken ct = default);
 
     /// <summary>
+    /// "Clear chat": every message now in the conversation is deleted for the
+    /// caller only — the same as selecting them all and choosing Delete for me.
+    /// Nobody else's view changes, and new messages keep arriving as normal.
+    /// Returns how many were cleared.
+    /// </summary>
+    Task<Result<int>> ClearConversationAsync(string email, int conversationId, CancellationToken ct = default);
+
+    /// <summary>
     /// The display name to show in "X is typing", or null when the caller may
     /// not access the conversation — the hub relays nothing then.
     /// </summary>

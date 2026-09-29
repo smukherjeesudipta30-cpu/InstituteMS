@@ -1029,6 +1029,37 @@ public class ChatService : IChatService
             new ChatMessagesDeletedDto(conversationId, ids, request.ForEveryone));
     }
 
+    public async Task<Result<int>> ClearConversationAsync(string email, int conversationId, CancellationToken ct = default)
+    {
+        var me = await ResolveIdentityAsync(email, ct);
+        if (me is null)
+            return Result<int>.Failure("No account found.", ResultStatus.Unauthorized);
+
+        if (!await CanAccessAsync(me, conversationId, ct))
+            return Result<int>.Failure("That conversation is not available to you.", ResultStatus.Forbidden);
+
+        // Everything the caller can still see there right now.
+        var ids = await _db.ChatMessages.AsNoTracking()
+            .Where(m => m.ConversationId == conversationId
+                        && !_db.ChatMessagesHidden.Any(h => h.MessageId == m.Id && h.UserEmail == me.Email))
+            .Select(m => m.Id)
+            .ToListAsync(ct);
+
+        if (ids.Count == 0) return Result<int>.Success(0);
+
+        var now = DateTime.Now;
+        foreach (var id in ids)
+            _db.ChatMessagesHidden.Add(new ChatMessageHidden { MessageId = id, UserEmail = me.Email, HiddenOn = now });
+
+        await _db.SaveChangesAsync(ct);
+
+        // The caller's other tabs and devices empty the thread too; nobody else is told.
+        await _notifier.MessagesHiddenAsync(me.Email, conversationId, ids, ct);
+        await _notifier.ConversationsChangedAsync([me.Email], ct);
+
+        return Result<int>.Success(ids.Count);
+    }
+
     /* ------------------------------------------------------------- typing */
 
     public async Task<string?> GetTypingNameAsync(string email, int conversationId, CancellationToken ct = default)

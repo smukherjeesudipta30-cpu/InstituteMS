@@ -166,6 +166,17 @@ public class ChatController : ApiControllerBase
         int conversationId, [FromBody] DeleteChatMessagesRequest request, CancellationToken ct)
         => Envelope(await _chat.DeleteMessagesAsync(CurrentUserName ?? string.Empty, conversationId, request, ct));
 
+    /// <summary>
+    /// "Clear chat": deletes every message in the conversation for the caller
+    /// only. Everyone else still sees them. Any role, in any chat they belong to.
+    /// </summary>
+    [HttpPost("conversations/{conversationId:int}/clear")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> Clear(int conversationId, CancellationToken ct)
+        => Envelope(await _chat.ClearConversationAsync(CurrentUserName ?? string.Empty, conversationId, ct), "Chat cleared.");
+
     /// <summary>An attachment in a conversation the caller may access — same rule as reading messages there.</summary>
     [HttpGet("conversations/{conversationId:int}/messages/{messageId:int}/attachment")]
     [Authorize]
