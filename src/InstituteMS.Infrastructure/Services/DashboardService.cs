@@ -43,7 +43,8 @@ public class DashboardService : IDashboardService
         _scopes = scopes;
     }
 
-    public async Task<DashboardSummaryDto> GetSummaryAsync(DateOnly? cycleMonth = null, CancellationToken ct = default)
+    public async Task<DashboardSummaryDto> GetSummaryAsync(
+        DateOnly? cycleMonth = null, bool viewerIsSuperAdmin = false, CancellationToken ct = default)
     {
         /* Money is shown by PAY CYCLE (26th to 25th by default, set by Admin),
            the period teachers and receptionists are paid for, not by calendar
@@ -75,8 +76,8 @@ public class DashboardService : IDashboardService
         var admissions = await GetRecentAdmissionsAsync(ct);
         var payments = await GetRecentPaymentsAsync(ct);
         var enquiries = await GetPendingEnquiriesAsync(ct);
-        var notifications = await GetNotificationsAsync(ct);
-        var unread = await _db.AdminNotifications.CountAsync(n => n.ReadOn == null, ct);
+        var notifications = await GetNotificationsAsync(viewerIsSuperAdmin, ct);
+        var unread = await VisibleNotifications(viewerIsSuperAdmin).CountAsync(n => n.ReadOn == null, ct);
 
         return new DashboardSummaryDto(
             counts, finance, trend, enrolment, notices, admissions, payments,
@@ -88,8 +89,8 @@ public class DashboardService : IDashboardService
     /// long-unread dashboard stays a dashboard; the count beside it is of every
     /// unread one, not just those shown.
     /// </summary>
-    private async Task<IReadOnlyList<AdminNotificationDto>> GetNotificationsAsync(CancellationToken ct) =>
-        await _db.AdminNotifications
+    private async Task<IReadOnlyList<AdminNotificationDto>> GetNotificationsAsync(bool viewerIsSuperAdmin, CancellationToken ct) =>
+        await VisibleNotifications(viewerIsSuperAdmin)
             .AsNoTracking()
             .OrderBy(n => n.ReadOn == null ? 0 : 1)
             .ThenByDescending(n => n.CreatedOn)
@@ -101,10 +102,22 @@ public class DashboardService : IDashboardService
                 n.ReadOn != null))
             .ToListAsync(ct);
 
+    /// <summary>
+    /// The alerts this viewer may see. An Editor's password-change alert carries
+    /// their new password and is SuperAdmin's alone: an Admin (or Editor) neither
+    /// sees it, counts it in the badge, nor can mark it read. The alert records
+    /// the person's role in CourseName (see AuthService), which is what this reads.
+    /// </summary>
+    private IQueryable<Domain.Entities.AdminNotification> VisibleNotifications(bool viewerIsSuperAdmin) =>
+        viewerIsSuperAdmin
+            ? _db.AdminNotifications
+            : _db.AdminNotifications.Where(n => !(n.Type == Domain.Entities.AdminNotificationTypes.StaffPasswordChange
+                                                  && n.CourseName == UserRoles.Editor));
+
     public async Task<Result<bool>> MarkNotificationReadAsync(
-        int id, string? actor, CancellationToken ct = default)
+        int id, string? actor, bool viewerIsSuperAdmin = false, CancellationToken ct = default)
     {
-        var notification = await _db.AdminNotifications.FirstOrDefaultAsync(n => n.Id == id, ct);
+        var notification = await VisibleNotifications(viewerIsSuperAdmin).FirstOrDefaultAsync(n => n.Id == id, ct);
 
         if (notification is null)
             return Result<bool>.Failure("Notification not found.", ResultStatus.NotFound);
@@ -121,9 +134,9 @@ public class DashboardService : IDashboardService
     }
 
     public async Task<Result<int>> MarkAllNotificationsReadAsync(
-        string? actor, CancellationToken ct = default)
+        string? actor, bool viewerIsSuperAdmin = false, CancellationToken ct = default)
     {
-        var unread = await _db.AdminNotifications.Where(n => n.ReadOn == null).ToListAsync(ct);
+        var unread = await VisibleNotifications(viewerIsSuperAdmin).Where(n => n.ReadOn == null).ToListAsync(ct);
 
         foreach (var notification in unread)
         {

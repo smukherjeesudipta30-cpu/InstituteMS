@@ -25,7 +25,13 @@ public class DashboardController : ApiControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Summary([FromQuery] DateOnly? cycleMonth, CancellationToken ct)
-        => Envelope(await _dashboard.GetSummaryAsync(cycleMonth, ct));
+        => Envelope(await _dashboard.GetSummaryAsync(cycleMonth, ViewerIsSuperAdmin, ct));
+
+    /// <summary>
+    /// SuperAdmin by name: an Editor's password-change alert is theirs alone. A
+    /// manual IsInRole check, so SuperAdmin has to be named explicitly here.
+    /// </summary>
+    private bool ViewerIsSuperAdmin => User.IsInRole(UserRoles.SuperAdmin);
 
     /// <summary>
     /// Marks one enquiry from the public contact form as dealt with, removing it
@@ -65,11 +71,11 @@ public class DashboardController : ApiControllerBase
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> MarkNotificationRead(int id, CancellationToken ct)
-        => Envelope(await _dashboard.MarkNotificationReadAsync(id, CurrentUserName, ct), "Marked as read.");
+        => Envelope(await _dashboard.MarkNotificationReadAsync(id, CurrentUserName, ViewerIsSuperAdmin, ct), "Marked as read.");
 
     /// <summary>Dismisses every unread alert at once.</summary>
     [HttpPatch("notifications/read-all")]
     [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status200OK)]
     public async Task<IActionResult> MarkAllNotificationsRead(CancellationToken ct)
-        => Envelope(await _dashboard.MarkAllNotificationsReadAsync(CurrentUserName, ct), "All marked as read.");
+        => Envelope(await _dashboard.MarkAllNotificationsReadAsync(CurrentUserName, ViewerIsSuperAdmin, ct), "All marked as read.");
 }

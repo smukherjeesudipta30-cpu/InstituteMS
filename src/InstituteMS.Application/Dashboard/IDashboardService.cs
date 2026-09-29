@@ -8,7 +8,12 @@ public interface IDashboardService
     /// Any day in the month a pay cycle ends in (September 2026 = the 26 Aug to
     /// 25 Sep cycle); null for the cycle running today.
     /// </param>
-    Task<DashboardSummaryDto> GetSummaryAsync(DateOnly? cycleMonth = null, CancellationToken ct = default);
+    /// <param name="viewerIsSuperAdmin">
+    /// An Editor's password-change alert carries their new password, so it is shown
+    /// (and counted) for SuperAdmin only, never on an Admin's or Editor's dashboard.
+    /// </param>
+    Task<DashboardSummaryDto> GetSummaryAsync(
+        DateOnly? cycleMonth = null, bool viewerIsSuperAdmin = false, CancellationToken ct = default);
 
     /// <summary>
     /// Marks one enquiry as dealt with, so it leaves the dashboard and the badge
@@ -25,8 +30,11 @@ public interface IDashboardService
         EnquiryFilter filter, int page, int pageSize, CancellationToken ct = default);
 
     /// <summary>Dismisses one dashboard alert. Already-read is success, not an error.</summary>
-    Task<Result<bool>> MarkNotificationReadAsync(int id, string? actor, CancellationToken ct = default);
+    /// <param name="viewerIsSuperAdmin">An Editor's password-change alert is SuperAdmin's only.</param>
+    Task<Result<bool>> MarkNotificationReadAsync(
+        int id, string? actor, bool viewerIsSuperAdmin = false, CancellationToken ct = default);
 
-    /// <summary>Clears the badge. Returns how many were marked.</summary>
-    Task<Result<int>> MarkAllNotificationsReadAsync(string? actor, CancellationToken ct = default);
+    /// <summary>Clears the badge. Returns how many were marked — only alerts this viewer can see.</summary>
+    Task<Result<int>> MarkAllNotificationsReadAsync(
+        string? actor, bool viewerIsSuperAdmin = false, CancellationToken ct = default);
 }
