@@ -254,16 +254,29 @@ public class ChatHub : Hub
             .SendAsync("IncomingCall", email, fromName, callId, kind);
 
         // The closed-app path — a device push carrying the same call so a phone
-        // whose app is shut still rings and can answer. Best-effort: a failed
-        // push must never break the call for a callee who is in fact connected.
-        try
+        // whose app is shut still rings and can answer. Sent in the background,
+        // never awaited here: a hub method blocks this connection's whole message
+        // loop until it returns, keep-alive pings included, so a slow push (an
+        // FCM send can take many seconds) used to hold the caller's invite open
+        // until the server dropped the connection at 30 s — and the caller saw
+        // "connection too weak" for a call that was ringing fine. Its own scope:
+        // this hub's services are disposed as soon as the method returns.
+        var scopes = Context.GetHttpContext()?.RequestServices.GetRequiredService<IServiceScopeFactory>();
+        if (scopes is null) return;
+
+        _ = Task.Run(async () =>
         {
-            await _chat.NotifyCallPushAsync(targetEmail, email, fromName, callId, kind);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Call push notification failed for {Target}", targetEmail);
-        }
+            try
+            {
+                using var scope = scopes.CreateScope();
+                var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+                await chat.NotifyCallPushAsync(targetEmail, email, fromName, callId, kind);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Call push notification failed for {Target}", targetEmail);
+            }
+        });
     }
 
     [Authorize]
