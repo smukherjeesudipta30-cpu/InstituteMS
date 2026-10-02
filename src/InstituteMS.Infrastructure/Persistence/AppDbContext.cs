@@ -40,6 +40,7 @@ public class AppDbContext : DbContext
     public DbSet<ProprietorHonorarium> ProprietorHonoraria => Set<ProprietorHonorarium>();
     public DbSet<Holiday> Holidays => Set<Holiday>();
     public DbSet<HolidayYearImport> HolidayYearImports => Set<HolidayYearImport>();
+    public DbSet<BankStatement> BankStatements => Set<BankStatement>();
     public DbSet<ExamFeePayment> ExamFeePayments => Set<ExamFeePayment>();
     public DbSet<ExamSchedule> ExamSchedules => Set<ExamSchedule>();
     public DbSet<CertificateIssue> CertificateIssues => Set<CertificateIssue>();
