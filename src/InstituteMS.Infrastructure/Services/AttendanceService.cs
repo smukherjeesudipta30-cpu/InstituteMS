@@ -3,6 +3,7 @@ using InstituteMS.Application.Attendance;
 using InstituteMS.Application.Common;
 using InstituteMS.Application.Common.Interfaces;
 using InstituteMS.Application.Notifications;
+using InstituteMS.Domain.Common;
 using InstituteMS.Domain.Entities;
 using InstituteMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -306,7 +307,12 @@ public class AttendanceService : IAttendanceService
         var message = direction == "In"
             ? $"Welcome, {staff.Name}. You are marked in at {challenge.MarkedOn:h:mm tt}."
             : $"Goodbye, {staff.Name}. Marked out at {challenge.MarkedOn:h:mm tt}" +
-              (hours is null ? "." : $" — {hours:0.00} hour(s) today.");
+              (hours is null ? "." : $" — {hours:0.00} hour(s) today.") +
+              (staff.Type == UserRoles.Teacher && (hours ?? 0m) < _options.TeacherMinimumHours
+               && (_options.TeacherMinimumHoursFrom is null || challenge.OnDate >= _options.TeacherMinimumHoursFrom)
+                  ? $" That is under the {_options.TeacherMinimumHours:0.#} hours a teacher must be at the centre, " +
+                    "so today will count as absent unless you come back and make it up."
+                  : "");
 
         return Result<AttendanceScanResultDto>.Success(new AttendanceScanResultDto(
             staff.Name, staff.Type, challenge.Branch, direction,
@@ -622,7 +628,18 @@ public class AttendanceService : IAttendanceService
 
                 var deadline = DeadlineFor(theirRota, g.Key.OnDate, ordered[^1].ScannedOn);
                 var stillOpen = missingOut && now < deadline;
-                var countedAsLeave = missingOut && !stillOpen;
+
+                /* A teacher must be at the centre at least TeacherMinimumHours in
+                   the day. Judged only once the day is over — before then they may
+                   step out and come back — and counted as absent like a missing
+                   scan-out. */
+                var dayOver = g.Key.OnDate < DateOnly.FromDateTime(now) || now >= deadline;
+                var shortHours = !missingOut && dayOver
+                    && g.Key.StaffType == UserRoles.Teacher
+                    && (_options.TeacherMinimumHoursFrom is null || g.Key.OnDate >= _options.TeacherMinimumHoursFrom)
+                    && (hours ?? 0m) < _options.TeacherMinimumHours;
+
+                var countedAsLeave = (missingOut && !stillOpen) || shortHours;
 
                 return new AttendanceDayRowDto(
                     g.Key.OnDate,
@@ -636,7 +653,8 @@ public class AttendanceService : IAttendanceService
                     missingOut,
                     countedAsLeave,
                     stillOpen,
-                    visits);
+                    visits,
+                    shortHours);
             })
             .OrderBy(d => d.OnDate).ThenBy(d => d.StaffName)
             .ToList();

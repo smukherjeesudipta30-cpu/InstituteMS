@@ -246,7 +246,13 @@ public record AttendanceDayRowDto(
     /// than one is why FirstIn to LastOut can span far more time than Hours accounts
     /// for -- the person left and came back, rather than staying the whole span.
     /// </summary>
-    IReadOnlyList<AttendanceVisitDto> Visits);
+    IReadOnlyList<AttendanceVisitDto> Visits,
+
+    /// <summary>
+    /// A teacher's finished day under the minimum hours at the centre (3 by
+    /// default), counted as absent. <see cref="CountedAsLeave"/> is true too.
+    /// </summary>
+    bool ShortHours = false);
 
 /// <summary>One arrival and, if it happened yet, the departure that closed it.</summary>
 public record AttendanceVisitDto(DateTime In, DateTime? Out, decimal? Hours);

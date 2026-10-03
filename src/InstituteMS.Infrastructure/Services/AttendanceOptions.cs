@@ -68,4 +68,18 @@ public class AttendanceOptions
     /// absent.
     /// </remarks>
     public int AutoLeaveAfterHours { get; set; } = 8;
+
+    /// <summary>
+    /// The least time a teacher must spend at the centre for the day to count as
+    /// present — the owner's rule. A finished day under it is counted as absent,
+    /// the same as a day with no scan-out. Receptionists are not affected.
+    /// </summary>
+    public decimal TeacherMinimumHours { get; set; } = 3;
+
+    /// <summary>
+    /// The first day the minimum-hours rule applies. Earlier days keep the result
+    /// they always had — the rule is not applied to attendance already recorded.
+    /// Null applies it to every day.
+    /// </summary>
+    public DateOnly? TeacherMinimumHoursFrom { get; set; }
 }
