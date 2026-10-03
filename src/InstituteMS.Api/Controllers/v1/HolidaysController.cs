@@ -29,6 +29,17 @@ public class HolidaysController : ApiControllerBase
         => Envelope(Result<HolidayYearDto>.Success(
             await _holidays.GetYearAsync(year ?? DateTime.Today.Year, ct)));
 
+    /// <summary>
+    /// Days the institute is closed this month, for the public home
+    /// page — open to visitors who have not signed in.
+    /// </summary>
+    [HttpGet("this-month")]
+    [AllowAnonymous]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<UpcomingClosureDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ThisMonth(CancellationToken ct)
+        => Envelope(Result<IReadOnlyList<UpcomingClosureDto>>.Success(
+            await _holidays.GetMonthClosedAsync(ct)));
+
     /// <summary>Adds any holiday the Indian calendar has for that year that is not on the list yet.</summary>
     [HttpPost("sync")]
     [Authorize(Roles = UserRoles.Admin)]

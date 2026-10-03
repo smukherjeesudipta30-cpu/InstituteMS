@@ -41,6 +41,20 @@ public class HolidayService : IHolidayService
         return new HolidayYearDto(year, imported?.Source, imported?.ImportedOn, holidays);
     }
 
+    public async Task<IReadOnlyList<UpcomingClosureDto>> GetMonthClosedAsync(CancellationToken ct = default)
+    {
+        // The current month as a whole, past days included: the home page shows
+        // this month's closures and greys out the ones already gone.
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var start = new DateOnly(today.Year, today.Month, 1);
+        var end = start.AddMonths(1).AddDays(-1);
+        return await _db.Holidays.AsNoTracking()
+            .Where(h => h.IsInstituteHoliday && h.HolidayDate >= start && h.HolidayDate <= end)
+            .OrderBy(h => h.HolidayDate).ThenBy(h => h.Name)
+            .Select(h => new UpcomingClosureDto(h.HolidayDate, h.Name))
+            .ToListAsync(ct);
+    }
+
     private async Task<HolidayYearImport?> ImportYearAsync(int year, CancellationToken ct)
     {
         await ImportGate.WaitAsync(ct);

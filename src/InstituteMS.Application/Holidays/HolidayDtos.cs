@@ -22,6 +22,9 @@ public record HolidayDto(
 /// </summary>
 public record HolidayYearDto(int Year, string? Source, DateTime? LoadedOn, IReadOnlyList<HolidayDto> Holidays);
 
+/// <summary>One day this month the institute is closed, as shown to the public.</summary>
+public record UpcomingClosureDto(DateOnly Date, string Name);
+
 /// <summary>Adds or edits one holiday. Category defaults to "Institute" for a day Admin adds.</summary>
 public record HolidaySaveRequest
 {
@@ -59,6 +62,12 @@ public interface IHolidayService
     /// removes a day already there. Returns how many were added.
     /// </summary>
     Task<Result<int>> SyncFromCalendarAsync(int year, string? actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Days the institute is closed in the current month (past days included),
+    /// in date order — for the public home page, so name and date only.
+    /// </summary>
+    Task<IReadOnlyList<UpcomingClosureDto>> GetMonthClosedAsync(CancellationToken ct = default);
 
     Task<Result<HolidayDto>> CreateAsync(HolidaySaveRequest request, string? actor, CancellationToken ct = default);
     Task<Result<HolidayDto>> UpdateAsync(int id, HolidaySaveRequest request, string? actor, CancellationToken ct = default);
