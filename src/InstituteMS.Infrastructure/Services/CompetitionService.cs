@@ -106,9 +106,16 @@ public class CompetitionService : ICompetitionService
             && today >= c.RegistrationOpensOn
             && (c.RegistrationClosesOn is null || today <= c.RegistrationClosesOn);
 
-        static CompetitionGroupDto Map(CompetitionGroup g) => new(
-            g.Id, g.Kind, g.Code, g.LabelEnglish, g.LabelBengali,
-            g.MinAge, g.MaxAge, g.MinClass, g.MaxClass, g.Capacity, g.SortOrder);
+        var batchRanges = BatchRanges(groups.Where(g => g.Kind == "Dance").Select(g => (g.Id, g.Capacity, g.SortOrder)));
+
+        CompetitionGroupDto Map(CompetitionGroup g)
+        {
+            var range = batchRanges.TryGetValue(g.Id, out var r) ? r : ((int, int?)?)null;
+            return new(
+                g.Id, g.Kind, g.Code, g.LabelEnglish, g.LabelBengali,
+                g.MinAge, g.MaxAge, g.MinClass, g.MaxClass, g.Capacity, g.SortOrder,
+                range?.Item1, range?.Item2);
+        }
 
         return new CompetitionPublicDto(
             c.Id, c.Year, c.EventDate, c.Venue, c.VenueBengali,
@@ -736,6 +743,32 @@ public class CompetitionService : ICompetitionService
     }
 
     /// <summary>
+    /// Each dance group's block of chest numbers: groups in display order, each
+    /// taking as many numbers as it has places. A group with no capacity set goes
+    /// after every capped one, open-ended (<c>To</c> null).
+    /// </summary>
+    internal static Dictionary<int, (int From, int? To)> BatchRanges(
+        IEnumerable<(int Id, int? Capacity, int SortOrder)> danceGroups)
+    {
+        var ordered = danceGroups.OrderBy(g => g.Capacity is null).ThenBy(g => g.SortOrder).ThenBy(g => g.Id).ToList();
+        var ranges = new Dictionary<int, (int From, int? To)>();
+        var start = 1;
+        foreach (var g in ordered)
+        {
+            if (g.Capacity is { } cap && cap > 0)
+            {
+                ranges[g.Id] = (start, start + cap - 1);
+                start += cap;
+            }
+            else
+            {
+                ranges[g.Id] = (start, null);
+            }
+        }
+        return ranges;
+    }
+
+    /// <summary>
     /// The next number for one competition in one year — <c>AVI/DRW/2027/001</c>.
     /// </summary>
     /// <remarks>
@@ -756,15 +789,19 @@ public class CompetitionService : ICompetitionService
         var serial = last + 1;
         var tag = kind == "Drawing" ? "DRW" : "DNC";
 
-        /* The chest number, for dance only: 1 upwards within the group, which is
-           what the dancer prints and pins on. Drawing carries none — the owner was
-           clear that a registration number is all it needs.
+        /* The chest number, for dance only, which the dancer prints and pins on.
+           Drawing carries none — the owner was clear that a registration number is
+           all it needs.
 
-           Taken as MAX + 1 within the group, inside the caller's transaction, with a
-           unique index on (GroupId, BatchNo) behind it: two forms arriving together
-           cannot be given the same number, because the second insert fails on the
-           index rather than quietly issuing a duplicate. Two dancers wearing 7 is
-           precisely the failure worth paying a transaction for. */
+           Unique across the whole competition, not just the group: each dance group
+           owns its own block, sized by its capacity in display order — with places
+           of 30, 30 and 15 that is 1-30, 31-60 and 61-75 — so no two dancers on the
+           day ever wear the same number, whichever group they are in.
+
+           Taken inside the caller's transaction, checked against every number
+           already issued in the competition, with a unique index on
+           (CompetitionId, BatchNo) behind it (migration 078): two forms arriving
+           together cannot be given the same number. */
         int? batchNo = null;
 
         if (kind == "Dance")
@@ -775,20 +812,30 @@ public class CompetitionService : ICompetitionService
             if (capacity is { } limit && takenNow >= limit)
                 throw new CompetitionGroupFullException(limit);
 
-            /* The LOWEST free number, not MAX + 1.
-
-               A cancelled entry gives its number back, and MAX + 1 would then run
-               1..14, 16 — a pile of printed chest numbers that no longer matches the
-               register, and a group of fifteen dancers whose highest number is
-               sixteen. Taking the lowest gap keeps every group reading 1..n. */
-            var used = await _db.CompetitionEntries
-                .Where(e => e.GroupId == groupId && e.BatchNo != null)
-                .Select(e => e.BatchNo!.Value)
+            var groups = await _db.CompetitionGroups.AsNoTracking()
+                .Where(g => g.CompetitionId == competition.Id && g.Kind == "Dance")
+                .Select(g => new { g.Id, g.Capacity, g.SortOrder })
                 .ToListAsync(ct);
+            var (from, to) = BatchRanges(groups.Select(g => (g.Id, g.Capacity, g.SortOrder)))[groupId];
 
-            var taken = used.ToHashSet();
-            var next = 1;
-            while (taken.Contains(next)) next++;
+            var taken = (await _db.CompetitionEntries
+                    .Where(e => e.CompetitionId == competition.Id && e.BatchNo != null)
+                    .Select(e => e.BatchNo!.Value)
+                    .ToListAsync(ct))
+                .ToHashSet();
+
+            /* The LOWEST free number in the group's block, not MAX + 1: a cancelled
+               entry gives its number back, so the block keeps reading from its start.
+               Should the block have no gap left (numbers issued before blocks
+               existed can sit inside it), the next number past every block is used —
+               still unique, never a repeat. */
+            var next = from;
+            while (taken.Contains(next) && (to is null || next <= to)) next++;
+            if (to is not null && next > to)
+            {
+                next = Math.Max(to.Value, taken.Count == 0 ? 0 : taken.Max()) + 1;
+                while (taken.Contains(next)) next++;
+            }
 
             batchNo = next;
         }

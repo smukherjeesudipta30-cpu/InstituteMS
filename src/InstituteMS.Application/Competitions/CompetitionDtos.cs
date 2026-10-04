@@ -74,7 +74,15 @@ public record CompetitionGroupDto(
     /// </summary>
     int? Capacity,
 
-    int SortOrder);
+    int SortOrder,
+
+    /// <summary>
+    /// The block of chest numbers this dance group issues from — unique across
+    /// the competition, e.g. 31 to 60. Null for drawing; <see cref="BatchTo"/>
+    /// null when the group has no capacity set.
+    /// </summary>
+    int? BatchFrom = null,
+    int? BatchTo = null);
 
 public record CompetitionOrganiserDto(
     int Id, string Name, string? Designation, string? Phone, int SortOrder, bool IsActive);
