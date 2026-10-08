@@ -1601,7 +1601,15 @@ public class ReportService : IReportService
            see GetCourseResultAsync. A student already marked "course completed"
            when that rule went live keeps the rule they were graded under
            (dbo.CertificateLegacyRule, migration 079), so their grade never moves. */
-        var keepsOldRule = await _db.Database
+        // Until migration 079 has run there is no list yet: everyone keeps the old
+        // rule then, rather than every certificate failing on a missing table.
+        // Two queries: SQL Server resolves table names when it compiles a
+        // statement, so one that merely mentions a missing table fails outright.
+        var listExists = await _db.Database
+            .SqlQuery<int>($"SELECT CASE WHEN OBJECT_ID('dbo.CertificateLegacyRule') IS NULL THEN 0 ELSE 1 END AS [Value]")
+            .SingleAsync(ct) == 1;
+
+        var keepsOldRule = !listExists || await _db.Database
             .SqlQuery<int>($"SELECT COUNT(*) AS [Value] FROM dbo.CertificateLegacyRule WHERE StuRegId = {regId}")
             .SingleAsync(ct) > 0;
 
@@ -2274,35 +2282,39 @@ public class ReportService : IReportService
             .OrderBy(m => m.ExamDate).ThenBy(m => m.Id)
             .ToListAsync(ct);
 
-        /* Rows on the SAME date are one sitting entered more than once — a
-           correction re-typed with a different split (AVI/2316/22 has Practical
-           40/50 + Theory 30/50, then 35/40 + 44/60, both on 1 Oct 2023). The
-           latest entry is the one that stands; adding both mixed the mistake into
-           the grade. Only rows on different dates are real re-sits, totalled. */
-        offline = offline
-            .GroupBy(m => m.ExamDate)
-            .Select(g => g.OrderByDescending(m => m.Id).First())
-            .OrderBy(m => m.ExamDate).ThenBy(m => m.Id)
-            .ToList();
-
         var lines = new List<(string Name, int Full, int Obtained)>();
         foreach (var s in sittings)
         {
             var kind = string.Equals(s.PaperType, "Practical", StringComparison.OrdinalIgnoreCase) ? "Practical" : "Theory";
             lines.Add((kind, s.Full, s.Score));
         }
+
+        /* Within one date the register holds one sitting, however many rows it
+           took to type: the LATEST entry for each subject stands. A correction
+           re-typed with a different split (AVI/2316/22 has Practical 40/50 +
+           Theory 30/50, then 35/40 + 44/60, both on 1 Oct 2023) replaces the
+           mistake instead of being averaged with it — while Theory and Practical
+           typed as two separate rows on the same day both still count, which
+           keeping only the latest whole row would have lost. Rows on different
+           dates are real re-sits, totalled. */
+        var offlineEntries = new List<(DateOnly? Date, string Subject, int Id, int Full, int Obtained)>();
         foreach (var m in offline)
         {
             void Add(string? subject, int? fullMarks, int? obtainedMarks)
             {
                 if (string.IsNullOrWhiteSpace(subject) || (fullMarks ?? 0) <= 0) return;
-                lines.Add((subject.Trim(), fullMarks ?? 0, obtainedMarks ?? 0));
+                offlineEntries.Add((m.ExamDate, subject.Trim(), m.Id, fullMarks ?? 0, obtainedMarks ?? 0));
             }
             Add(m.Subject1, m.FullMarks1, m.ObtainedMarks1);
             Add(m.Subject2, m.FullMarks2, m.ObtainedMarks2);
             Add(m.Subject3, m.FullMarks3, m.ObtainedMarks3);
             Add(m.Subject4, m.FullMarks4, m.ObtainedMarks4);
         }
+
+        lines.AddRange(offlineEntries
+            .GroupBy(e => (e.Date, Subject: e.Subject.ToLowerInvariant()))
+            .Select(g => g.OrderByDescending(e => e.Id).First())
+            .Select(e => (e.Subject, e.Full, e.Obtained)));
 
         if (lines.Count == 0)
             return new CourseResult(null, "No exam result has been recorded yet, so a certificate cannot be issued.");
