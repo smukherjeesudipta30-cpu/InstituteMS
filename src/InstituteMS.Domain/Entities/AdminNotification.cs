@@ -49,4 +49,7 @@ public static class AdminNotificationTypes
     public const string StaffPasswordChange = "StaffPasswordChange";
     public const string CompetitionDraftPasswordChange = "CompetitionDraftPasswordChange";
     public const string CompetitionDraftStarted = "CompetitionDraftStarted";
+
+    /// <summary>Someone applied for a job vacancy — seen by Admin, Editor and SuperAdmin.</summary>
+    public const string JobApplication = "JobApplication";
 }

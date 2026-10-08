@@ -71,6 +71,8 @@ public static class DependencyInjection
         services.AddScoped<IHonorariumService, HonorariumService>();
         services.AddScoped<InstituteMS.Application.Holidays.IHolidayService, HolidayService>();
         services.AddScoped<InstituteMS.Application.BankStatements.IBankStatementService, BankStatementService>();
+        services.AddScoped<InstituteMS.Application.Careers.ICareerService, CareerService>();
+        services.AddScoped<InstituteMS.Application.Careers.ICareerService, CareerService>();
         services.AddHttpClient<HolidayCalendarFeed>(c => c.Timeout = TimeSpan.FromSeconds(20));
         services.AddScoped<ILookupService, LookupService>();
         services.AddScoped<IUserService, UserService>();
