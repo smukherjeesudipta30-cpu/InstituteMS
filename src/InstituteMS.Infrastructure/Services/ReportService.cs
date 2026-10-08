@@ -1575,6 +1575,7 @@ public class ReportService : IReportService
                 s.GuardianName,
                 s.RegistrationId,
                 s.DateOfJoining,
+                s.CourseId,
                 IsComplete = s.IsComplete == true,
                 CourseName = s.Course != null ? s.Course.Name : null,
                 CourseDuration = s.Course != null ? s.Course.Duration : null
@@ -1595,82 +1596,14 @@ public class ReportService : IReportService
                 ResultStatus.Forbidden);
 
         /* ---- what the certificate certifies ------------------------------
-           Results live in two places: the legacy register the Marks screen
-           writes, and the examination portal. A student may have either.
+           The course result: every Theory and Practical sitting of this course,
+           online or offline, every term and every re-sit, totalled together —
+           see GetCourseResultAsync. */
+        var result = await GetCourseResultAsync(regId, student.CourseId, student.DateOfJoining, ct);
+        if (result.Mark is null)
+            return Result<StudentCertificateDto>.Failure(result.Missing!, ResultStatus.NotFound);
 
-           The portal wins when it has a finished examination for them, because
-           that is the course they actually sat here; the legacy register is
-           the historical record carried over for migrated students. Reading
-           only dbo.Marks refused a certificate outright to anyone who sat
-           their whole course through the portal. */
-
-        var portalAll = await GetPortalMarksAsync(regId, completeOnly: false, ct);
-
-        // A finished examination carries both its papers, so exactly two subjects.
-        var portal = portalAll.Where(m => m.Subjects.Count == 2).ToList();
-
-        StatementMarkDto? scored;
-
-        if (portal.Count > 0)
-        {
-            // Every finished examination of the course counts, not just the last
-            // one — the certificate states the course result, not one term's.
-            var subjects = portal.SelectMany(m => m.Subjects).ToList();
-            var full = subjects.Sum(s => s.FullMarks);
-            var obtained = subjects.Sum(s => s.ObtainedMarks);
-
-            var percent = full <= 0
-                ? 0m
-                : decimal.Round(obtained * 100m / full, 2, MidpointRounding.AwayFromZero);
-
-            scored = new StatementMarkDto(
-                portal[0].MarkId,
-                portal.Max(m => m.ExamDate),
-                subjects,
-                full,
-                obtained,
-                percent,
-                Grade(percent));
-        }
-        else
-        {
-            // No single term number carries both papers — but the office may still
-            // have scheduled Theory and Practical under two different term numbers
-            // for what is really one examination, the same mismatch that once made
-            // the admit card show only one of the two dates (see GetAdmitCardsAsync).
-            // Matched here the same way: by course alone, not course-and-term.
-            var crossTermCompletion = await GetCourseCompletionMarkAsync(regId, ct);
-
-            if (crossTermCompletion is not null)
-            {
-                scored = crossTermCompletion;
-            }
-            else
-            {
-                // The legacy Marks screen has the same room for the same mistake:
-                // Theory and Practical entered as two separate rows (typically on
-                // two different dates) rather than both filled into one row's four
-                // subject slots. Taking only the single latest row silently dropped
-                // whichever paper was entered first — reading every row for this
-                // student and merging their subjects (latest entry wins per subject
-                // name) fixes that the same way the portal side was fixed above.
-                var legacyMerged = await GetLegacyMergedMarkAsync(regId, ct);
-
-                if (legacyMerged is null)
-                {
-                    // Distinguish "nothing sat" from "sat, but the examination is not
-                    // finished" — they need different things done about them.
-                    return Result<StudentCertificateDto>.Failure(
-                        portalAll.Count > 0
-                            ? "Your examination is not complete yet — the practical mark has " +
-                              "still to be entered by the institute, so a certificate cannot be issued."
-                            : "No exam result has been recorded yet, so a certificate cannot be issued.",
-                        ResultStatus.NotFound);
-                }
-
-                scored = legacyMerged;
-            }
-        }
+        var scored = result.Mark;
 
         /* ---- number this copy -------------------------------------------
            The first copy a student takes is the original; every one after it
@@ -1872,30 +1805,41 @@ public class ReportService : IReportService
             .GroupBy(x => new { x.CourseId, x.TermNumber })
             .Select(g =>
             {
-                var theory = g.FirstOrDefault(x =>
-                    string.Equals(x.PaperType, "Theory", StringComparison.OrdinalIgnoreCase));
+                /* Every sitting, in the order sat: a student may sit Theory or
+                   Practical more than once in the same examination (online, or
+                   entered by the office for an offline paper). Taking just one —
+                   which an unordered FirstOrDefault did — silently hid the rest. */
+                var theory = g.Where(x => string.Equals(x.PaperType, "Theory", StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(x => x.SubmittedOn).ToList();
 
-                var practical = g.FirstOrDefault(x =>
-                    string.Equals(x.PaperType, "Practical", StringComparison.OrdinalIgnoreCase));
+                var practical = g.Where(x => string.Equals(x.PaperType, "Practical", StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(x => x.SubmittedOn).ToList();
 
                 return new { g.Key, theory, practical };
             })
             // A finished examination has both. The certificate insists; the
             // statement shows whichever papers are in.
-            .Where(x => !completeOnly || (x.theory is not null && x.practical is not null))
+            .Where(x => !completeOnly || (x.theory.Count > 0 && x.practical.Count > 0))
             .Select(x =>
             {
                 // Only the papers actually recorded, so the total never counts
-                // marks for a paper that has not been sat or marked yet.
+                // marks for a paper that has not been sat or marked yet. A repeat
+                // sitting is listed as its own line ("Theory · 2nd sitting").
                 var subjects = new List<StatementSubjectDto>();
 
-                if (x.theory is not null)
-                    subjects.Add(new StatementSubjectDto(
-                        "Theory", x.theory.AttemptTotal ?? x.theory.PaperTotal, x.theory.Score ?? 0));
+                void AddAll(string name, IEnumerable<(int Full, int Score)> sittings)
+                {
+                    var n = 0;
+                    foreach (var (fullMarks, score) in sittings)
+                    {
+                        n++;
+                        subjects.Add(new StatementSubjectDto(
+                            n == 1 ? name : $"{name} · {Ordinal(n)} sitting", fullMarks, score));
+                    }
+                }
 
-                if (x.practical is not null)
-                    subjects.Add(new StatementSubjectDto(
-                        "Practical", x.practical.AttemptTotal ?? x.practical.PaperTotal, x.practical.Score ?? 0));
+                AddAll("Theory", x.theory.Select(s => (s.AttemptTotal ?? s.PaperTotal, s.Score ?? 0)));
+                AddAll("Practical", x.practical.Select(s => (s.AttemptTotal ?? s.PaperTotal, s.Score ?? 0)));
 
                 var full = subjects.Sum(s => s.FullMarks);
                 var obtained = subjects.Sum(s => s.ObtainedMarks);
@@ -1906,7 +1850,8 @@ public class ReportService : IReportService
 
                 // Either paper may be absent on the statement, so only dated
                 // entries are considered.
-                var completedOn = new[] { x.theory?.SubmittedOn, x.practical?.SubmittedOn }
+                var completedOn = x.theory.Concat(x.practical)
+                    .Select(s => s.SubmittedOn)
                     .Where(d => d is not null)
                     .Max();
 
@@ -1921,134 +1866,6 @@ public class ReportService : IReportService
             })
             .OrderByDescending(m => m.ExamDate)
             .ToList();
-    }
-
-    /// <summary>
-    /// Whether this student has a completed portal examination for any course —
-    /// Theory and Practical matched by course alone, not by course-and-term the
-    /// way <see cref="GetPortalMarksAsync"/> groups for the statement's own
-    /// per-sitting listing. A course whose two papers were scheduled under
-    /// different term numbers is still one completed examination, not two
-    /// unfinished ones — the same fix already made to <c>GetAdmitCardsAsync</c>
-    /// for the same underlying mismatch. Only reached once the term-grouped
-    /// check has already found nothing, so this never double-counts a course
-    /// that was already recognised the ordinary way.
-    /// </summary>
-    private async Task<StatementMarkDto?> GetCourseCompletionMarkAsync(string regId, CancellationToken ct)
-    {
-        var sat = await _db.ExamAttempts
-            .AsNoTracking()
-            .Where(a => a.StudentRegistrationId == regId
-                        && a.SubmittedOn != null
-                        && a.Score != null)
-            .Join(_db.ExamPapers.AsNoTracking(),
-                a => a.ExamId, p => p.ExamId,
-                (a, p) => new
-                {
-                    a.Score,
-                    AttemptTotal = a.TotalMarks,
-                    PaperTotal = p.TotalMarks,
-                    a.SubmittedOn,
-                    PaperType = a.PaperType ?? p.PaperType,
-                    CourseId = a.CourseId ?? p.CourseId
-                })
-            .Where(x => x.CourseId != null)
-            .ToListAsync(ct);
-
-        var completed = sat
-            .GroupBy(x => x.CourseId!.Value)
-            .Select(g => new
-            {
-                CourseId = g.Key,
-                Theory = g.Where(x => string.Equals(x.PaperType, "Theory", StringComparison.OrdinalIgnoreCase))
-                          .OrderByDescending(x => x.SubmittedOn).FirstOrDefault(),
-                Practical = g.Where(x => string.Equals(x.PaperType, "Practical", StringComparison.OrdinalIgnoreCase))
-                             .OrderByDescending(x => x.SubmittedOn).FirstOrDefault()
-            })
-            .Where(x => x.Theory is not null && x.Practical is not null)
-            .OrderByDescending(x => new[] { x.Theory!.SubmittedOn, x.Practical!.SubmittedOn }.Max())
-            .FirstOrDefault();
-
-        if (completed is null) return null;
-
-        var subjects = new List<StatementSubjectDto>
-        {
-            new("Theory", completed.Theory!.AttemptTotal ?? completed.Theory.PaperTotal, completed.Theory.Score ?? 0),
-            new("Practical", completed.Practical!.AttemptTotal ?? completed.Practical.PaperTotal, completed.Practical.Score ?? 0)
-        };
-
-        var full = subjects.Sum(s => s.FullMarks);
-        var obtained = subjects.Sum(s => s.ObtainedMarks);
-
-        var percent = full <= 0
-            ? 0m
-            : decimal.Round(obtained * 100m / full, 2, MidpointRounding.AwayFromZero);
-
-        var completedOn = new[] { completed.Theory.SubmittedOn, completed.Practical.SubmittedOn }.Max();
-
-        return new StatementMarkDto(
-            -(completed.CourseId * 1000),
-            completedOn is null ? null : DateOnly.FromDateTime(completedOn.Value),
-            subjects,
-            full,
-            obtained,
-            percent,
-            Grade(percent));
-    }
-
-    /// <summary>
-    /// Every legacy <c>dbo.Marks</c> row for this student, merged into one result
-    /// by subject name — the same-named subject from a later row overrides an
-    /// earlier one (a re-entry or correction), and different-named subjects
-    /// (Theory from one row, Practical from another) both count, instead of the
-    /// single latest row silently hiding whichever paper was entered first.
-    /// Returns null when the student has no legacy Marks rows at all.
-    /// </summary>
-    private async Task<StatementMarkDto?> GetLegacyMergedMarkAsync(string regId, CancellationToken ct)
-    {
-        var rows = await _db.Marks
-            .AsNoTracking()
-            .Where(m => m.StudentRegistrationId == regId)
-            .OrderBy(m => m.ExamDate)
-            .ThenBy(m => m.Id)
-            .ToListAsync(ct);
-
-        if (rows.Count == 0) return null;
-
-        // A single row already covers the common case (all subjects entered
-        // together), so merging trivially reproduces the old behaviour for it.
-        if (rows.Count == 1) return ToStatementMark(rows[0]);
-
-        var bySubject = new Dictionary<string, StatementSubjectDto>(StringComparer.OrdinalIgnoreCase);
-        DateOnly? latestDate = null;
-        var latestId = 0;
-
-        foreach (var row in rows)
-        {
-            void Add(string? subject, int? full, int? obtained)
-            {
-                if (string.IsNullOrWhiteSpace(subject)) return;
-                bySubject[subject.Trim()] = new StatementSubjectDto(subject.Trim(), full ?? 0, obtained ?? 0);
-            }
-
-            Add(row.Subject1, row.FullMarks1, row.ObtainedMarks1);
-            Add(row.Subject2, row.FullMarks2, row.ObtainedMarks2);
-            Add(row.Subject3, row.FullMarks3, row.ObtainedMarks3);
-            Add(row.Subject4, row.FullMarks4, row.ObtainedMarks4);
-
-            if (row.ExamDate is not null) latestDate = row.ExamDate;
-            latestId = row.Id;
-        }
-
-        var subjects = bySubject.Values.ToList();
-        var full = subjects.Sum(s => s.FullMarks);
-        var obtained = subjects.Sum(s => s.ObtainedMarks);
-
-        var percent = full <= 0
-            ? 0m
-            : decimal.Round(obtained * 100m / full, 2, MidpointRounding.AwayFromZero);
-
-        return new StatementMarkDto(latestId, latestDate, subjects, full, obtained, percent, Grade(percent));
     }
 
     private static StatementMarkDto ToStatementMark(Domain.Entities.Mark m)
@@ -2084,6 +1901,114 @@ public class ReportService : IReportService
     /// The legacy function totalled subjects 1 and 2 only, so a four-subject exam was
     /// graded on half its papers. Every filled subject counts here.
     /// </remarks>
+    private static string Ordinal(int n) => n switch
+    {
+        2 => "2nd",
+        3 => "3rd",
+        _ => $"{n}th"
+    };
+
+    /// <summary>The course result a certificate states, and why there is none when there is not.</summary>
+    private sealed record CourseResult(StatementMarkDto? Mark, string? Missing);
+
+    /// <summary>
+    /// The student's result for the course they are completing: every Theory and
+    /// Practical sitting of that course — every term, every re-sit, sat online on
+    /// the portal or entered by the office for an offline paper — plus the marks
+    /// on the offline Marks screen from the day they joined. The grade is total
+    /// marks obtained over total full marks across all of them.
+    /// </summary>
+    /// <remarks>
+    /// Replaces three narrower readings that each lost marks: one sitting per
+    /// term picked at random, every course's exams added together (a student's
+    /// earlier course leaking into this one), and the offline register ignored
+    /// whenever any portal mark existed.
+    /// </remarks>
+    private async Task<CourseResult> GetCourseResultAsync(
+        string regId, int? courseId, DateOnly? joinedOn, CancellationToken ct)
+    {
+        var sittings = (await _db.ExamAttempts
+                .AsNoTracking()
+                .Where(a => a.StudentRegistrationId == regId && a.SubmittedOn != null && a.Score != null)
+                .Join(_db.ExamPapers.AsNoTracking(),
+                    a => a.ExamId, p => p.ExamId,
+                    (a, p) => new
+                    {
+                        Score = a.Score ?? 0,
+                        Full = a.TotalMarks ?? p.TotalMarks,
+                        a.SubmittedOn,
+                        PaperType = a.PaperType ?? p.PaperType,
+                        CourseId = a.CourseId ?? p.CourseId
+                    })
+                .ToListAsync(ct))
+            // This course only. A paper with no course recorded is kept: it was
+            // set for the student, and dropping it would lose a real mark.
+            .Where(s => courseId is null || s.CourseId is null || s.CourseId == courseId)
+            .ToList();
+
+        // The offline register has no course column, so its rows are tied to this
+        // course by date: anything entered on or after the day they joined it.
+        var offline = await _db.Marks
+            .AsNoTracking()
+            .Where(m => m.StudentRegistrationId == regId
+                        && (joinedOn == null || m.ExamDate == null || m.ExamDate >= joinedOn))
+            .OrderBy(m => m.ExamDate).ThenBy(m => m.Id)
+            .ToListAsync(ct);
+
+        var lines = new List<(string Name, int Full, int Obtained)>();
+        foreach (var s in sittings)
+        {
+            var kind = string.Equals(s.PaperType, "Practical", StringComparison.OrdinalIgnoreCase) ? "Practical" : "Theory";
+            lines.Add((kind, s.Full, s.Score));
+        }
+        foreach (var m in offline)
+        {
+            void Add(string? subject, int? fullMarks, int? obtainedMarks)
+            {
+                if (string.IsNullOrWhiteSpace(subject) || (fullMarks ?? 0) <= 0) return;
+                lines.Add((subject.Trim(), fullMarks ?? 0, obtainedMarks ?? 0));
+            }
+            Add(m.Subject1, m.FullMarks1, m.ObtainedMarks1);
+            Add(m.Subject2, m.FullMarks2, m.ObtainedMarks2);
+            Add(m.Subject3, m.FullMarks3, m.ObtainedMarks3);
+            Add(m.Subject4, m.FullMarks4, m.ObtainedMarks4);
+        }
+
+        if (lines.Count == 0)
+            return new CourseResult(null, "No exam result has been recorded yet, so a certificate cannot be issued.");
+
+        /* A course examined on the portal is finished only once it has both a
+           Theory and a Practical mark (offline ones count, by subject name). A
+           student whose whole record is the old offline register keeps the old
+           rule — their subjects are named after the syllabus, not the paper type. */
+        bool Has(string kind) => lines.Any(l => l.Name.Contains(kind, StringComparison.OrdinalIgnoreCase));
+        if (sittings.Count > 0 && !(Has("Theory") && Has("Practical")))
+        {
+            return new CourseResult(null, Has("Theory")
+                ? "The examination is not complete yet — the practical mark has still to be entered, so a certificate cannot be issued."
+                : "The examination is not complete yet — the theory mark has still to be recorded, so a certificate cannot be issued.");
+        }
+
+        // One line per paper type / subject on the result, totalled over every sitting.
+        var subjects = lines
+            .GroupBy(l => l.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new StatementSubjectDto(g.Key, g.Sum(l => l.Full), g.Sum(l => l.Obtained)))
+            .ToList();
+
+        var full = subjects.Sum(s => s.FullMarks);
+        var obtained = subjects.Sum(s => s.ObtainedMarks);
+        var percent = full <= 0 ? 0m : decimal.Round(obtained * 100m / full, 2, MidpointRounding.AwayFromZero);
+
+        var lastDate = sittings.Select(s => (DateOnly?)DateOnly.FromDateTime(s.SubmittedOn!.Value))
+            .Concat(offline.Select(m => m.ExamDate))
+            .Where(d => d is not null)
+            .Max();
+
+        return new CourseResult(
+            new StatementMarkDto(offline.LastOrDefault()?.Id ?? 0, lastDate, subjects, full, obtained, percent, Grade(percent)),
+            null);
+    }
+
     private static string Grade(decimal percent) => percent switch
     {
         >= 95m => "AA",
