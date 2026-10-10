@@ -173,6 +173,10 @@ builder.Services.AddCors(options => options.AddPolicy(CorsPolicy, policy =>
 }));
 
 // ----------------------------------------------------------- rate limiting
+// Holds files the website generates for a few minutes so phone browsers can
+// download them from an https address (see DownloadsController).
+builder.Services.AddMemoryCache();
+
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
