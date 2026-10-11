@@ -26,11 +26,13 @@ public class ChatController : ApiControllerBase
 {
     private readonly IChatService _chat;
     private readonly IConfiguration _configuration;
+    private readonly ILogger<ChatController> _logger;
 
-    public ChatController(IChatService chat, IConfiguration configuration)
+    public ChatController(IChatService chat, IConfiguration configuration, ILogger<ChatController> logger)
     {
         _chat = chat;
         _configuration = configuration;
+        _logger = logger;
     }
 
     /* -------------------------------------------------------------- guest */
@@ -227,6 +229,35 @@ public class ChatController : ApiControllerBase
             configured.Add(new { urls = new[] { "stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302" }, username = (string?)null, credential = (string?)null });
 
         return Ok(new { success = true, data = configured });
+    }
+
+    /// <summary>What one device saw of a call: the network path it tried and where it ended.</summary>
+    public record CallDiagnosticsRequest(
+        string? CallId, string? Role, string? Kind, string? Outcome, bool WasConnected, int DurationSeconds,
+        string? ConnectionState, string? IceState, bool TurnConfigured, string? LocalCandidates,
+        string? RemoteCandidates, string? SelectedPath, int Restarts, string? Network, string? Device);
+
+    /// <summary>
+    /// One log line per call, from each side, so a call that rings but never
+    /// connects (or drops part way) can be traced to the network path it used:
+    /// "host"/"srflx" = direct, "relay" = through the TURN server. Nothing is
+    /// stored; it only goes to the API log ("CALL-DIAG").
+    /// </summary>
+    [HttpPost("call-diagnostics")]
+    [Authorize]
+    public IActionResult CallDiagnostics([FromBody] CallDiagnosticsRequest r)
+    {
+        static string S(string? v, int max = 120) =>
+            string.IsNullOrWhiteSpace(v) ? "-" : (v.Length > max ? v[..max] : v).Replace('\r', ' ').Replace('\n', ' ');
+
+        _logger.LogInformation(
+            "CALL-DIAG user={User} call={CallId} role={Role} kind={Kind} outcome={Outcome} connected={Connected} secs={Secs} " +
+            "pc={PcState} ice={IceState} turn={Turn} local={Local} remote={Remote} path={Path} restarts={Restarts} net={Net} device={Device}",
+            S(CurrentUserName), S(r.CallId, 40), S(r.Role, 10), S(r.Kind, 10), S(r.Outcome, 40), r.WasConnected, r.DurationSeconds,
+            S(r.ConnectionState, 20), S(r.IceState, 20), r.TurnConfigured, S(r.LocalCandidates, 60), S(r.RemoteCandidates, 60),
+            S(r.SelectedPath, 60), r.Restarts, S(r.Network, 40), S(r.Device, 160));
+
+        return Ok(new { success = true, data = true });
     }
 
     [HttpGet("presence")]
