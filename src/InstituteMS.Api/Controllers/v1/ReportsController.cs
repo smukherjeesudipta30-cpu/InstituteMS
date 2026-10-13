@@ -389,6 +389,32 @@ public class ReportsController : ApiControllerBase
     }
 
     /// <summary>
+    /// The signed-in student's own photograph. The general photo endpoint is for
+    /// the office only (a student must not fetch other students' photos), so a
+    /// student's own screens read it from here — the registration id is resolved
+    /// from the sign-in, never taken from the caller.
+    /// </summary>
+    [HttpGet("my-photo")]
+    [Authorize(Roles = UserRoles.Student)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MyPhoto(
+        [FromServices] InstituteMS.Application.Students.IStudentService students, CancellationToken ct)
+    {
+        var own = await _reports.ResolveOwnRegistrationIdAsync(CurrentUserName ?? string.Empty, ct);
+        if (!own.Succeeded)
+            return Envelope(Result<object?>.Failure(own.Error!, own.Status));
+
+        var photo = await students.GetPhotoAsync(own.Value!, ct);
+        if (!photo.Succeeded)
+            return Envelope(Result<object?>.Failure(photo.Error!, photo.Status));
+
+        var (content, contentType, fileName) = photo.Value;
+        Response.Headers.CacheControl = "private, max-age=3600";
+        return File(content, contentType, fileName);
+    }
+
+    /// <summary>
     /// Admissions, fee payments and expenses by branch, bucketed by month,
     /// quarter or year.
     /// </summary>
