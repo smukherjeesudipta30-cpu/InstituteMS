@@ -1,6 +1,6 @@
 -- Certificate signature and verification.
 --
--- CertificateSetting: one row (Id 1) — the signatory's name and title, and the
+-- CertificateSetting: one row (Id 1) — who signs (title Branch-In-Charge), and the
 -- signature and optional stamp images Admin uploads, printed on every
 -- certificate.
 --
@@ -19,7 +19,7 @@ IF OBJECT_ID('dbo.CertificateSetting') IS NULL
     CREATE TABLE dbo.CertificateSetting (
         Id                   INT           NOT NULL CONSTRAINT PK_CertificateSetting PRIMARY KEY,
         SignatoryName        NVARCHAR(100) NOT NULL,
-        SignatoryTitle       NVARCHAR(100) NOT NULL CONSTRAINT DF_CertificateSetting_Title DEFAULT N'Proprietor',
+        SignatoryTitle       NVARCHAR(100) NOT NULL CONSTRAINT DF_CertificateSetting_Title DEFAULT N'Branch-In-Charge',
         SignatureContentType VARCHAR(20)   NULL,
         SignatureImage       NVARCHAR(MAX) NULL,
         StampContentType     VARCHAR(20)   NULL,

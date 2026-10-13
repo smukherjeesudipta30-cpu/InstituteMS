@@ -16,6 +16,9 @@ namespace InstituteMS.Infrastructure.Services;
 public class CertificateService : ICertificateService
 {
     private const int MaxImageBytes = 512 * 1024;
+
+    /** What the certificate's artwork prints under the signature line. */
+    public const string DefaultTitle = "Branch-In-Charge";
     private static readonly string[] ImageTypes = ["image/png", "image/jpeg"];
 
     private readonly AppDbContext _db;
@@ -31,7 +34,7 @@ public class CertificateService : ICertificateService
     {
         var s = await _db.CertificateSettings.AsNoTracking().FirstOrDefaultAsync(x => x.Id == 1, ct);
         return s is null
-            ? new CertificateSettingsDto(string.Empty, "Proprietor", null, null, null, null)
+            ? new CertificateSettingsDto(string.Empty, DefaultTitle, null, null, null, null)
             : new CertificateSettingsDto(s.SignatoryName, s.SignatoryTitle,
                 DataUrl(s.SignatureContentType, s.SignatureImage), DataUrl(s.StampContentType, s.StampImage),
                 s.ModifiedBy, s.ModifiedOn);
@@ -40,10 +43,10 @@ public class CertificateService : ICertificateService
     public async Task<Result<CertificateSettingsDto>> SaveSettingsAsync(
         CertificateSettingsSaveRequest request, string? actor, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(request.SignatoryName) || request.SignatoryName.Length > 100)
-            return Result<CertificateSettingsDto>.Failure("Enter the signatory's name.");
-        if (string.IsNullOrWhiteSpace(request.SignatoryTitle) || request.SignatoryTitle.Length > 100)
-            return Result<CertificateSettingsDto>.Failure("Enter the signatory's title, e.g. Proprietor.");
+        // The name is the office's record of who signs; the certificate itself
+        // reads "Branch-In-Charge", printed in its artwork.
+        if ((request.SignatoryName ?? string.Empty).Length > 100)
+            return Result<CertificateSettingsDto>.Failure("The name is too long.");
 
         var row = await _db.CertificateSettings.FirstOrDefaultAsync(x => x.Id == 1, ct);
         if (row is null)
@@ -52,8 +55,8 @@ public class CertificateService : ICertificateService
             _db.CertificateSettings.Add(row);
         }
 
-        row.SignatoryName = request.SignatoryName.Trim();
-        row.SignatoryTitle = request.SignatoryTitle.Trim();
+        row.SignatoryName = (request.SignatoryName ?? string.Empty).Trim();
+        row.SignatoryTitle = DefaultTitle;
 
         if (request.RemoveSignature) { row.SignatureImage = null; row.SignatureContentType = null; }
         else if (!string.IsNullOrWhiteSpace(request.SignatureBase64))

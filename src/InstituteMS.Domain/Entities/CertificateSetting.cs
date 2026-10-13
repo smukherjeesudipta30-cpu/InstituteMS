@@ -9,7 +9,7 @@ public class CertificateSetting
 {
     public int Id { get; set; } = 1;
     public string SignatoryName { get; set; } = string.Empty;
-    public string SignatoryTitle { get; set; } = "Proprietor";
+    public string SignatoryTitle { get; set; } = "Branch-In-Charge";
     public string? SignatureContentType { get; set; }
     public string? SignatureImage { get; set; }
     public string? StampContentType { get; set; }
