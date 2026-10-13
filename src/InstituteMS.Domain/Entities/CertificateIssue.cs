@@ -22,4 +22,11 @@ public class CertificateIssue
 
     /// <summary>The sign-in that took it, so the office can say who and not just when.</summary>
     public string? IssuedTo { get; set; }
+
+    /// <summary>
+    /// What this copy stated, kept as printed so the QR check shows the same
+    /// grade even if marks change later. Null on copies issued before migration 082.
+    /// </summary>
+    public string? Grade { get; set; }
+    public DateOnly? CompletedOn { get; set; }
 }

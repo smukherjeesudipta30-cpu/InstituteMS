@@ -40,9 +40,13 @@ public class ReportService : IReportService
 
     private readonly IExamFeeService _examFees;
 
-    public ReportService(AppDbContext db, IFeeService fees, IAttendanceService attendance, IExamFeeService examFees)
+    private readonly Microsoft.Extensions.Configuration.IConfiguration _configuration;
+
+    public ReportService(AppDbContext db, IFeeService fees, IAttendanceService attendance, IExamFeeService examFees,
+        Microsoft.Extensions.Configuration.IConfiguration configuration)
     {
         _db = db;
+        _configuration = configuration;
         _examFees = examFees;
         _fees = fees;
         _attendance = attendance;
@@ -1637,15 +1641,25 @@ public class ReportService : IReportService
         var issueNo = previous.Count + 1;
         var now = DateTime.Now;
 
-        _db.CertificateIssues.Add(new CertificateIssue
+        var issue = new CertificateIssue
         {
             StudentRegistrationId = regId,
             IssueNo = issueNo,
             IssuedOn = now,
-            IssuedTo = issuedTo?.Trim()
-        });
+            IssuedTo = issuedTo?.Trim(),
+            // As printed, so the QR check shows this copy's grade even if marks change later.
+            Grade = scored.Grade,
+            CompletedOn = scored.ExamDate
+        };
+        _db.CertificateIssues.Add(issue);
 
         await _db.SaveChangesAsync(ct);
+
+        // The signatory, signature and stamp Admin uploaded, and this copy's
+        // number and QR code (see CertificateService).
+        var signer = await _db.CertificateSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Id == 1, ct);
+        static string? DataUrl(string? type, string? base64) =>
+            string.IsNullOrEmpty(base64) ? null : $"data:{type ?? "image/png"};base64,{base64}";
 
         return Result<StudentCertificateDto>.Success(new StudentCertificateDto(
             student.Name,
@@ -1663,7 +1677,13 @@ public class ReportService : IReportService
             now,
             issueNo,
             issueNo > 1,
-            previous.FirstOrDefault()?.IssuedOn));
+            previous.FirstOrDefault()?.IssuedOn,
+            CertificateCodes.Number(issue.IssueId),
+            CertificateCodes.For(issue.IssueId, CertificateService.SigningKey(_configuration)),
+            signer?.SignatoryName,
+            signer?.SignatoryTitle,
+            DataUrl(signer?.SignatureContentType, signer?.SignatureImage),
+            DataUrl(signer?.StampContentType, signer?.StampImage)));
     }
 
     /// <summary>

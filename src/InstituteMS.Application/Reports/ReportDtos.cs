@@ -614,7 +614,19 @@ public record StudentCertificateDto(
     bool IsDuplicate,
 
     /// <summary>When the original was taken. Null on the original itself.</summary>
-    DateTime? OriginalIssuedOn);
+    DateTime? OriginalIssuedOn,
+
+    /// <summary>"AVI-C-000123" — printed on the certificate.</summary>
+    string? CertificateNo = null,
+
+    /// <summary>What the QR code carries; checked at /verify/{code}.</summary>
+    string? VerifyCode = null,
+
+    /// <summary>The signatory Admin set, and the signature and stamp as data: URLs (null when not uploaded).</summary>
+    string? SignatoryName = null,
+    string? SignatoryTitle = null,
+    string? SignatureDataUrl = null,
+    string? StampDataUrl = null);
 
 /* ============================================================ pay slip */
 

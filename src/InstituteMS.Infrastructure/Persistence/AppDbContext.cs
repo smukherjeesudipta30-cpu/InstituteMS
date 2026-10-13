@@ -44,6 +44,7 @@ public class AppDbContext : DbContext
     public DbSet<JobVacancy> JobVacancies => Set<JobVacancy>();
     public DbSet<JobApplication> JobApplications => Set<JobApplication>();
     public DbSet<SiteVisit> SiteVisits => Set<SiteVisit>();
+    public DbSet<CertificateSetting> CertificateSettings => Set<CertificateSetting>();
     public DbSet<ExamFeePayment> ExamFeePayments => Set<ExamFeePayment>();
     public DbSet<ExamSchedule> ExamSchedules => Set<ExamSchedule>();
     public DbSet<CertificateIssue> CertificateIssues => Set<CertificateIssue>();

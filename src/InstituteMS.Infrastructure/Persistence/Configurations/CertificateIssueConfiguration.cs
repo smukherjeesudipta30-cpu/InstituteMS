@@ -16,6 +16,8 @@ public class CertificateIssueConfiguration : IEntityTypeConfiguration<Certificat
         b.Property(x => x.IssueNo).HasColumnName("IssueNo");
         b.Property(x => x.IssuedOn).HasColumnName("IssuedOn");
         b.Property(x => x.IssuedTo).HasColumnName("IssuedTo").HasMaxLength(200);
+        b.Property(x => x.Grade).HasColumnName("Grade").HasMaxLength(10);
+        b.Property(x => x.CompletedOn).HasColumnName("CompletedOn");
 
         b.HasIndex(x => new { x.StudentRegistrationId, x.IssueNo }).IsUnique();
     }
