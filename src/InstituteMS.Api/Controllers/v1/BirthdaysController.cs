@@ -22,4 +22,15 @@ public class BirthdaysController : ApiControllerBase
     public async Task<IActionResult> Upcoming([FromQuery] int days = 30, CancellationToken ct = default)
         => Envelope(Result<IReadOnlyList<BirthdayPersonDto>>.Success(
             await _birthdays.GetUpcomingAsync(days is >= 0 and <= 365 ? days : 30, ct)));
+
+    /// <summary>The Proprietor's name, date of birth and phone.</summary>
+    [HttpGet("proprietor")]
+    [ProducesResponseType(typeof(ApiResponse<ProprietorProfileDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Proprietor(CancellationToken ct)
+        => Envelope(Result<ProprietorProfileDto>.Success(await _birthdays.GetProprietorAsync(ct)));
+
+    [HttpPut("proprietor")]
+    [ProducesResponseType(typeof(ApiResponse<ProprietorProfileDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SaveProprietor([FromBody] ProprietorProfileDto request, CancellationToken ct)
+        => Envelope(await _birthdays.SaveProprietorAsync(request, CurrentUserName, ct), "Proprietor's birthday saved.");
 }

@@ -1,4 +1,6 @@
 using InstituteMS.Application.Birthdays;
+using InstituteMS.Application.Chat;
+using InstituteMS.Application.Common;
 using InstituteMS.Domain.Common;
 using InstituteMS.Domain.Entities;
 using InstituteMS.Infrastructure.Persistence;
@@ -16,12 +18,20 @@ namespace InstituteMS.Infrastructure.Services;
 /// </summary>
 public class BirthdayService : IBirthdayService
 {
+    public const string Proprietor = "Proprietor";
+    private const string ProprietorKey = "P-1";
+
     private static readonly string[] StaffRoles =
         [UserRoles.Teacher, UserRoles.Receptionist, UserRoles.Editor, UserRoles.Admin, UserRoles.SuperAdmin];
 
     private readonly AppDbContext _db;
+    private readonly IChatService _chat;
 
-    public BirthdayService(AppDbContext db) => _db = db;
+    public BirthdayService(AppDbContext db, IChatService chat)
+    {
+        _db = db;
+        _chat = chat;
+    }
 
     public async Task<IReadOnlyList<BirthdayPersonDto>> GetUpcomingAsync(int days, CancellationToken ct = default)
     {
@@ -86,7 +96,40 @@ public class BirthdayService : IBirthdayService
                 null, login, u.DateOfBirth!.Value);
         }
 
+        // The Proprietor has no login account; their details are kept on their own.
+        var proprietor = await _db.ProprietorProfiles.AsNoTracking().FirstOrDefaultAsync(x => x.Id == 1, ct);
+        if (proprietor?.DateOfBirth is DateOnly pdob)
+            Add(ProprietorKey, Proprietor, proprietor.Name, proprietor.Phone, null, null, pdob);
+
         return Ordered(results);
+    }
+
+    public async Task<ProprietorProfileDto> GetProprietorAsync(CancellationToken ct = default)
+    {
+        var p = await _db.ProprietorProfiles.AsNoTracking().FirstOrDefaultAsync(x => x.Id == 1, ct);
+        return new ProprietorProfileDto(p?.Name ?? string.Empty, p?.DateOfBirth, p?.Phone);
+    }
+
+    public async Task<Result<ProprietorProfileDto>> SaveProprietorAsync(
+        ProprietorProfileDto request, string? actor, CancellationToken ct = default)
+    {
+        var name = (request.Name ?? string.Empty).Trim();
+        if (name.Length is 0 or > 100) return Result<ProprietorProfileDto>.Failure("Enter the Proprietor's name.");
+        if (request.DateOfBirth is null) return Result<ProprietorProfileDto>.Failure("Enter the date of birth.");
+        if (request.DateOfBirth > DateOnly.FromDateTime(DateTime.Today))
+            return Result<ProprietorProfileDto>.Failure("Date of birth cannot be in the future.");
+        var phone = request.Phone?.Trim();
+        if (!string.IsNullOrEmpty(phone) && phone.Length > 20) return Result<ProprietorProfileDto>.Failure("The phone number is too long.");
+
+        var row = await _db.ProprietorProfiles.FirstOrDefaultAsync(x => x.Id == 1, ct);
+        if (row is null) { row = new ProprietorProfile { Id = 1 }; _db.ProprietorProfiles.Add(row); }
+        row.Name = name;
+        row.DateOfBirth = request.DateOfBirth;
+        row.Phone = string.IsNullOrEmpty(phone) ? null : phone;
+        row.ModifiedBy = actor;
+        row.ModifiedOn = DateTime.Now;
+        await _db.SaveChangesAsync(ct);
+        return Result<ProprietorProfileDto>.Success(await GetProprietorAsync(ct));
     }
 
     public async Task<int> RaiseTodayNotificationsAsync(CancellationToken ct = default)
@@ -101,8 +144,8 @@ public class BirthdayService : IBirthdayService
             .Select(n => n.DetailValue)
             .ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var added = 0;
-        foreach (var p in todays.Where(p => !already.Contains(p.Key)))
+        var fresh = todays.Where(p => !already.Contains(p.Key)).ToList();
+        foreach (var p in fresh)
         {
             _db.AdminNotifications.Add(new AdminNotification
             {
@@ -115,10 +158,52 @@ public class BirthdayService : IBirthdayService
                 DetailValue = p.Key,
                 CreatedOn = DateTime.Now
             });
-            added++;
         }
-        if (added > 0) await _db.SaveChangesAsync(ct);
-        return added;
+        if (fresh.Count == 0) return 0;
+        await _db.SaveChangesAsync(ct);
+
+        await SendChatAsync(fresh, ct);
+        return fresh.Count;
+    }
+
+    /// <summary>
+    /// The same news in the chat window of every active Admin and SuperAdmin; the
+    /// Proprietor's birthday goes to Editors as well. A chat needs a sender, so a
+    /// SuperAdmin (or, failing that, the first Admin) sends it to all the others.
+    /// </summary>
+    private async Task SendChatAsync(IReadOnlyList<BirthdayPersonDto> people, CancellationToken ct)
+    {
+        var office = (await _db.Users.AsNoTracking()
+            .Where(u => u.IsActive && u.Email != null && u.Roles != null)
+            .Select(u => new { u.Email, u.Roles })
+            .ToListAsync(ct))
+            .Select(u => new { Email = u.Email!, Roles = UserRoles.Split(u.Roles) })
+            .Where(u => u.Roles.Any(r => r is UserRoles.Admin or UserRoles.SuperAdmin or UserRoles.Editor))
+            .ToList();
+        var senderAccount = office.FirstOrDefault(u => u.Roles.Contains(UserRoles.SuperAdmin))
+                            ?? office.FirstOrDefault(u => u.Roles.Contains(UserRoles.Admin));
+        if (senderAccount is null) return;
+        var sender = senderAccount.Email;
+
+        foreach (var person in office.Where(u => !string.Equals(u.Email, sender, StringComparison.OrdinalIgnoreCase))
+                     .DistinctBy(u => u.Email, StringComparer.OrdinalIgnoreCase))
+        {
+            var isAdmin = person.Roles.Any(r => r is UserRoles.Admin or UserRoles.SuperAdmin);
+            var theirs = isAdmin ? people : people.Where(p => p.Kind == Proprietor).ToList();
+            if (theirs.Count == 0) continue;
+
+            var conversation = await _chat.StartOrGetDirectConversationAsync(sender, person.Email, ct);
+            if (conversation.Succeeded)
+                await _chat.SendMessageAsync(sender, conversation.Value, new SendMessageRequest { Body = ChatBody(theirs, isAdmin) }, ct);
+        }
+    }
+
+    private static string ChatBody(IReadOnlyList<BirthdayPersonDto> people, bool withCardHint)
+    {
+        var lines = people.Select(p => $"• {p.Name} ({p.Kind}, turning {p.TurningAge})" +
+                                       (string.IsNullOrWhiteSpace(p.Phone) ? "" : $" — {p.Phone}"));
+        return "🎂 Birthdays today:\n" + string.Join("\n", lines) +
+               (withCardHint ? "\n\nOpen Birthdays in the menu to send a wish card on WhatsApp." : "");
     }
 
     /// <summary>Soonest first; on the same day staff before students, then by name.</summary>
