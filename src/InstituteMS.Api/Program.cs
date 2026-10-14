@@ -33,6 +33,7 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddValidatorsFromAssemblyContaining<LoginRequestValidator>();
 builder.Services.AddHostedService<TeacherExamDueReminderService>();
+builder.Services.AddHostedService<BirthdayNotificationService>();
 
 // ------------------------------------------------------------------- auth
 var jwt = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()

@@ -1,4 +1,5 @@
 using FluentValidation;
+using InstituteMS.Domain.Common;
 
 namespace InstituteMS.Application.Users;
 
@@ -26,6 +27,11 @@ public class UserSaveRequestValidator : AbstractValidator<UserSaveRequest>
         RuleFor(x => x.Phone)
             .Matches(@"^[0-9]{10}$").WithMessage("Enter a valid 10-digit phone number.")
             .When(x => !string.IsNullOrWhiteSpace(x.Phone));
+
+        // Required for staff (birthday alerts read it); a student's comes from the student record.
+        RuleFor(x => x.DateOfBirth)
+            .NotNull().WithMessage("Date of birth is required.")
+            .When(x => !UserRoles.Split(x.Roles).All(r => r == UserRoles.Student));
 
         RuleFor(x => x.DateOfBirth)
             .Must(d => d is null || d.Value <= DateOnly.FromDateTime(DateTime.Today))

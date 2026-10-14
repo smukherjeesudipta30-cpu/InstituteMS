@@ -52,4 +52,7 @@ public static class AdminNotificationTypes
 
     /// <summary>Someone applied for a job vacancy — seen by Admin, Editor and SuperAdmin.</summary>
     public const string JobApplication = "JobApplication";
+
+    /// <summary>A student's or staff member's birthday today — seen by Admin and SuperAdmin.</summary>
+    public const string Birthday = "Birthday";
 }
