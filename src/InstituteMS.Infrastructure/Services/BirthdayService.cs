@@ -132,46 +132,74 @@ public class BirthdayService : IBirthdayService
         return Result<ProprietorProfileDto>.Success(await GetProprietorAsync(ct));
     }
 
+    /// <summary>
+    /// When the chat reminders go out: three times on the day before a birthday and
+    /// three times on the day itself. Each sweep sends only for the latest time
+    /// already passed, so an API restart mid-afternoon sends once, not a burst.
+    /// </summary>
+    private static readonly TimeSpan[] ReminderTimes =
+        [new(9, 0, 0), new(13, 0, 0), new(17, 0, 0)];
+
+    private const string TodayHeading = "🎂 Birthdays today";
+    private const string TomorrowHeading = "🎈 Birthdays tomorrow";
+
     public async Task<int> RaiseTodayNotificationsAsync(CancellationToken ct = default)
     {
-        var todays = (await GetUpcomingAsync(0, ct)).Where(p => p.DaysAway == 0).ToList();
-        if (todays.Count == 0) return 0;
+        var soon = await GetUpcomingAsync(1, ct);
+        var todays = soon.Where(p => p.DaysAway == 0).ToList();
+        var tomorrows = soon.Where(p => p.DaysAway == 1).ToList();
+        if (todays.Count == 0 && tomorrows.Count == 0) return 0;
 
-        // One alert per person per day: the person's key is kept in DetailValue.
+        // Dashboard: one alert the day before and one on the day. The person's key
+        // is kept in DetailValue ("…@eve" for the day before) so neither repeats.
         var dayStart = DateTime.Today;
         var already = (await _db.AdminNotifications.AsNoTracking()
             .Where(n => n.Type == AdminNotificationTypes.Birthday && n.CreatedOn >= dayStart)
             .Select(n => n.DetailValue)
             .ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var fresh = todays.Where(p => !already.Contains(p.Key)).ToList();
-        foreach (var p in fresh)
+        var added = 0;
+        foreach (var (p, eve) in todays.Select(p => (p, false)).Concat(tomorrows.Select(p => (p, true))))
         {
+            var key = eve ? p.Key + "@eve" : p.Key;
+            if (already.Contains(key)) continue;
             _db.AdminNotifications.Add(new AdminNotification
             {
                 Type = AdminNotificationTypes.Birthday,
-                Title = $"Today is {p.Name}'s birthday ({p.Kind}, turning {p.TurningAge}) — send a wish",
+                Title = eve
+                    ? $"Tomorrow is {p.Name}'s birthday ({p.Kind}, turning {p.TurningAge})"
+                    : $"Today is {p.Name}'s birthday ({p.Kind}, turning {p.TurningAge}) — send a wish",
                 StudentName = p.Name,
                 CourseName = p.Kind,
                 RegistrationId = p.RegistrationId,
                 LoginId = p.LoginId,
-                DetailValue = p.Key,
+                DetailValue = key,
                 CreatedOn = DateTime.Now
             });
+            added++;
         }
-        if (fresh.Count == 0) return 0;
-        await _db.SaveChangesAsync(ct);
+        if (added > 0) await _db.SaveChangesAsync(ct);
 
-        await SendChatAsync(fresh, ct);
-        return fresh.Count;
+        // Chat: at each reminder time, once.
+        var now = DateTime.Now;
+        var passed = ReminderTimes.Where(t => now.TimeOfDay >= t).ToList();
+        if (passed.Count > 0)
+        {
+            var slotStart = dayStart + passed[^1];
+            if (todays.Count > 0) await SendChatAsync(todays, TodayHeading, slotStart, ct);
+            if (tomorrows.Count > 0) await SendChatAsync(tomorrows, TomorrowHeading, slotStart, ct);
+        }
+        return added;
     }
 
     /// <summary>
-    /// The same news in the chat window of every active Admin and SuperAdmin; the
+    /// The news in the chat window of every active Admin and SuperAdmin; the
     /// Proprietor's birthday goes to Editors as well. A chat needs a sender, so a
     /// SuperAdmin (or, failing that, the first Admin) sends it to all the others.
+    /// Skipped when this heading was already sent since <paramref name="slotStart"/>.
     /// </summary>
-    private async Task SendChatAsync(IReadOnlyList<BirthdayPersonDto> people, CancellationToken ct)
+    private async Task SendChatAsync(
+        IReadOnlyList<BirthdayPersonDto> people, string heading, DateTime slotStart, CancellationToken ct)
     {
         var office = (await _db.Users.AsNoTracking()
             .Where(u => u.IsActive && u.Email != null && u.Roles != null)
@@ -185,6 +213,10 @@ public class BirthdayService : IBirthdayService
         if (senderAccount is null) return;
         var sender = senderAccount.Email;
 
+        var sentThisSlot = await _db.ChatMessages.AsNoTracking()
+            .AnyAsync(m => m.SenderEmail == sender && m.SentOn >= slotStart && m.Body.StartsWith(heading), ct);
+        if (sentThisSlot) return;
+
         foreach (var person in office.Where(u => !string.Equals(u.Email, sender, StringComparison.OrdinalIgnoreCase))
                      .DistinctBy(u => u.Email, StringComparer.OrdinalIgnoreCase))
         {
@@ -194,15 +226,16 @@ public class BirthdayService : IBirthdayService
 
             var conversation = await _chat.StartOrGetDirectConversationAsync(sender, person.Email, ct);
             if (conversation.Succeeded)
-                await _chat.SendMessageAsync(sender, conversation.Value, new SendMessageRequest { Body = ChatBody(theirs, isAdmin) }, ct);
+                await _chat.SendMessageAsync(sender, conversation.Value,
+                    new SendMessageRequest { Body = ChatBody(heading, theirs, isAdmin) }, ct);
         }
     }
 
-    private static string ChatBody(IReadOnlyList<BirthdayPersonDto> people, bool withCardHint)
+    private static string ChatBody(string heading, IReadOnlyList<BirthdayPersonDto> people, bool withCardHint)
     {
         var lines = people.Select(p => $"• {p.Name} ({p.Kind}, turning {p.TurningAge})" +
                                        (string.IsNullOrWhiteSpace(p.Phone) ? "" : $" — {p.Phone}"));
-        return "🎂 Birthdays today:\n" + string.Join("\n", lines) +
+        return heading + ":\n" + string.Join("\n", lines) +
                (withCardHint ? "\n\nOpen Birthdays in the menu to send a wish card on WhatsApp." : "");
     }
 
@@ -215,10 +248,9 @@ public class BirthdayService : IBirthdayService
         new(year, dob.Month, Math.Min(dob.Day, DateTime.DaysInMonth(year, dob.Month)));
 }
 
-/// <summary>
-/// Every hour, raises today's birthday alerts on the dashboard. Hourly rather than
-/// daily so a restart or the turn of midnight is never missed; the service skips
-/// anyone already alerted today.
+/// Every 15 minutes, raises birthday alerts on the dashboard (day before and on
+/// the day) and sends the chat reminders at 9 AM, 1 PM and 5 PM. Anything already
+/// raised or sent for that day or reminder time is skipped.
 /// </summary>
 public class BirthdayNotificationService : BackgroundService
 {
@@ -250,7 +282,7 @@ public class BirthdayNotificationService : BackgroundService
                 _logger.LogError(ex, "Birthday alert sweep failed");
             }
 
-            try { await Task.Delay(TimeSpan.FromHours(1), stoppingToken); }
+            try { await Task.Delay(TimeSpan.FromMinutes(15), stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
     }
