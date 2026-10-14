@@ -7,6 +7,7 @@ namespace InstituteMS.Application.Birthdays;
 /// record) or a staff member (from their login account).
 /// </summary>
 /// <param name="Key">Stable id: "S-{registration}" for a student, "U-{user id}" for staff.</param>
+/// <param name="OrgNodeId">The Hierarchy chart box whose photo goes on the card (Technical Staff, Proprietor).</param>
 /// <param name="Kind">Student, Teacher, Receptionist, Technical Staff, Editor, Admin, SuperAdmin or Proprietor.</param>
 public record BirthdayPersonDto(
     string Key,
@@ -18,7 +19,8 @@ public record BirthdayPersonDto(
     DateOnly DateOfBirth,
     DateOnly NextBirthday,
     int DaysAway,
-    int TurningAge);
+    int TurningAge,
+    int? OrgNodeId = null);
 
 /// <summary>The Proprietor's details for the birthday alert (they have no login account).</summary>
 public record ProprietorProfileDto(string Name, DateOnly? DateOfBirth, string? Phone);

@@ -121,4 +121,43 @@ public class UsersController : ApiControllerBase
         => Envelope(
             await _users.SetStatusAsync(id, isActive, CurrentUserName, ct),
             isActive ? "User activated." : "User deactivated.");
+
+    /// <summary>The staff member's photograph (printed on their birthday card).</summary>
+    [HttpGet("{id:int}/photo")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist}")]
+    public async Task<IActionResult> Photo(int id, CancellationToken ct)
+    {
+        var photo = await _users.GetPhotoAsync(id, ct);
+        if (photo is null) return NotFound();
+        Response.Headers.CacheControl = "private, no-store";
+        return File(photo.Bytes, photo.ContentType);
+    }
+
+    /// <summary>Saves or replaces the photograph — taken with the camera or chosen from a file.</summary>
+    [HttpPut("{id:int}/photo")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist}")]
+    [RequestSizeLimit(3 * 1024 * 1024)]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SavePhoto(int id, [FromBody] UserPhotoSaveRequest request, CancellationToken ct)
+        => Envelope(await _users.SavePhotoAsync(id, request, CurrentUserName, ct), "Photo saved.");
+
+    [HttpDelete("{id:int}/photo")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist}")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> DeletePhoto(int id, CancellationToken ct)
+        => Envelope(await _users.DeletePhotoAsync(id, ct), "Photo removed.");
+
+    /// <summary>
+    /// A staff member's photo by login id — the User form photo, else their
+    /// Hierarchy chart photo. For the Receptionists list and the birthday card.
+    /// </summary>
+    [HttpGet("staff-photo")]
+    [Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Receptionist}")]
+    public async Task<IActionResult> StaffPhoto([FromQuery] string loginId, CancellationToken ct)
+    {
+        var photo = await _users.GetStaffPhotoAsync(loginId ?? string.Empty, ct);
+        if (photo is null) return NoContent();
+        Response.Headers.CacheControl = "private, max-age=300";
+        return File(photo.Bytes, photo.ContentType);
+    }
 }

@@ -46,6 +46,7 @@ public class AppDbContext : DbContext
     public DbSet<SiteVisit> SiteVisits => Set<SiteVisit>();
     public DbSet<CertificateSetting> CertificateSettings => Set<CertificateSetting>();
     public DbSet<ProprietorProfile> ProprietorProfiles => Set<ProprietorProfile>();
+    public DbSet<UserPhoto> UserPhotos => Set<UserPhoto>();
     public DbSet<ExamFeePayment> ExamFeePayments => Set<ExamFeePayment>();
     public DbSet<ExamSchedule> ExamSchedules => Set<ExamSchedule>();
     public DbSet<CertificateIssue> CertificateIssues => Set<CertificateIssue>();

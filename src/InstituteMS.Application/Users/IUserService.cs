@@ -31,4 +31,17 @@ public interface IUserService
 
     /// <summary>How many accounts hold each of the fixed roles, for the role-wise grid.</summary>
     Task<IReadOnlyList<RoleCountDto>> GetRoleCountsAsync(CancellationToken ct = default);
+
+    /// <summary>The staff member's photograph, or null when none is saved.</summary>
+    Task<UserPhotoFile?> GetPhotoAsync(int id, CancellationToken ct = default);
+
+    Task<Result<bool>> SavePhotoAsync(int id, UserPhotoSaveRequest request, string? actor, CancellationToken ct = default);
+
+    Task<Result<bool>> DeletePhotoAsync(int id, CancellationToken ct = default);
+
+    /// <summary>
+    /// A staff member's photo by login id: the one on their User form, else the one
+    /// on their Hierarchy chart box. Null when neither exists.
+    /// </summary>
+    Task<UserPhotoFile?> GetStaffPhotoAsync(string loginId, CancellationToken ct = default);
 }

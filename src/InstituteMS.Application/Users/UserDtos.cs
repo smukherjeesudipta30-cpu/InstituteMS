@@ -91,3 +91,9 @@ public record SetPasswordRequest
 {
     public string Password { get; init; } = string.Empty;
 }
+
+/// <summary>A staff photograph to save: JPEG or PNG, as Base64 (a data: URL is accepted).</summary>
+public record UserPhotoSaveRequest(string ContentType, string Base64);
+
+/// <summary>A stored photograph, ready to send as a file.</summary>
+public record UserPhotoFile(byte[] Bytes, string ContentType);

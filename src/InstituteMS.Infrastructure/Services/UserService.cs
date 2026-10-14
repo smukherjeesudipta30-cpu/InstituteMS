@@ -366,4 +366,92 @@ public class UserService : IUserService
 
         return parsed.Length == 0 ? null : string.Join(" & ", parsed);
     }
+
+    private const int MaxPhotoBytes = 1024 * 1024;
+
+    public async Task<UserPhotoFile?> GetPhotoAsync(int id, CancellationToken ct = default)
+    {
+        var photo = await _db.UserPhotos.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == id, ct);
+        return photo is null ? null : new UserPhotoFile(Convert.FromBase64String(photo.PhotoBase64), photo.ContentType);
+    }
+
+    public async Task<Result<bool>> SavePhotoAsync(int id, UserPhotoSaveRequest request, string? actor, CancellationToken ct = default)
+    {
+        if (!await _db.Users.AnyAsync(u => u.Id == id, ct))
+            return Result<bool>.Failure("User not found.", ResultStatus.NotFound);
+        if (request.ContentType is not ("image/jpeg" or "image/png"))
+            return Result<bool>.Failure("The photo must be a JPEG or PNG picture.");
+
+        var base64 = request.Base64 ?? string.Empty;
+        var comma = base64.IndexOf(',');
+        if (base64.StartsWith("data:", StringComparison.OrdinalIgnoreCase) && comma > 0) base64 = base64[(comma + 1)..];
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(base64); }
+        catch (FormatException) { return Result<bool>.Failure("The photo could not be read."); }
+        if (bytes.Length == 0) return Result<bool>.Failure("The photo is empty.");
+        if (bytes.Length > MaxPhotoBytes) return Result<bool>.Failure("The photo is too large — please use one under 1 MB.");
+
+        var row = await _db.UserPhotos.FirstOrDefaultAsync(p => p.UserId == id, ct);
+        if (row is null) { row = new UserPhoto { UserId = id }; _db.UserPhotos.Add(row); }
+        row.ContentType = request.ContentType;
+        row.PhotoBase64 = base64;
+        row.ModifiedBy = actor;
+        row.ModifiedOn = DateTime.Now;
+        await _db.SaveChangesAsync(ct);
+        return Result<bool>.Success(true);
+    }
+
+    public async Task<Result<bool>> DeletePhotoAsync(int id, CancellationToken ct = default)
+    {
+        var row = await _db.UserPhotos.FirstOrDefaultAsync(p => p.UserId == id, ct);
+        if (row is not null)
+        {
+            _db.UserPhotos.Remove(row);
+            await _db.SaveChangesAsync(ct);
+        }
+        return Result<bool>.Success(true);
+    }
+
+    public async Task<UserPhotoFile?> GetStaffPhotoAsync(string loginId, CancellationToken ct = default)
+    {
+        var login = loginId.Trim();
+        if (login.Length == 0) return null;
+
+        var user = await _db.Users.AsNoTracking()
+            .Where(u => u.LoginId == login || u.Email == login)
+            .OrderByDescending(u => u.IsActive)
+            .Select(u => new { u.Id, u.Name, u.Email })
+            .FirstOrDefaultAsync(ct);
+        if (user is not null)
+        {
+            var own = await GetPhotoAsync(user.Id, ct);
+            if (own is not null) return own;
+        }
+
+        // The Hierarchy chart: the box linked to their teacher/receptionist record,
+        // else one with their email, else one with their name.
+        var receptionists = await _db.Receptionists.AsNoTracking().Where(r => r.LoginId == login)
+            .Select(r => new { Type = UserRoles.Receptionist, r.Id, r.Name, r.PersonalEmail }).ToListAsync(ct);
+        var teachers = await _db.Teachers.AsNoTracking().Where(t => t.LoginId == login)
+            .Select(t => new { Type = UserRoles.Teacher, t.Id, Name = t.Name ?? string.Empty, t.PersonalEmail }).ToListAsync(ct);
+        var records = receptionists.Concat(teachers).ToList();
+
+        var boxes = await _db.OrgNodes.AsNoTracking()
+            .Where(n => n.IsActive && n.PhotoBase64 != null)
+            .Select(n => new { n.PersonName, n.Email, n.StaffType, n.StaffId, n.PhotoBase64, n.PhotoContentType })
+            .ToListAsync(ct);
+        var emails = records.Select(r => r.PersonalEmail).Append(user?.Email).Append(login)
+            .Where(e => !string.IsNullOrWhiteSpace(e)).Select(e => e!.Trim()).ToList();
+        var names = records.Select(r => r.Name).Append(user?.Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => Squash(n!)).ToList();
+
+        var box = boxes.FirstOrDefault(n => records.Any(r => r.Type == n.StaffType && r.Id == n.StaffId))
+                  ?? boxes.FirstOrDefault(n => n.Email != null && emails.Contains(n.Email.Trim(), StringComparer.OrdinalIgnoreCase))
+                  ?? boxes.FirstOrDefault(n => names.Contains(Squash(n.PersonName), StringComparer.OrdinalIgnoreCase));
+        return box is null
+            ? null
+            : new UserPhotoFile(Convert.FromBase64String(box.PhotoBase64!), box.PhotoContentType ?? "image/jpeg");
+
+        static string Squash(string s) => string.Join(' ', s.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    }
 }

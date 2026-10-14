@@ -39,13 +39,13 @@ public class BirthdayService : IBirthdayService
         var until = today.AddDays(days);
         var results = new List<BirthdayPersonDto>();
 
-        void Add(string key, string kind, string? name, string? phone, string? reg, string? login, DateOnly dob)
+        void Add(string key, string kind, string? name, string? phone, string? reg, string? login, DateOnly dob, int? orgNodeId = null)
         {
             var next = Anniversary(dob, today.Year);
             if (next < today) next = Anniversary(dob, today.Year + 1);
             if (next > until) return;
             results.Add(new BirthdayPersonDto(key, kind, name?.Trim(), phone?.Trim(), reg, login, dob,
-                next, next.DayNumber - today.DayNumber, next.Year - dob.Year));
+                next, next.DayNumber - today.DayNumber, next.Year - dob.Year, orgNodeId));
         }
 
         // Students come from the student record; every other role from the Users
@@ -68,38 +68,68 @@ public class BirthdayService : IBirthdayService
         // Technical Staff are receptionists or teachers flagged IsTechnical; the
         // staff record also supplies the phone when the login account has none.
         var receptionists = await _db.Receptionists.AsNoTracking()
-            .Where(r => r.LoginId != null).Select(r => new { r.LoginId, r.Phone, r.IsTechnical }).ToListAsync(ct);
+            .Where(r => r.LoginId != null)
+            .Select(r => new StaffRef(UserRoles.Receptionist, r.Id, r.LoginId!, r.Phone, r.PersonalEmail, r.IsTechnical))
+            .ToListAsync(ct);
         var teachers = await _db.Teachers.AsNoTracking()
-            .Where(t => t.LoginId != null).Select(t => new { t.LoginId, t.Phone, t.IsTechnical }).ToListAsync(ct);
+            .Where(t => t.LoginId != null)
+            .Select(t => new StaffRef(UserRoles.Teacher, t.Id, t.LoginId!, t.Phone, t.PersonalEmail, t.IsTechnical))
+            .ToListAsync(ct);
         var staff = receptionists.Concat(teachers)
-            .GroupBy(x => x.LoginId!.Trim(), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                g => g.Key,
-                g => (Phone: g.Select(x => x.Phone).FirstOrDefault(p => !string.IsNullOrWhiteSpace(p)), Technical: g.Any(x => x.IsTechnical)),
-                StringComparer.OrdinalIgnoreCase);
+            .GroupBy(x => x.LoginId.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        // Technical Staff and the Proprietor take their photo from their box on the
+        // Hierarchy chart.
+        var boxes = await _db.OrgNodes.AsNoTracking()
+            .Where(n => n.IsActive && n.PhotoBase64 != null)
+            .Select(n => new { n.Id, n.PersonName, n.Designation, n.Email, n.StaffType, n.StaffId })
+            .ToListAsync(ct);
 
         foreach (var u in users)
         {
             var login = (u.LoginId ?? u.Email)?.Trim();
-            (string? Phone, bool Technical) match = (null, false);
-            if (login is not null && staff.TryGetValue(login, out var byLogin)) match = byLogin;
-            else if (u.Email is not null && staff.TryGetValue(u.Email.Trim(), out var byEmail)) match = byEmail;
+            List<StaffRef>? records = null;
+            if (login is not null) staff.TryGetValue(login, out records);
+            if (records is null && u.Email is not null) staff.TryGetValue(u.Email.Trim(), out records);
+            records ??= [];
+            var technical = records.Any(r => r.IsTechnical);
 
             var roles = u.RoleList;
-            var kind = match.Technical ? "Technical Staff"
+            var kind = technical ? "Technical Staff"
                      : roles.Contains(UserRoles.SuperAdmin) ? "SuperAdmin"
                      : roles.Contains(UserRoles.Admin) ? "Admin"
                      : roles.Contains(UserRoles.Editor) ? "Editor"
                      : roles.Contains(UserRoles.Teacher) ? "Teacher"
                      : "Receptionist";
-            Add($"U-{u.Id}", kind, u.Name, string.IsNullOrWhiteSpace(u.PhoneNumber) ? match.Phone : u.PhoneNumber,
-                null, login, u.DateOfBirth!.Value);
+
+            int? box = null;
+            if (technical)
+            {
+                var emails = records.Select(r => r.PersonalEmail).Append(u.Email)
+                    .Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!.Trim()).ToList();
+                box = (boxes.FirstOrDefault(n => records.Any(r => r.Type == n.StaffType && r.Id == n.StaffId))
+                       ?? boxes.FirstOrDefault(n => n.Email != null && emails.Contains(n.Email.Trim(), StringComparer.OrdinalIgnoreCase))
+                       ?? boxes.FirstOrDefault(n => SameName(n.PersonName, u.Name)))?.Id;
+            }
+
+            var phone = string.IsNullOrWhiteSpace(u.PhoneNumber)
+                ? records.Select(r => r.Phone).FirstOrDefault(p => !string.IsNullOrWhiteSpace(p))
+                : u.PhoneNumber;
+            Add($"U-{u.Id}", kind, u.Name, phone, null, login, u.DateOfBirth!.Value, box);
         }
 
         // The Proprietor has no login account; their details are kept on their own.
+        // Photo: their box on the chart by name, else the Owner/Proprietor box.
         var proprietor = await _db.ProprietorProfiles.AsNoTracking().FirstOrDefaultAsync(x => x.Id == 1, ct);
         if (proprietor?.DateOfBirth is DateOnly pdob)
-            Add(ProprietorKey, Proprietor, proprietor.Name, proprietor.Phone, null, null, pdob);
+        {
+            var box = (boxes.FirstOrDefault(n => SameName(n.PersonName, proprietor.Name))
+                       ?? boxes.FirstOrDefault(n => n.Designation != null
+                              && (n.Designation.Contains("Owner", StringComparison.OrdinalIgnoreCase)
+                                  || n.Designation.Contains("Proprietor", StringComparison.OrdinalIgnoreCase))))?.Id;
+            Add(ProprietorKey, Proprietor, proprietor.Name, proprietor.Phone, null, null, pdob, box);
+        }
 
         return Ordered(results);
     }
@@ -247,6 +277,13 @@ public class BirthdayService : IBirthdayService
     /// <summary>Soonest first; on the same day staff before students, then by name.</summary>
     private static List<BirthdayPersonDto> Ordered(List<BirthdayPersonDto> list) =>
         list.OrderBy(p => p.DaysAway).ThenBy(p => p.Kind == "Student" ? 1 : 0).ThenBy(p => p.Name).ToList();
+
+    private static bool SameName(string? a, string? b) =>
+        !string.IsNullOrWhiteSpace(a) && !string.IsNullOrWhiteSpace(b)
+        && string.Equals(string.Join(' ', a.Split(' ', StringSplitOptions.RemoveEmptyEntries)),
+                         string.Join(' ', b.Split(' ', StringSplitOptions.RemoveEmptyEntries)), StringComparison.OrdinalIgnoreCase);
+
+    private sealed record StaffRef(string Type, int Id, string LoginId, string? Phone, string? PersonalEmail, bool IsTechnical);
 
     /// <summary>29 Feb falls back to 28 Feb in a non-leap year.</summary>
     private static DateOnly Anniversary(DateOnly dob, int year) =>
