@@ -194,7 +194,8 @@ public class BirthdayService : IBirthdayService
 
     /// <summary>
     /// The news in the chat window of every active Admin and SuperAdmin; the
-    /// Proprietor's birthday goes to Editors as well. A chat needs a sender, so a
+    /// Proprietor's birthday goes to Editors as well, and Teacher and Student birthdays
+    /// to Receptionists. A chat needs a sender, so a
     /// SuperAdmin (or, failing that, the first Admin) sends it to all the others.
     /// Skipped when this heading was already sent since <paramref name="slotStart"/>.
     /// </summary>
@@ -206,7 +207,7 @@ public class BirthdayService : IBirthdayService
             .Select(u => new { u.Email, u.Roles })
             .ToListAsync(ct))
             .Select(u => new { Email = u.Email!, Roles = UserRoles.Split(u.Roles) })
-            .Where(u => u.Roles.Any(r => r is UserRoles.Admin or UserRoles.SuperAdmin or UserRoles.Editor))
+            .Where(u => u.Roles.Any(r => r is UserRoles.Admin or UserRoles.SuperAdmin or UserRoles.Editor or UserRoles.Receptionist))
             .ToList();
         var senderAccount = office.FirstOrDefault(u => u.Roles.Contains(UserRoles.SuperAdmin))
                             ?? office.FirstOrDefault(u => u.Roles.Contains(UserRoles.Admin));
@@ -221,7 +222,11 @@ public class BirthdayService : IBirthdayService
                      .DistinctBy(u => u.Email, StringComparer.OrdinalIgnoreCase))
         {
             var isAdmin = person.Roles.Any(r => r is UserRoles.Admin or UserRoles.SuperAdmin);
-            var theirs = isAdmin ? people : people.Where(p => p.Kind == Proprietor).ToList();
+            var isEditor = person.Roles.Contains(UserRoles.Editor);
+            var theirs = isAdmin ? people
+                : people.Where(p => (isEditor && p.Kind == Proprietor)
+                                 || (person.Roles.Contains(UserRoles.Receptionist) && p.Kind is "Teacher" or "Student"))
+                        .ToList();
             if (theirs.Count == 0) continue;
 
             var conversation = await _chat.StartOrGetDirectConversationAsync(sender, person.Email, ct);
