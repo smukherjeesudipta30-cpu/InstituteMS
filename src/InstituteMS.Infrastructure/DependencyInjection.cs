@@ -59,6 +59,10 @@ public static class DependencyInjection
 
         services.Configure<CompetitionOptions>(configuration.GetSection(CompetitionOptions.SectionName));
 
+        // Before any context: the value converter on the student password reads it.
+        StudentPasswordCipher.Configure(
+            configuration[$"{StudentPasswordOptions.SectionName}:{nameof(StudentPasswordOptions.EncryptionKey)}"]);
+
         services.AddSingleton<IPasswordHasher, BCryptPasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
 

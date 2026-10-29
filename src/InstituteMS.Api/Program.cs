@@ -365,6 +365,17 @@ if (Directory.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot")))
 // Creates the first Admin account when dbo.Users is empty.
 await DbSeeder.SeedAsync(app.Services);
 
+// Encrypts any student portal password still in clear. Does nothing while
+// StudentPasswords:EncryptionKey is empty, which it is until the legacy
+// application stops reading that column.
+if (InstituteMS.Infrastructure.Security.StudentPasswordCipher.Enabled)
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<InstituteMS.Infrastructure.Persistence.AppDbContext>();
+    var count = await InstituteMS.Infrastructure.Security.StudentPasswordCipher.EncryptStoredAsync(db);
+    if (count > 0) app.Logger.LogInformation("Encrypted {Count} stored student passwords.", count);
+}
+
 app.Run();
 
 static async Task WriteEnvelopeAsync(

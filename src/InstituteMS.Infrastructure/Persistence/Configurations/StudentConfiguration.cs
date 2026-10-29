@@ -1,5 +1,6 @@
 using InstituteMS.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
+using InstituteMS.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace InstituteMS.Infrastructure.Persistence.Configurations;
@@ -46,7 +47,8 @@ public class StudentConfiguration : IEntityTypeConfiguration<Student>
         b.Property(x => x.Branch).HasColumnName("Branch").HasMaxLength(50);
         b.Property(x => x.PersonalEmail).HasColumnName("Personal_mail_id").HasMaxLength(150);
         b.Property(x => x.AvijanLoginEmail).HasColumnName("Avijan_login_mail_id").HasMaxLength(150);
-        b.Property(x => x.AvijanLoginPassword).HasColumnName("Avijan_login_Password").HasMaxLength(250);
+        b.Property(x => x.AvijanLoginPassword).HasColumnName("Avijan_login_Password").HasMaxLength(250)
+            .HasConversion<StudentPasswordConverter>();
         b.Property(x => x.ReplicaId).HasColumnName("Replica_id");
         b.Property(x => x.CreatedBy).HasColumnName("CreatedBy").HasMaxLength(50);
         b.Property(x => x.CreatedOn).HasColumnName("CreatedOn");
