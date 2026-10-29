@@ -253,7 +253,8 @@ public class ReceptionistService : IReceptionistService
 
             existing.Amount = request.Amount;
             existing.ExtraShiftBonus = extraShiftBonus;
-            existing.PaidOn = request.PaidOn;
+            // A correction sent without a date keeps the one already recorded.
+            existing.PaidOn = request.PaidOn ?? existing.PaidOn;
             existing.Notes = request.Notes?.Trim();
             // The branch is refreshed from the person, so correcting a payment after
             // they move branch puts it where they are now.
