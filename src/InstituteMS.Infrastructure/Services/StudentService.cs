@@ -1,3 +1,4 @@
+using InstituteMS.Application.Chat;
 using InstituteMS.Application.Documents;
 using InstituteMS.Application.Common;
 using InstituteMS.Application.Common.Interfaces;
@@ -28,6 +29,7 @@ public class StudentService : IStudentService
     private readonly IReceiptPdfGenerator _pdf;
     private readonly IReceiptLinkService _links;
     private readonly IReferralService _referrals;
+    private readonly IChatService _chat;
 
     public StudentService(
         AppDbContext db,
@@ -38,9 +40,11 @@ public class StudentService : IStudentService
         IReceiptPdfGenerator pdf,
         IReceiptLinkService links,
         IReferralService referrals,
+        IChatService chat,
         ILogger<StudentService> logger)
     {
         _referrals = referrals;
+        _chat = chat;
         _db = db;
         _numbers = numbers;
         _logins = logins;
@@ -705,8 +709,105 @@ public class StudentService : IStudentService
                 $"Avijan-Admission-Receipt-{(student.BillNo ?? "receipt").Replace('/', '-')}.pdf"),
             actor, ct);
 
+        // After the commit, like the welcome mail: a chat that fails to send
+        // must never undo or block the admission itself.
+        await NotifyAssignedTeachersAsync(student, courseName, actor, ct);
+
         return Result<StudentCreatedDto>.Success(
             new StudentCreatedDto(student.Id, student.RegistrationId!, student.BillNo!));
+    }
+
+    /// <summary>
+    /// Tells each teacher assigned to a new admission (first, second and third)
+    /// by chat message, which also reaches their phone as a push like any other
+    /// chat. Sent from the account that admitted the student, or from a
+    /// SuperAdmin/Admin when that account cannot be used. Never throws.
+    /// </summary>
+    private async Task NotifyAssignedTeachersAsync(
+        Student student, string? courseName, string? actor, CancellationToken ct)
+    {
+        try
+        {
+            var roles = new (int? Id, string Role)[]
+            {
+                (student.PrimaryTeacherId, "first teacher"),
+                (student.SecondTeacherId, "second teacher"),
+                (student.ThirdTeacherId, "third teacher")
+            };
+
+            var ids = roles.Where(r => r.Id is > 0).Select(r => r.Id!.Value).Distinct().ToList();
+            if (ids.Count == 0) return;
+
+            var teachers = await _db.Teachers.AsNoTracking()
+                .Where(t => ids.Contains(t.Id) && t.IsActive && t.LoginId != null && t.LoginId != "")
+                .Select(t => new { t.Id, t.Name, t.LoginId })
+                .ToListAsync(ct);
+            if (teachers.Count == 0) return;
+
+            var logins = teachers.Select(t => t.LoginId!).ToList();
+            var activeLogins = await _db.Users.AsNoTracking()
+                .Where(u => u.IsActive && u.Email != null && logins.Contains(u.Email))
+                .Select(u => u.Email!)
+                .ToListAsync(ct);
+
+            var sender = await ResolveNotificationSenderAsync(actor, ct);
+            if (sender is null)
+            {
+                _logger.LogWarning(
+                    "No account available to tell the teachers of {RegistrationId} about the admission.",
+                    student.RegistrationId);
+                return;
+            }
+
+            foreach (var teacher in teachers)
+            {
+                var login = activeLogins.FirstOrDefault(
+                    e => string.Equals(e, teacher.LoginId, StringComparison.OrdinalIgnoreCase));
+                if (login is null || string.Equals(login, sender, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var role = string.Join(" and ", roles.Where(r => r.Id == teacher.Id).Select(r => r.Role));
+                var body =
+                    $"New admission assigned to you as {role}:\n" +
+                    $"• Student: {student.Name} ({student.RegistrationId})\n" +
+                    (string.IsNullOrWhiteSpace(courseName) ? "" : $"• Course: {courseName}\n") +
+                    (string.IsNullOrWhiteSpace(student.Branch) ? "" : $"• Branch: {student.Branch}\n") +
+                    (student.DateOfJoining is { } joined ? $"• Joining date: {joined:dd MMM yyyy}\n" : "") +
+                    "\nPlease welcome the student and plan their classes.";
+
+                var conversation = await _chat.StartOrGetDirectConversationAsync(sender, login, ct);
+                if (!conversation.Succeeded) continue;
+
+                var sent = await _chat.SendMessageAsync(
+                    sender, conversation.Value, new SendMessageRequest { Body = body }, ct);
+                if (!sent.Succeeded)
+                    _logger.LogWarning(
+                        "Could not tell teacher {TeacherId} about admission {RegistrationId}.",
+                        teacher.Id, student.RegistrationId);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex,
+                "Telling the assigned teachers about admission {RegistrationId} failed.",
+                student.RegistrationId);
+        }
+    }
+
+    /// <summary>The admitting account when it is an active user, else a SuperAdmin, else an Admin.</summary>
+    private async Task<string?> ResolveNotificationSenderAsync(string? actor, CancellationToken ct)
+    {
+        var accounts = await _db.Users.AsNoTracking()
+            .Where(u => u.IsActive && u.Email != null && u.Roles != null)
+            .Select(u => new { u.Email, u.Roles })
+            .ToListAsync(ct);
+
+        if (!string.IsNullOrWhiteSpace(actor)
+            && accounts.Any(a => string.Equals(a.Email, actor, StringComparison.OrdinalIgnoreCase)))
+            return accounts.First(a => string.Equals(a.Email, actor, StringComparison.OrdinalIgnoreCase)).Email;
+
+        return accounts.FirstOrDefault(a => UserRoles.Split(a.Roles).Contains(UserRoles.SuperAdmin))?.Email
+               ?? accounts.FirstOrDefault(a => UserRoles.Split(a.Roles).Contains(UserRoles.Admin))?.Email;
     }
 
     /// <summary>
