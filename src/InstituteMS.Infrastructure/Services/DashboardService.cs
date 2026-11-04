@@ -118,11 +118,16 @@ public class DashboardService : IDashboardService
     /// alert records the person's role in CourseName (see AuthService), which is
     /// what this reads — so existing alerts are covered too.
     /// </summary>
-    private IQueryable<Domain.Entities.AdminNotification> VisibleNotifications(bool viewerIsSuperAdmin) =>
-        viewerIsSuperAdmin
-            ? _db.AdminNotifications
-            : _db.AdminNotifications.Where(n => !(n.Type == Domain.Entities.AdminNotificationTypes.StaffPasswordChange
-                                                  && SuperAdminOnlyPasswordRoles.Contains(n.CourseName)));
+    /// <remarks>PreSchool alerts are shown on the PreSchool's own dashboard, never on this one.</remarks>
+    private IQueryable<Domain.Entities.AdminNotification> VisibleNotifications(bool viewerIsSuperAdmin)
+    {
+        var computerCentre = _db.AdminNotifications
+            .Where(n => n.Type != Domain.Entities.AdminNotificationTypes.PreSchoolPasswordChange);
+        return viewerIsSuperAdmin
+            ? computerCentre
+            : computerCentre.Where(n => !(n.Type == Domain.Entities.AdminNotificationTypes.StaffPasswordChange
+                                          && SuperAdminOnlyPasswordRoles.Contains(n.CourseName)));
+    }
 
     public async Task<Result<bool>> MarkNotificationReadAsync(
         int id, string? actor, bool viewerIsSuperAdmin = false, CancellationToken ct = default)

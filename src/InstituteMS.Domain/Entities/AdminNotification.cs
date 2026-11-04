@@ -47,6 +47,13 @@ public static class AdminNotificationTypes
 {
     public const string StudentPasswordChange = "StudentPasswordChange";
     public const string StaffPasswordChange = "StaffPasswordChange";
+
+    /// <summary>
+    /// A PreSchool staff member changed their password — seen by the PreSchool
+    /// admin (and SuperAdmin) on the PreSchool dashboard, never on the Computer
+    /// Centre's. A PreSchool admin's own change is SuperAdmin's alone.
+    /// </summary>
+    public const string PreSchoolPasswordChange = "PreSchoolPasswordChange";
     public const string CompetitionDraftPasswordChange = "CompetitionDraftPasswordChange";
     public const string CompetitionDraftStarted = "CompetitionDraftStarted";
 

@@ -77,6 +77,22 @@ public class PreSchoolFinanceController : ApiControllerBase
     public async Task<IActionResult> DeleteExpense(int id, CancellationToken ct)
         => Envelope(await _finance.DeleteExpenseAsync(id, ct), "Expense removed.");
 
+    /// <summary>The PreSchool admin's alerts, e.g. a staff member changed their password; newest first.</summary>
+    [HttpGet("alerts")]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolAlertsDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Alerts([FromServices] IPreSchoolAlertService alerts, CancellationToken ct)
+        => Envelope(Result<PreSchoolAlertsDto>.Success(await alerts.ListAsync(User.IsInRole(UserRoles.SuperAdmin), ct)));
+
+    [HttpPatch("alerts/{id:int}/read")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> AlertRead(int id, [FromServices] IPreSchoolAlertService alerts, CancellationToken ct)
+        => Envelope(await alerts.MarkReadAsync(id, CurrentUserName, User.IsInRole(UserRoles.SuperAdmin), ct), "Marked as read.");
+
+    [HttpPatch("alerts/read-all")]
+    [ProducesResponseType(typeof(ApiResponse<int>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> AlertsReadAll([FromServices] IPreSchoolAlertService alerts, CancellationToken ct)
+        => Envelope(await alerts.MarkAllReadAsync(CurrentUserName, User.IsInRole(UserRoles.SuperAdmin), ct), "All marked as read.");
+
     /// <summary>Income, salaries, expenses and net, month by month, for a calendar year.</summary>
     [HttpGet("reports/income")]
     [ProducesResponseType(typeof(ApiResponse<PreSchoolIncomeReportDto>), StatusCodes.Status200OK)]

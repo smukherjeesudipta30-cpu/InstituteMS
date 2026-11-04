@@ -383,6 +383,31 @@ public class AuthService : IAuthService
         User user, string newPassword, CancellationToken ct)
     {
         var roles = UserRoles.Split(user.Roles);
+
+        // A PreSchool account's change goes to the PreSchool's own dashboard, not
+        // the Computer Centre's: its staff only (parents are not staff), and
+        // without the password, which the PreSchool never shows.
+        if (UserRoles.InPreSchool(roles) && !UserRoles.InComputerCentre(roles) && !roles.Contains(UserRoles.SuperAdmin))
+        {
+            if (!roles.Any(r => r is UserRoles.PreSchoolHead or UserRoles.PreSchoolFrontDesk or UserRoles.PreSchoolTutor))
+                return;
+
+            var label = roles.Contains(UserRoles.PreSchoolHead) ? "PreSchool Admin"
+                : roles.Contains(UserRoles.PreSchoolFrontDesk) ? "PreSchool Receptionist" : "PreSchool Teacher";
+            var who = user.Name ?? user.Email ?? "A staff member";
+            _db.AdminNotifications.Add(new AdminNotification
+            {
+                Type = AdminNotificationTypes.PreSchoolPasswordChange,
+                Title = $"{who} ({label}) changed their password",
+                StudentName = who,
+                CourseName = UserRoles.Primary(user.Roles),
+                LoginId = user.Email,
+                CreatedOn = DateTime.Now
+            });
+            await _db.SaveChangesAsync(ct);
+            return;
+        }
+
         var isStudent = roles.Contains(UserRoles.Student, StringComparer.OrdinalIgnoreCase);
 
         string name;

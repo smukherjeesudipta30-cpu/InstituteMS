@@ -237,3 +237,21 @@ public interface IPreSchoolHolidayService
     Task<Result<PreSchoolHolidayDto>> UpdateAsync(int id, PreSchoolHolidaySaveRequest request, string? actor, CancellationToken ct = default);
     Task<Result<bool>> DeleteAsync(int id, CancellationToken ct = default);
 }
+
+/// <summary>An alert for the PreSchool admin, e.g. a staff member changed their password.</summary>
+public record PreSchoolAlertDto(int Id, string Type, string Title, string? LoginId, DateTime CreatedOn, bool IsRead, string? ReadBy);
+
+/// <summary>The PreSchool admin's alerts, newest first, with how many are unread.</summary>
+public record PreSchoolAlertsDto(int Unread, IReadOnlyList<PreSchoolAlertDto> Items);
+
+/// <summary>
+/// Alerts for the PreSchool admin, kept in the same AdminNotification table as
+/// the Computer Centre's but of the PreSchool's own type, so neither dashboard
+/// shows the other's. A PreSchool admin's own password change is SuperAdmin's alone.
+/// </summary>
+public interface IPreSchoolAlertService
+{
+    Task<PreSchoolAlertsDto> ListAsync(bool viewerIsSuperAdmin, CancellationToken ct = default);
+    Task<Result<bool>> MarkReadAsync(int id, string? actor, bool viewerIsSuperAdmin, CancellationToken ct = default);
+    Task<Result<int>> MarkAllReadAsync(string? actor, bool viewerIsSuperAdmin, CancellationToken ct = default);
+}
