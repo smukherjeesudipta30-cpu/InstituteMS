@@ -220,6 +220,19 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
             expenses.GroupBy(e => e.Head).OrderByDescending(g => g.Sum(e => e.Amount)).ToDictionary(g => g.Key, g => g.Sum(e => e.Amount)));
     }
 
+    /* ------------------------------------------------------ own payslips */
+
+    public async Task<IReadOnlyList<PreSchoolSalaryPaymentDto>> MyPayslipsAsync(string email, CancellationToken ct = default)
+    {
+        var me = email.Trim();
+        var school = await SchoolAsync(ct);
+        var payments = await _db.PreSchoolSalaryPayments.AsNoTracking().Include(p => p.Staff)
+            .Where(p => p.Staff!.Email == me)
+            .OrderByDescending(p => p.ForMonth)
+            .ToListAsync(ct);
+        return payments.Select(p => ToDto(p, school)).ToList();
+    }
+
     /* ---------------------------------------------------------- helpers */
 
     private async Task<(string Name, string? Address)> SchoolAsync(CancellationToken ct)

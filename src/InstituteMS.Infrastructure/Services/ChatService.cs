@@ -104,14 +104,30 @@ public class ChatService : IChatService
         [UserRoles.Student, UserRoles.Teacher, UserRoles.Receptionist];
 
     /// <summary>Whether two people, by the roles they each hold, are allowed to message each other directly.</summary>
+    /// <remarks>
+    /// The two schools chat apart: a Computer Centre account and a PreSchool one
+    /// never see or message each other; only SuperAdmin reaches both. Inside the
+    /// PreSchool its staff message anyone there, and a parent messages the staff
+    /// but not other parents.
+    /// </remarks>
     private static bool CanMessage(IReadOnlyCollection<string> rolesA, IReadOnlyCollection<string> rolesB)
     {
         if (rolesA.Contains(UserRoles.SuperAdmin) || rolesB.Contains(UserRoles.SuperAdmin)) return true;
+
+        if (UserRoles.InPreSchool(rolesA) && UserRoles.InPreSchool(rolesB)
+            && (IsPreSchoolStaff(rolesA) || IsPreSchoolStaff(rolesB)))
+            return true;
+
+        if (!UserRoles.InComputerCentre(rolesA) || !UserRoles.InComputerCentre(rolesB)) return false;
+
         if (rolesA.Contains(UserRoles.Admin) || rolesA.Contains(UserRoles.Editor)) return true;
         if (rolesB.Contains(UserRoles.Admin) || rolesB.Contains(UserRoles.Editor)) return true;
 
         return rolesA.Any(OpenChatRoles.Contains) && rolesB.Any(OpenChatRoles.Contains);
     }
+
+    private static bool IsPreSchoolStaff(IReadOnlyCollection<string> roles) =>
+        roles.Contains(UserRoles.PreSchoolHead) || roles.Contains(UserRoles.PreSchoolFrontDesk) || roles.Contains(UserRoles.PreSchoolTutor);
 
     private static bool IsStaff(IReadOnlyCollection<string> roles) =>
         roles.Contains(UserRoles.SuperAdmin) || roles.Contains(UserRoles.Admin) ||

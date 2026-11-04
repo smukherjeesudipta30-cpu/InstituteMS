@@ -52,6 +52,22 @@ public static class UserRoles
     /// <summary>Everyone who works at the PreSchool, teachers included.</summary>
     public const string PreSchoolStaff = $"{PreSchoolHead},{PreSchoolFrontDesk},{PreSchoolTutor}";
 
+    /// <summary>Every PreSchool role, parents included.</summary>
+    public static readonly string[] PreSchoolRoles = [PreSchoolHead, PreSchoolFrontDesk, PreSchoolTutor, Parent];
+
+    /// <summary>Every Computer Centre role. SuperAdmin belongs to both schools and is in neither list.</summary>
+    public static readonly string[] ComputerCentreRoles = [Admin, Editor, Student, Teacher, Receptionist];
+
+    /// <summary>Holds a PreSchool role (whatever else it holds).</summary>
+    public static bool InPreSchool(IEnumerable<string> roles) => roles.Any(PreSchoolRoles.Contains);
+
+    /// <summary>Holds a Computer Centre role (whatever else it holds).</summary>
+    public static bool InComputerCentre(IEnumerable<string> roles) => roles.Any(ComputerCentreRoles.Contains);
+
+    /// <summary>The school a sign-in page belongs to; the Android app sends neither.</summary>
+    public const string SchoolComputer = "computer";
+    public const string SchoolPreSchool = "preschool";
+
     /// <summary>Roles allowed into the back-office dashboard (legacy <c>[Authorize(Roles="Admin,Editor")]</c>).</summary>
     public const string BackOffice = $"{Admin},{Editor}";
 

@@ -168,4 +168,11 @@ public interface IPreSchoolFinanceService
     Task<Result<bool>> DeleteExpenseAsync(int id, CancellationToken ct = default);
 
     Task<PreSchoolIncomeReportDto> IncomeAsync(int year, CancellationToken ct = default);
+
+    /// <summary>
+    /// The signed-in staff member's own salary payments, newest first. They are
+    /// found by the email on their staff record matching their sign-in; none
+    /// when the admin has not entered it.
+    /// </summary>
+    Task<IReadOnlyList<PreSchoolSalaryPaymentDto>> MyPayslipsAsync(string email, CancellationToken ct = default);
 }

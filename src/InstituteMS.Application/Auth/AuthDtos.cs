@@ -1,6 +1,11 @@
 namespace InstituteMS.Application.Auth;
 
-public record LoginRequest(string Email, string Password);
+/// <param name="School">
+/// Which school's sign-in page was used: "computer" or "preschool". Each
+/// turns away the other school's accounts (SuperAdmin passes both). Left out
+/// by the Android app, which signs in to either.
+/// </param>
+public record LoginRequest(string Email, string Password, string? School = null);
 
 public record RefreshRequest(string RefreshToken);
 

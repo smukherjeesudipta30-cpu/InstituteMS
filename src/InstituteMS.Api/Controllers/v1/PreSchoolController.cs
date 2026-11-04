@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using InstituteMS.Application.Common;
 using InstituteMS.Application.PreSchool;
 using InstituteMS.Domain.Common;
@@ -25,6 +26,20 @@ public class PreSchoolController : ApiControllerBase
         _masters = masters;
         _public = publicPage;
         _holidays = holidays;
+    }
+
+    /// <summary>
+    /// The signed-in PreSchool staff member's own salary slips — matched by the
+    /// email on their staff record. Never anyone else's.
+    /// </summary>
+    [HttpGet("my-payslips")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<PreSchoolSalaryPaymentDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> MyPayslips([FromServices] IPreSchoolFinanceService finance, CancellationToken ct)
+    {
+        var email = User.FindFirstValue(ClaimTypes.Email);
+        if (string.IsNullOrWhiteSpace(email))
+            return Envelope(Result<IReadOnlyList<PreSchoolSalaryPaymentDto>>.Success([]));
+        return Envelope(Result<IReadOnlyList<PreSchoolSalaryPaymentDto>>.Success(await finance.MyPayslipsAsync(email, ct)));
     }
 
     /// <summary>The PreSchool's holidays in one year (this year when none is given), in date order.</summary>

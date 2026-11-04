@@ -46,6 +46,24 @@ public class AuthService : IAuthService
         _logger = logger;
     }
 
+    /// <summary>
+    /// Why this account may not use the sign-in page it came from, or null when
+    /// it may. A SuperAdmin, and a request naming no page (the Android app),
+    /// always may; an account holding roles in both schools may use either.
+    /// </summary>
+    private static string? WrongSchoolMessage(string? school, string[] roles)
+    {
+        if (string.IsNullOrWhiteSpace(school) || roles.Contains(UserRoles.SuperAdmin)) return null;
+
+        if (school.Equals(UserRoles.SchoolPreSchool, StringComparison.OrdinalIgnoreCase) && !UserRoles.InPreSchool(roles))
+            return "This sign-in is for Avijan PreSchool. Please use the Avijan Computer Centre login.";
+
+        if (school.Equals(UserRoles.SchoolComputer, StringComparison.OrdinalIgnoreCase) && !UserRoles.InComputerCentre(roles))
+            return "This is an Avijan PreSchool account. Please sign in from the PreSchool login.";
+
+        return null;
+    }
+
     public async Task<Result<AuthResultDto>> LoginAsync(LoginRequest request, CancellationToken ct = default)
     {
         var email = request.Email.Trim();
@@ -107,6 +125,12 @@ public class AuthService : IAuthService
 
         if (user.EndDate is { } endDate && endDate < DateOnly.FromDateTime(now))
             return Result<AuthResultDto>.Failure("This account has expired. Contact the administrator.", ResultStatus.Forbidden);
+
+        // Each school's sign-in page lets in its own accounts only. Checked after
+        // the password, so a wrong page never reveals that an address exists.
+        var wrongSchool = WrongSchoolMessage(request.School, UserRoles.Split(user.Roles));
+        if (wrongSchool is not null)
+            return Result<AuthResultDto>.Failure(wrongSchool, ResultStatus.Forbidden);
 
         var (accessToken, expiresIn) = _tokens.CreateAccessToken(user);
         var refreshToken = _tokens.CreateRefreshToken();
