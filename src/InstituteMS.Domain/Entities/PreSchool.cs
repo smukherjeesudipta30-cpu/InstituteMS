@@ -128,3 +128,30 @@ public class PreSchoolSetting
     public string? ModifiedBy { get; set; }
     public DateTime? ModifiedOn { get; set; }
 }
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolEnquiry</c> — an admission enquiry sent from the
+/// public PreSchool page. Kept apart from the Computer Centre's course
+/// enquiries, so neither office sees the other's.
+/// </summary>
+public class PreSchoolEnquiry
+{
+    public int Id { get; set; }
+    public string ChildName { get; set; } = string.Empty;
+    public DateOnly? ChildDateOfBirth { get; set; }
+    public string ParentName { get; set; } = string.Empty;
+    public string Phone { get; set; } = string.Empty;
+    public string? Email { get; set; }
+
+    /// <summary>The class the parent asked about, as its name; null when they left it to the school.</summary>
+    public string? ClassWanted { get; set; }
+
+    public string? Message { get; set; }
+    public string? ClientIp { get; set; }
+    public DateTime CreatedOn { get; set; }
+
+    /// <summary>Set when the office has called the parent back.</summary>
+    public bool IsHandled { get; set; }
+    public string? HandledBy { get; set; }
+    public DateTime? HandledOn { get; set; }
+}

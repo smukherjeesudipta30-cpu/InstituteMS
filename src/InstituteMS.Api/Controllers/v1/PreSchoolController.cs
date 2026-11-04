@@ -17,8 +17,28 @@ namespace InstituteMS.Api.Controllers.v1;
 public class PreSchoolController : ApiControllerBase
 {
     private readonly IPreSchoolMasterService _masters;
+    private readonly IPreSchoolPublicService _public;
 
-    public PreSchoolController(IPreSchoolMasterService masters) => _masters = masters;
+    public PreSchoolController(IPreSchoolMasterService masters, IPreSchoolPublicService publicPage)
+    {
+        _masters = masters;
+        _public = publicPage;
+    }
+
+    /// <summary>Admission enquiries from the public PreSchool page, newest first.</summary>
+    [HttpGet("enquiries")]
+    [Authorize(Roles = UserRoles.PreSchoolOffice)]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<PreSchoolEnquiryDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Enquiries([FromQuery] bool includeHandled, CancellationToken ct)
+        => Envelope(Result<IReadOnlyList<PreSchoolEnquiryDto>>.Success(await _public.ListEnquiriesAsync(includeHandled, ct)));
+
+    /// <summary>Marks an enquiry as called back (or back to open).</summary>
+    [HttpPut("enquiries/{id:int}/handled")]
+    [Authorize(Roles = UserRoles.PreSchoolOffice)]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolEnquiryDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SetHandled(int id, [FromQuery] bool handled, CancellationToken ct)
+        => Envelope(await _public.SetEnquiryHandledAsync(id, handled, CurrentUserName, ct),
+            handled ? "Marked as called back." : "Marked as open.");
 
     /// <summary>Settings, classes with their subjects and monthly fees, and the grade table.</summary>
     [HttpGet("overview")]

@@ -81,3 +81,21 @@ public class PreSchoolSettingConfiguration : IEntityTypeConfiguration<PreSchoolS
         b.Property(x => x.ModifiedBy).HasMaxLength(250);
     }
 }
+
+public class PreSchoolEnquiryConfiguration : IEntityTypeConfiguration<PreSchoolEnquiry>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolEnquiry> b)
+    {
+        b.ToTable("PreSchoolEnquiry");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.ChildName).HasMaxLength(100).IsRequired();
+        b.Property(x => x.ParentName).HasMaxLength(100).IsRequired();
+        b.Property(x => x.Phone).HasMaxLength(20).IsRequired();
+        b.Property(x => x.Email).HasMaxLength(150);
+        b.Property(x => x.ClassWanted).HasMaxLength(50);
+        b.Property(x => x.Message).HasMaxLength(1000);
+        b.Property(x => x.ClientIp).HasMaxLength(50);
+        b.Property(x => x.HandledBy).HasMaxLength(250);
+        b.HasIndex(x => x.CreatedOn);
+    }
+}
