@@ -249,6 +249,7 @@ public class PreSchoolMasterService : IPreSchoolMasterService
         entity.UniformShopPhone = Clean(request.UniformShopPhone);
         entity.UniformShopMapUrl = Clean(request.UniformShopMapUrl);
         entity.ReceiptPrefix = request.ReceiptPrefix.Trim().ToUpperInvariant();
+        entity.OpensOn = request.OpensOn;
         entity.ModifiedBy = actor;
         entity.ModifiedOn = DateTime.Now;
         await _db.SaveChangesAsync(ct);
@@ -274,9 +275,9 @@ public class PreSchoolMasterService : IPreSchoolMasterService
 
     /// <summary>Before migration 086 has run there is no row; the screens still need a name to show.</summary>
     private static PreSchoolSettingDto ToDto(PreSchoolSetting? s) => s is null
-        ? new PreSchoolSettingDto("Avijan PreSchool", null, null, null, null, null, null, null, null, "APS", null, null)
+        ? new PreSchoolSettingDto("Avijan PreSchool", null, null, null, null, null, null, null, null, "APS", null, null, null)
         : new PreSchoolSettingDto(
             s.SchoolName, s.Address, s.Phone, s.Email, s.MapUrl,
             s.UniformShopName, s.UniformShopAddress, s.UniformShopPhone, s.UniformShopMapUrl,
-            s.ReceiptPrefix, s.ModifiedBy, s.ModifiedOn);
+            s.ReceiptPrefix, s.OpensOn, s.ModifiedBy, s.ModifiedOn);
 }

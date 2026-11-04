@@ -99,3 +99,17 @@ public class PreSchoolEnquiryConfiguration : IEntityTypeConfiguration<PreSchoolE
         b.HasIndex(x => x.CreatedOn);
     }
 }
+
+public class PreSchoolHolidayConfiguration : IEntityTypeConfiguration<PreSchoolHoliday>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolHoliday> b)
+    {
+        b.ToTable("PreSchoolHoliday");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Title).HasMaxLength(150).IsRequired();
+        b.Property(x => x.Note).HasMaxLength(300);
+        b.Property(x => x.CreatedBy).HasMaxLength(250);
+        b.Property(x => x.ModifiedBy).HasMaxLength(250);
+        b.HasIndex(x => x.FromDate);
+    }
+}

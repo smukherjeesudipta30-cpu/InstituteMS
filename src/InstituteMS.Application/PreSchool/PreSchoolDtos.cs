@@ -33,6 +33,7 @@ public record PreSchoolSettingDto(
     string? UniformShopPhone,
     string? UniformShopMapUrl,
     string ReceiptPrefix,
+    DateOnly? OpensOn,
     string? ModifiedBy,
     DateTime? ModifiedOn);
 
@@ -149,6 +150,7 @@ public record PreSchoolSettingSaveRequest
     public string? UniformShopPhone { get; init; }
     public string? UniformShopMapUrl { get; init; }
     public string ReceiptPrefix { get; init; } = "APS";
+    public DateOnly? OpensOn { get; init; }
 }
 
 public class PreSchoolSettingSaveRequestValidator : AbstractValidator<PreSchoolSettingSaveRequest>
@@ -193,4 +195,42 @@ public interface IPreSchoolMasterService
     Task<Result<IReadOnlyList<PreSchoolGradeBandDto>>> SaveGradeBandsAsync(PreSchoolGradeBandsSaveRequest request, string? actor, CancellationToken ct = default);
 
     Task<Result<PreSchoolSettingDto>> SaveSettingsAsync(PreSchoolSettingSaveRequest request, string? actor, CancellationToken ct = default);
+}
+
+public record PreSchoolHolidayDto(int Id, DateOnly FromDate, DateOnly ToDate, string Title, string? Note);
+
+public record PreSchoolHolidaySaveRequest
+{
+    public DateOnly FromDate { get; init; }
+    public DateOnly? ToDate { get; init; }
+    public string Title { get; init; } = string.Empty;
+    public string? Note { get; init; }
+}
+
+public class PreSchoolHolidaySaveRequestValidator : AbstractValidator<PreSchoolHolidaySaveRequest>
+{
+    public PreSchoolHolidaySaveRequestValidator()
+    {
+        RuleFor(x => x.FromDate).NotEqual(default(DateOnly)).WithMessage("Pick the first day.");
+        RuleFor(x => x).Must(x => x.ToDate is null || x.ToDate >= x.FromDate)
+            .WithMessage("The last day cannot be before the first.");
+        RuleFor(x => x).Must(x => x.ToDate is null || x.ToDate.Value.DayNumber - x.FromDate.DayNumber <= 90)
+            .WithMessage("A holiday can be at most 90 days long.");
+        RuleFor(x => x.Title).NotEmpty().WithMessage("Give the holiday a name.").MaximumLength(150);
+        RuleFor(x => x.Note).MaximumLength(300);
+    }
+}
+
+/// <summary>The PreSchool's own holiday notices, kept by its admin and receptionist.</summary>
+public interface IPreSchoolHolidayService
+{
+    /// <summary>Every holiday touching <paramref name="year"/>, in date order.</summary>
+    Task<IReadOnlyList<PreSchoolHolidayDto>> ListAsync(int year, CancellationToken ct = default);
+
+    /// <summary>Closures that have not ended yet, soonest first — for the public page and parents.</summary>
+    Task<IReadOnlyList<PreSchoolHolidayDto>> UpcomingAsync(CancellationToken ct = default);
+
+    Task<Result<PreSchoolHolidayDto>> CreateAsync(PreSchoolHolidaySaveRequest request, string? actor, CancellationToken ct = default);
+    Task<Result<PreSchoolHolidayDto>> UpdateAsync(int id, PreSchoolHolidaySaveRequest request, string? actor, CancellationToken ct = default);
+    Task<Result<bool>> DeleteAsync(int id, CancellationToken ct = default);
 }

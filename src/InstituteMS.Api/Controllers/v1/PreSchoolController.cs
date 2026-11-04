@@ -18,12 +18,39 @@ public class PreSchoolController : ApiControllerBase
 {
     private readonly IPreSchoolMasterService _masters;
     private readonly IPreSchoolPublicService _public;
+    private readonly IPreSchoolHolidayService _holidays;
 
-    public PreSchoolController(IPreSchoolMasterService masters, IPreSchoolPublicService publicPage)
+    public PreSchoolController(IPreSchoolMasterService masters, IPreSchoolPublicService publicPage, IPreSchoolHolidayService holidays)
     {
         _masters = masters;
         _public = publicPage;
+        _holidays = holidays;
     }
+
+    /// <summary>The PreSchool's holidays in one year (this year when none is given), in date order.</summary>
+    [HttpGet("holidays")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<PreSchoolHolidayDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Holidays([FromQuery] int? year, CancellationToken ct)
+        => Envelope(Result<IReadOnlyList<PreSchoolHolidayDto>>.Success(
+            await _holidays.ListAsync(year ?? DateTime.Today.Year, ct)));
+
+    [HttpPost("holidays")]
+    [Authorize(Roles = UserRoles.PreSchoolOffice)]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolHolidayDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> CreateHoliday([FromBody] PreSchoolHolidaySaveRequest request, CancellationToken ct)
+        => Envelope(await _holidays.CreateAsync(request, CurrentUserName, ct), "Holiday added.");
+
+    [HttpPut("holidays/{id:int}")]
+    [Authorize(Roles = UserRoles.PreSchoolOffice)]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolHolidayDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> UpdateHoliday(int id, [FromBody] PreSchoolHolidaySaveRequest request, CancellationToken ct)
+        => Envelope(await _holidays.UpdateAsync(id, request, CurrentUserName, ct), "Holiday saved.");
+
+    [HttpDelete("holidays/{id:int}")]
+    [Authorize(Roles = UserRoles.PreSchoolOffice)]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> DeleteHoliday(int id, CancellationToken ct)
+        => Envelope(await _holidays.DeleteAsync(id, ct), "Holiday removed.");
 
     /// <summary>Admission enquiries from the public PreSchool page, newest first.</summary>
     [HttpGet("enquiries")]

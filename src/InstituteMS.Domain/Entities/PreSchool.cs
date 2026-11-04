@@ -122,6 +122,12 @@ public class PreSchoolSetting
     public string? UniformShopPhone { get; set; }
     public string? UniformShopMapUrl { get; set; }
 
+    /// <summary>
+    /// The day the Champahati centre opens. Until then (or while it is not set)
+    /// both front pages say it is coming soon; from that day the tagline goes.
+    /// </summary>
+    public DateOnly? OpensOn { get; set; }
+
     /// <summary>Starts every PreSchool receipt number, e.g. APS/0001 — one running series.</summary>
     public string ReceiptPrefix { get; set; } = "APS";
 
@@ -154,4 +160,27 @@ public class PreSchoolEnquiry
     public bool IsHandled { get; set; }
     public string? HandledBy { get; set; }
     public DateTime? HandledOn { get; set; }
+}
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolHoliday</c> — a day or run of days the PreSchool is
+/// closed, with a notice for parents. The PreSchool's own list: the Computer
+/// Centre's holiday list is not read for it, since the two schools close on
+/// different days.
+/// </summary>
+public class PreSchoolHoliday
+{
+    public int Id { get; set; }
+    public DateOnly FromDate { get; set; }
+
+    /// <summary>The last closed day; the same as <see cref="FromDate"/> for a single day.</summary>
+    public DateOnly ToDate { get; set; }
+
+    public string Title { get; set; } = string.Empty;
+    public string? Note { get; set; }
+
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+    public string? ModifiedBy { get; set; }
+    public DateTime? ModifiedOn { get; set; }
 }

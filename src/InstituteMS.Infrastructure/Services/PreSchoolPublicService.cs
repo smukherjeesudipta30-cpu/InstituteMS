@@ -13,8 +13,13 @@ namespace InstituteMS.Infrastructure.Services;
 public class PreSchoolPublicService : IPreSchoolPublicService
 {
     private readonly AppDbContext _db;
+    private readonly IPreSchoolHolidayService _holidays;
 
-    public PreSchoolPublicService(AppDbContext db) => _db = db;
+    public PreSchoolPublicService(AppDbContext db, IPreSchoolHolidayService holidays)
+    {
+        _db = db;
+        _holidays = holidays;
+    }
 
     public async Task<PreSchoolPublicDto> GetPublicAsync(CancellationToken ct = default)
     {
@@ -29,12 +34,13 @@ public class PreSchoolPublicService : IPreSchoolPublicService
 
         return new PreSchoolPublicDto(
             s?.SchoolName ?? "Avijan PreSchool", s?.Address, s?.Phone, s?.Email, s?.MapUrl,
-            s?.UniformShopName, s?.UniformShopAddress, s?.UniformShopPhone, s?.UniformShopMapUrl,
+            s?.UniformShopName, s?.UniformShopAddress, s?.UniformShopPhone, s?.UniformShopMapUrl, s?.OpensOn,
             classes.Select(c => new PreSchoolPublicClassDto(
                     c.Name, c.MinAgeMonths, c.MaxAgeMonths, c.AdmissionFee,
                     c.FeeHeads.Where(f => f.IsActive).Sum(f => f.MonthlyAmount),
                     c.Subjects.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).Select(x => x.Name).ToList()))
-                .ToList());
+                .ToList(),
+            await _holidays.UpcomingAsync(ct));
     }
 
     public async Task<Result<bool>> SubmitEnquiryAsync(PreSchoolEnquiryRequest request, string? clientIp, CancellationToken ct = default)

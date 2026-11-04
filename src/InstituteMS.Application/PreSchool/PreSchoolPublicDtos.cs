@@ -23,7 +23,11 @@ public record PreSchoolPublicDto(
     string? UniformShopAddress,
     string? UniformShopPhone,
     string? UniformShopMapUrl,
-    IReadOnlyList<PreSchoolPublicClassDto> Classes);
+    // The Champahati centre's opening day; the page says "coming soon" until it has passed.
+    DateOnly? OpensOn,
+    IReadOnlyList<PreSchoolPublicClassDto> Classes,
+    // Closures that have not ended yet, soonest first.
+    IReadOnlyList<PreSchoolHolidayDto> Holidays);
 
 public record PreSchoolEnquiryRequest
 {
