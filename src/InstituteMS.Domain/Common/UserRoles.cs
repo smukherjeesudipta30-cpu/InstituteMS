@@ -27,7 +27,30 @@ public static class UserRoles
     public const string Teacher = "Teacher";
     public const string Receptionist = "Receptionist";
 
-    public static readonly string[] All = [SuperAdmin, Admin, Editor, Student, Teacher, Receptionist];
+    /*
+     * Avijan PreSchool's own roles. They give no access to any Computer Centre
+     * screen: none of them is in a Computer Centre controller's role list.
+     *
+     * The names deliberately contain none of the words above. Several places
+     * match the stored Roles column by substring (Roles.Contains("Teacher"),
+     * the Users grid filter and counts, the dashboard's student count), so a
+     * "PreSchoolTeacher" would be counted, listed and messaged as a Computer
+     * Centre teacher and a "PreSchoolAdmin" as an administrator. The screens
+     * show them as PreSchool Admin, Receptionist and Teacher.
+     */
+    public const string PreSchoolHead = "PreSchoolHead";
+    public const string PreSchoolFrontDesk = "PreSchoolFrontDesk";
+    public const string PreSchoolTutor = "PreSchoolTutor";
+    public const string Parent = "Parent";
+
+    public static readonly string[] All =
+        [SuperAdmin, Admin, Editor, Student, Teacher, Receptionist, PreSchoolHead, PreSchoolFrontDesk, PreSchoolTutor, Parent];
+
+    /// <summary>The PreSchool office: its administrator and receptionist.</summary>
+    public const string PreSchoolOffice = $"{PreSchoolHead},{PreSchoolFrontDesk}";
+
+    /// <summary>Everyone who works at the PreSchool, teachers included.</summary>
+    public const string PreSchoolStaff = $"{PreSchoolHead},{PreSchoolFrontDesk},{PreSchoolTutor}";
 
     /// <summary>Roles allowed into the back-office dashboard (legacy <c>[Authorize(Roles="Admin,Editor")]</c>).</summary>
     public const string BackOffice = $"{Admin},{Editor}";
@@ -55,7 +78,8 @@ public static class UserRoles
     /// Ranked most privileged first. Used to pick the landing page when a user
     /// holds several roles.
     /// </summary>
-    private static readonly string[] Precedence = [SuperAdmin, Admin, Editor, Receptionist, Teacher, Student];
+    private static readonly string[] Precedence =
+        [SuperAdmin, Admin, Editor, Receptionist, Teacher, PreSchoolHead, PreSchoolFrontDesk, PreSchoolTutor, Student, Parent];
 
     public static bool IsKnown(string? role) =>
         role is not null && All.Contains(role.Trim(), StringComparer.OrdinalIgnoreCase);
@@ -104,6 +128,8 @@ public static class UserRoles
         Receptionist => "/courses",
         Teacher => "/reports/teacher-earnings",
         Student => "/reports/student-statement",
+        PreSchoolHead or PreSchoolFrontDesk or PreSchoolTutor => "/preschool/dashboard",
+        Parent => "/preschool/parent",
         _ => "/dashboard"
     };
 
@@ -116,6 +142,10 @@ public static class UserRoles
         "receptionist" => Receptionist,
         // The legacy data contains a 'sudent' typo on one account.
         "student" or "sudent" => Student,
+        "preschoolhead" => PreSchoolHead,
+        "preschoolfrontdesk" => PreSchoolFrontDesk,
+        "preschooltutor" => PreSchoolTutor,
+        "parent" => Parent,
         _ => null
     };
 }

@@ -1079,8 +1079,17 @@ public class ChatService : IChatService
     {
         var me = await ResolveIdentityAsync(email, ct);
         var target = await ResolveIdentityAsync(targetEmail, ct);
-        return me is not null && target is not null && CanMessage(me.Roles, target.Roles);
+        return me is not null && target is not null && CanMessage(me.Roles, target.Roles)
+               // The PreSchool has chat but no calls, either way round.
+               && !IsPreSchool(me.Roles) && !IsPreSchool(target.Roles);
     }
+
+    private static readonly string[] PreSchoolRoles =
+        [UserRoles.PreSchoolHead, UserRoles.PreSchoolFrontDesk, UserRoles.PreSchoolTutor, UserRoles.Parent];
+
+    /// <summary>True for an Avijan PreSchool account (a SuperAdmin is never one, whatever else they hold).</summary>
+    private static bool IsPreSchool(IReadOnlyCollection<string> roles) =>
+        !roles.Contains(UserRoles.SuperAdmin) && roles.Any(PreSchoolRoles.Contains);
 
     public Task<Result<ChatPresenceSnapshotDto>> GetOnlinePresenceAsync(
         string email, CancellationToken ct = default) =>
