@@ -32,10 +32,14 @@ public class PreSchoolHolidayService : IPreSchoolHolidayService
 
     public async Task<IReadOnlyList<PreSchoolHolidayDto>> UpcomingAsync(CancellationToken ct = default)
     {
+        // From the first of this month, not today: the notice shows the whole
+        // month, with the days already gone marked as over, as the Computer
+        // Centre's does.
         var today = DateOnly.FromDateTime(DateTime.Now);
+        var from = new DateOnly(today.Year, today.Month, 1);
         var until = today.AddDays(UpcomingDays);
         return await _db.PreSchoolHolidays.AsNoTracking()
-            .Where(h => h.ToDate >= today && h.FromDate <= until)
+            .Where(h => h.ToDate >= from && h.FromDate <= until)
             .OrderBy(h => h.FromDate).ThenBy(h => h.Title)
             .Select(h => new PreSchoolHolidayDto(h.Id, h.FromDate, h.ToDate, h.Title, h.Note))
             .ToListAsync(ct);

@@ -227,7 +227,7 @@ public interface IPreSchoolHolidayService
     /// <summary>Every holiday touching <paramref name="year"/>, in date order.</summary>
     Task<IReadOnlyList<PreSchoolHolidayDto>> ListAsync(int year, CancellationToken ct = default);
 
-    /// <summary>Closures that have not ended yet, soonest first — for the public page and parents.</summary>
+    /// <summary>Closures from the start of this month to 60 days ahead, soonest first — for the public page and parents.</summary>
     Task<IReadOnlyList<PreSchoolHolidayDto>> UpcomingAsync(CancellationToken ct = default);
 
     Task<Result<PreSchoolHolidayDto>> CreateAsync(PreSchoolHolidaySaveRequest request, string? actor, CancellationToken ct = default);
