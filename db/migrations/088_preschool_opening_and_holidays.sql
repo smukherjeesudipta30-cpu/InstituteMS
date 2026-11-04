@@ -30,7 +30,7 @@ GO
 -- The numbers the owner gave for Champahati, filled only where still empty so
 -- a number the PreSchool admin has since changed is never put back.
 UPDATE dbo.PreSchoolSetting SET Phone = N'94338 83381' WHERE Id = 1 AND (Phone IS NULL OR Phone = N'');
-UPDATE dbo.PreSchoolSetting SET OfficePhone = N'68287 74395' WHERE Id = 1 AND (OfficePhone IS NULL OR OfficePhone = N'');
+UPDATE dbo.PreSchoolSetting SET OfficePhone = N'094778 89645' WHERE Id = 1 AND (OfficePhone IS NULL OR OfficePhone = N'');
 GO
 
 IF OBJECT_ID('dbo.PreSchoolHoliday') IS NULL

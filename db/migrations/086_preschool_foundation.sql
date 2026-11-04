@@ -141,5 +141,5 @@ GO
 
 IF NOT EXISTS (SELECT 1 FROM dbo.PreSchoolSetting WHERE Id = 1)
     INSERT INTO dbo.PreSchoolSetting (Id, SchoolName, Address, ReceiptPrefix, ModifiedBy, ModifiedOn)
-    VALUES (1, N'Avijan PreSchool', N'First Floor, beside Champahati-Baruipur Main Road, Mouza Haral, Champahati, P.S. Baruipur, South 24 Parganas, West Bengal', N'APS', 'migration 086', SYSDATETIME());
+    VALUES (1, N'Avijan PreSchool', N'First Floor, beside Champahati-Baruipur Main Road, Mouza Haral, Champahati, P.S. Baruipur, South 24 Parganas, West Bengal - 743330', N'APS', 'migration 086', SYSDATETIME());
 GO
