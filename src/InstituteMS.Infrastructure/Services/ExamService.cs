@@ -1589,9 +1589,16 @@ public class ExamService : IExamService
         if (!string.Equals(paper.PaperType, "Theory", StringComparison.OrdinalIgnoreCase))
         {
             var theoryPaper = await _db.ExamPapers.AsNoTracking()
-                .FirstOrDefaultAsync(p => p.CourseId == paper.CourseId
-                                          && p.TermNumber == paper.TermNumber
-                                          && p.PaperType == "Theory", ct);
+                // A course and term can hold more than one theory paper - a re-sit, or a
+                // second sitting for a later batch. Take the newest: that is the paper
+                // this practical's students actually sat. Left unordered the database
+                // returned whichever it liked, so a student examined on the newer paper
+                // read as "Theory not done" and their practical could not be scheduled.
+                .Where(p => p.CourseId == paper.CourseId
+                            && p.TermNumber == paper.TermNumber
+                            && p.PaperType == "Theory")
+                .OrderByDescending(p => p.ExamId)
+                .FirstOrDefaultAsync(ct);
 
             if (theoryPaper is not null)
             {
@@ -1716,9 +1723,16 @@ public class ExamService : IExamService
         if (!isTheory)
         {
             var theoryPaper = await _db.ExamPapers.AsNoTracking()
-                .FirstOrDefaultAsync(p => p.CourseId == paper.CourseId
-                                          && p.TermNumber == paper.TermNumber
-                                          && p.PaperType == "Theory", ct);
+                // A course and term can hold more than one theory paper - a re-sit, or a
+                // second sitting for a later batch. Take the newest: that is the paper
+                // this practical's students actually sat. Left unordered the database
+                // returned whichever it liked, so a student examined on the newer paper
+                // read as "Theory not done" and their practical could not be scheduled.
+                .Where(p => p.CourseId == paper.CourseId
+                            && p.TermNumber == paper.TermNumber
+                            && p.PaperType == "Theory")
+                .OrderByDescending(p => p.ExamId)
+                .FirstOrDefaultAsync(ct);
 
             var theorySubmitted = theoryPaper is not null && await _db.ExamAttempts.AsNoTracking()
                 .AnyAsync(a => a.ExamId == theoryPaper.ExamId
@@ -1840,9 +1854,16 @@ public class ExamService : IExamService
         if (!isTheory)
         {
             var theoryPaper = await _db.ExamPapers.AsNoTracking()
-                .FirstOrDefaultAsync(p => p.CourseId == paper.CourseId
-                                          && p.TermNumber == paper.TermNumber
-                                          && p.PaperType == "Theory", ct);
+                // A course and term can hold more than one theory paper - a re-sit, or a
+                // second sitting for a later batch. Take the newest: that is the paper
+                // this practical's students actually sat. Left unordered the database
+                // returned whichever it liked, so a student examined on the newer paper
+                // read as "Theory not done" and their practical could not be scheduled.
+                .Where(p => p.CourseId == paper.CourseId
+                            && p.TermNumber == paper.TermNumber
+                            && p.PaperType == "Theory")
+                .OrderByDescending(p => p.ExamId)
+                .FirstOrDefaultAsync(ct);
 
             theoryDone = theoryPaper is null
                 ? []
