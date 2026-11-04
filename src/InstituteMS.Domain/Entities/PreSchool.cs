@@ -184,3 +184,118 @@ public class PreSchoolHoliday
     public string? ModifiedBy { get; set; }
     public DateTime? ModifiedOn { get; set; }
 }
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolStudent</c> — one child admitted to the PreSchool.
+/// Not a Computer Centre student: it never appears in dbo.Students, and the
+/// child has no login of their own (the parent signs in instead).
+/// </summary>
+public class PreSchoolStudent
+{
+    public int Id { get; set; }
+
+    /// <summary>One running number, shown as e.g. APS-0001.</summary>
+    public int AdmissionNo { get; set; }
+
+    public string ChildName { get; set; } = string.Empty;
+    public DateOnly DateOfBirth { get; set; }
+    public string? Gender { get; set; }
+    public string? BloodGroup { get; set; }
+
+    public string? FatherName { get; set; }
+    public string? MotherName { get; set; }
+
+    /// <summary>The parent the school deals with, and whose phone it calls.</summary>
+    public string ParentName { get; set; } = string.Empty;
+    public string Phone { get; set; } = string.Empty;
+    public string? EmergencyPhone { get; set; }
+    public string? Email { get; set; }
+    public string? Address { get; set; }
+
+    public int ClassId { get; set; }
+
+    /// <summary>Any day of the year; fees are due from this month on.</summary>
+    public DateOnly JoinedOn { get; set; }
+
+    /// <summary>Taken off every month's fee, e.g. for a second child.</summary>
+    public decimal MonthlyDiscount { get; set; }
+
+    /// <summary>Active, Completed (finished the class) or Left.</summary>
+    public string Status { get; set; } = PreSchoolStudentStatus.Active;
+
+    /// <summary>When the child completed the class or left; fees stop after this month.</summary>
+    public DateOnly? EndedOn { get; set; }
+
+    public string? Notes { get; set; }
+
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+    public string? ModifiedBy { get; set; }
+    public DateTime? ModifiedOn { get; set; }
+
+    public PreSchoolClass? Class { get; set; }
+    public ICollection<PreSchoolReceipt> Receipts { get; set; } = [];
+}
+
+public static class PreSchoolStudentStatus
+{
+    public const string Active = "Active";
+    public const string Completed = "Completed";
+    public const string Left = "Left";
+
+    public static readonly string[] All = [Active, Completed, Left];
+}
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolReceipt</c> — money received from a parent, with its
+/// own running receipt number (APS/0001). What it paid for is in its lines.
+/// </summary>
+public class PreSchoolReceipt
+{
+    public int Id { get; set; }
+    public int ReceiptNo { get; set; }
+    public int StudentId { get; set; }
+    public DateOnly ReceivedOn { get; set; }
+
+    /// <summary>Cash, UPI or Paytm.</summary>
+    public string Mode { get; set; } = "Cash";
+
+    /// <summary>The UPI or Paytm transaction reference.</summary>
+    public string? Reference { get; set; }
+
+    public decimal Total { get; set; }
+    public string? Notes { get; set; }
+
+    /// <summary>Set when a receipt made in error is cancelled; its months are due again.</summary>
+    public bool IsCancelled { get; set; }
+    public string? CancelledBy { get; set; }
+    public DateTime? CancelledOn { get; set; }
+
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+
+    public PreSchoolStudent? Student { get; set; }
+    public ICollection<PreSchoolReceiptLine> Lines { get; set; } = [];
+}
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolReceiptLine</c> — one amount on a receipt: the
+/// admission fee, or one fee head for one month. The amount is kept as charged,
+/// so a later fee change never rewrites an old receipt.
+/// </summary>
+public class PreSchoolReceiptLine
+{
+    public int Id { get; set; }
+    public int ReceiptId { get; set; }
+
+    /// <summary>Admission or Monthly.</summary>
+    public string Kind { get; set; } = "Monthly";
+
+    /// <summary>The first of the month paid for; null for the admission fee.</summary>
+    public DateOnly? ForMonth { get; set; }
+
+    public string Description { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
+
+    public PreSchoolReceipt? Receipt { get; set; }
+}

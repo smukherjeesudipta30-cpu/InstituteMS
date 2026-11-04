@@ -113,3 +113,60 @@ public class PreSchoolHolidayConfiguration : IEntityTypeConfiguration<PreSchoolH
         b.HasIndex(x => x.FromDate);
     }
 }
+
+public class PreSchoolStudentConfiguration : IEntityTypeConfiguration<PreSchoolStudent>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolStudent> b)
+    {
+        b.ToTable("PreSchoolStudent");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.ChildName).HasMaxLength(100).IsRequired();
+        b.Property(x => x.Gender).HasMaxLength(10);
+        b.Property(x => x.BloodGroup).HasMaxLength(5);
+        b.Property(x => x.FatherName).HasMaxLength(100);
+        b.Property(x => x.MotherName).HasMaxLength(100);
+        b.Property(x => x.ParentName).HasMaxLength(100).IsRequired();
+        b.Property(x => x.Phone).HasMaxLength(20).IsRequired();
+        b.Property(x => x.EmergencyPhone).HasMaxLength(20);
+        b.Property(x => x.Email).HasMaxLength(150);
+        b.Property(x => x.Address).HasMaxLength(400);
+        b.Property(x => x.MonthlyDiscount).HasPrecision(10, 2);
+        b.Property(x => x.Status).HasMaxLength(20).IsRequired();
+        b.Property(x => x.Notes).HasMaxLength(500);
+        b.Property(x => x.CreatedBy).HasMaxLength(250);
+        b.Property(x => x.ModifiedBy).HasMaxLength(250);
+        b.HasIndex(x => x.AdmissionNo).IsUnique();
+        b.HasOne(x => x.Class).WithMany().HasForeignKey(x => x.ClassId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public class PreSchoolReceiptConfiguration : IEntityTypeConfiguration<PreSchoolReceipt>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolReceipt> b)
+    {
+        b.ToTable("PreSchoolReceipt");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Mode).HasMaxLength(10).IsRequired();
+        b.Property(x => x.Reference).HasMaxLength(60);
+        b.Property(x => x.Total).HasPrecision(10, 2);
+        b.Property(x => x.Notes).HasMaxLength(300);
+        b.Property(x => x.CancelledBy).HasMaxLength(250);
+        b.Property(x => x.CreatedBy).HasMaxLength(250);
+        b.HasIndex(x => x.ReceiptNo).IsUnique();
+        b.HasIndex(x => x.ReceivedOn);
+        b.HasOne(x => x.Student).WithMany(s => s.Receipts).HasForeignKey(x => x.StudentId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public class PreSchoolReceiptLineConfiguration : IEntityTypeConfiguration<PreSchoolReceiptLine>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolReceiptLine> b)
+    {
+        b.ToTable("PreSchoolReceiptLine");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Kind).HasMaxLength(10).IsRequired();
+        b.Property(x => x.Description).HasMaxLength(120).IsRequired();
+        b.Property(x => x.Amount).HasPrecision(10, 2);
+        b.HasOne(x => x.Receipt).WithMany(r => r.Lines).HasForeignKey(x => x.ReceiptId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
