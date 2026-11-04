@@ -33,7 +33,7 @@ public class PreSchoolPublicService : IPreSchoolPublicService
             .ToListAsync(ct);
 
         return new PreSchoolPublicDto(
-            s?.SchoolName ?? "Avijan PreSchool", s?.Address, s?.Phone, s?.Email, s?.MapUrl,
+            s?.SchoolName ?? "Avijan PreSchool", s?.Address, s?.Phone, s?.OfficePhone, s?.Email, s?.MapUrl,
             s?.UniformShopName, s?.UniformShopAddress, s?.UniformShopPhone, s?.UniformShopMapUrl, s?.OpensOn,
             classes.Select(c => new PreSchoolPublicClassDto(
                     c.Name, c.MinAgeMonths, c.MaxAgeMonths, c.AdmissionFee,

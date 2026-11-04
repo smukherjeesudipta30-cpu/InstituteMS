@@ -26,6 +26,7 @@ public record PreSchoolSettingDto(
     string SchoolName,
     string? Address,
     string? Phone,
+    string? OfficePhone,
     string? Email,
     string? MapUrl,
     string? UniformShopName,
@@ -143,6 +144,7 @@ public record PreSchoolSettingSaveRequest
     public string SchoolName { get; init; } = string.Empty;
     public string? Address { get; init; }
     public string? Phone { get; init; }
+    public string? OfficePhone { get; init; }
     public string? Email { get; init; }
     public string? MapUrl { get; init; }
     public string? UniformShopName { get; init; }
@@ -161,6 +163,7 @@ public class PreSchoolSettingSaveRequestValidator : AbstractValidator<PreSchoolS
         RuleFor(x => x.Address).MaximumLength(400);
         RuleFor(x => x.UniformShopAddress).MaximumLength(400);
         RuleFor(x => x.Phone).MaximumLength(50);
+        RuleFor(x => x.OfficePhone).MaximumLength(50);
         RuleFor(x => x.UniformShopPhone).MaximumLength(50);
         RuleFor(x => x.Email).MaximumLength(150).EmailAddress().When(x => !string.IsNullOrWhiteSpace(x.Email));
         RuleFor(x => x.UniformShopName).MaximumLength(150);

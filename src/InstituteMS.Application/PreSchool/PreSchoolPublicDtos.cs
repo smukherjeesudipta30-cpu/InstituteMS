@@ -17,6 +17,7 @@ public record PreSchoolPublicDto(
     string SchoolName,
     string? Address,
     string? Phone,
+    string? OfficePhone,
     string? Email,
     string? MapUrl,
     string? UniformShopName,

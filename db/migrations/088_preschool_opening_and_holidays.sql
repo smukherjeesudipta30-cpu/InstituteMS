@@ -4,6 +4,9 @@
 -- PreSchoolSetting.OpensOn  the day the Champahati centre opens. Until then
 --                           (or while it is empty) both front pages say it is
 --                           coming soon.
+-- PreSchoolSetting.OfficePhone  the Champahati office number, shared with the
+--                           Computer Centre branch there; set with the
+--                           PreSchool's own number when they are empty.
 -- PreSchoolHoliday          days the PreSchool is closed, with a notice for
 --                           parents. Kept apart from the Computer Centre's
 --                           Holiday table, which is not touched.
@@ -16,6 +19,18 @@ GO
 
 IF COL_LENGTH('dbo.PreSchoolSetting', 'OpensOn') IS NULL
     ALTER TABLE dbo.PreSchoolSetting ADD OpensOn DATE NULL;
+GO
+
+-- The Champahati office number, shared by the PreSchool and the Computer
+-- Centre branch in the same building. The PreSchool keeps its own in Phone.
+IF COL_LENGTH('dbo.PreSchoolSetting', 'OfficePhone') IS NULL
+    ALTER TABLE dbo.PreSchoolSetting ADD OfficePhone NVARCHAR(50) NULL;
+GO
+
+-- The numbers the owner gave for Champahati, filled only where still empty so
+-- a number the PreSchool admin has since changed is never put back.
+UPDATE dbo.PreSchoolSetting SET Phone = N'94338 83381' WHERE Id = 1 AND (Phone IS NULL OR Phone = N'');
+UPDATE dbo.PreSchoolSetting SET OfficePhone = N'68287 74395' WHERE Id = 1 AND (OfficePhone IS NULL OR OfficePhone = N'');
 GO
 
 IF OBJECT_ID('dbo.PreSchoolHoliday') IS NULL

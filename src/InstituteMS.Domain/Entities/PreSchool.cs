@@ -113,7 +113,12 @@ public class PreSchoolSetting
     public int Id { get; set; }
     public string SchoolName { get; set; } = string.Empty;
     public string? Address { get; set; }
+    /// <summary>The PreSchool's own number.</summary>
     public string? Phone { get; set; }
+
+    /// <summary>The Champahati office number, shared by the PreSchool and the Computer Centre branch there.</summary>
+    public string? OfficePhone { get; set; }
+
     public string? Email { get; set; }
     public string? MapUrl { get; set; }
 

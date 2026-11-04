@@ -71,6 +71,7 @@ public class PreSchoolSettingConfiguration : IEntityTypeConfiguration<PreSchoolS
         b.Property(x => x.SchoolName).HasMaxLength(150).IsRequired();
         b.Property(x => x.Address).HasMaxLength(400);
         b.Property(x => x.Phone).HasMaxLength(50);
+        b.Property(x => x.OfficePhone).HasMaxLength(50);
         b.Property(x => x.Email).HasMaxLength(150);
         b.Property(x => x.MapUrl).HasMaxLength(500);
         b.Property(x => x.UniformShopName).HasMaxLength(150);
