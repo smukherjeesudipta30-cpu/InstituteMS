@@ -299,3 +299,99 @@ public class PreSchoolReceiptLine
 
     public PreSchoolReceipt? Receipt { get; set; }
 }
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolStaff</c> — a PreSchool receptionist, teacher or
+/// housekeeper on a fixed monthly salary. No percentage, commission or bonus:
+/// the Computer Centre's teacher and receptionist pay rules do not apply.
+/// </summary>
+public class PreSchoolStaffMember
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Receptionist, Teacher or Housekeeper.</summary>
+    public string Role { get; set; } = PreSchoolStaffRoles.Teacher;
+
+    public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public DateOnly JoinedOn { get; set; }
+
+    /// <summary>The day they left; no salary is due after that month.</summary>
+    public DateOnly? LeftOn { get; set; }
+
+    public decimal MonthlySalary { get; set; }
+    public string? Notes { get; set; }
+
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+    public string? ModifiedBy { get; set; }
+    public DateTime? ModifiedOn { get; set; }
+}
+
+public static class PreSchoolStaffRoles
+{
+    public const string Receptionist = "Receptionist";
+    public const string Teacher = "Teacher";
+    public const string Housekeeper = "Housekeeper";
+
+    public static readonly string[] All = [Receptionist, Teacher, Housekeeper];
+}
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolSalaryPayment</c> — one month's salary paid to one
+/// staff member. Only one per person per month; the amount is kept as paid.
+/// </summary>
+public class PreSchoolSalaryPayment
+{
+    public int Id { get; set; }
+    public int StaffId { get; set; }
+
+    /// <summary>The first of the month the salary is for.</summary>
+    public DateOnly ForMonth { get; set; }
+
+    public DateOnly PaidOn { get; set; }
+
+    /// <summary>The monthly salary at the time.</summary>
+    public decimal Salary { get; set; }
+
+    /// <summary>Days not worked, kept on paper for a housekeeper; entered by the admin.</summary>
+    public decimal DaysAbsent { get; set; }
+
+    /// <summary>Taken off for absence; the admin decides the amount.</summary>
+    public decimal Deduction { get; set; }
+
+    /// <summary>Salary less deduction: what was actually paid.</summary>
+    public decimal NetPaid { get; set; }
+
+    /// <summary>Cash, Bank or UPI.</summary>
+    public string Mode { get; set; } = "Cash";
+    public string? Reference { get; set; }
+    public string? Notes { get; set; }
+
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+
+    public PreSchoolStaffMember? Staff { get; set; }
+}
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolExpense</c> — money the PreSchool spent (rent,
+/// electricity, materials). Kept apart from the Computer Centre's expenses.
+/// Salaries are not entered here; they come from the salary payments.
+/// </summary>
+public class PreSchoolExpense
+{
+    public int Id { get; set; }
+    public DateOnly SpentOn { get; set; }
+    public string Head { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public decimal Amount { get; set; }
+    public string Mode { get; set; } = "Cash";
+    public string? Reference { get; set; }
+
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+    public string? ModifiedBy { get; set; }
+    public DateTime? ModifiedOn { get; set; }
+}

@@ -170,3 +170,57 @@ public class PreSchoolReceiptLineConfiguration : IEntityTypeConfiguration<PreSch
         b.HasOne(x => x.Receipt).WithMany(r => r.Lines).HasForeignKey(x => x.ReceiptId).OnDelete(DeleteBehavior.Cascade);
     }
 }
+
+public class PreSchoolStaffConfiguration : IEntityTypeConfiguration<PreSchoolStaffMember>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolStaffMember> b)
+    {
+        b.ToTable("PreSchoolStaff");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Name).HasMaxLength(100).IsRequired();
+        b.Property(x => x.Role).HasMaxLength(20).IsRequired();
+        b.Property(x => x.Phone).HasMaxLength(20);
+        b.Property(x => x.Email).HasMaxLength(150);
+        b.Property(x => x.MonthlySalary).HasPrecision(10, 2);
+        b.Property(x => x.Notes).HasMaxLength(300);
+        b.Property(x => x.CreatedBy).HasMaxLength(250);
+        b.Property(x => x.ModifiedBy).HasMaxLength(250);
+    }
+}
+
+public class PreSchoolSalaryPaymentConfiguration : IEntityTypeConfiguration<PreSchoolSalaryPayment>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolSalaryPayment> b)
+    {
+        b.ToTable("PreSchoolSalaryPayment");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Salary).HasPrecision(10, 2);
+        b.Property(x => x.DaysAbsent).HasPrecision(5, 1);
+        b.Property(x => x.Deduction).HasPrecision(10, 2);
+        b.Property(x => x.NetPaid).HasPrecision(10, 2);
+        b.Property(x => x.Mode).HasMaxLength(10).IsRequired();
+        b.Property(x => x.Reference).HasMaxLength(60);
+        b.Property(x => x.Notes).HasMaxLength(300);
+        b.Property(x => x.CreatedBy).HasMaxLength(250);
+        b.HasIndex(x => new { x.StaffId, x.ForMonth }).IsUnique();
+        b.HasIndex(x => x.PaidOn);
+        b.HasOne(x => x.Staff).WithMany().HasForeignKey(x => x.StaffId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public class PreSchoolExpenseConfiguration : IEntityTypeConfiguration<PreSchoolExpense>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolExpense> b)
+    {
+        b.ToTable("PreSchoolExpense");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Head).HasMaxLength(60).IsRequired();
+        b.Property(x => x.Description).HasMaxLength(300);
+        b.Property(x => x.Amount).HasPrecision(10, 2);
+        b.Property(x => x.Mode).HasMaxLength(10).IsRequired();
+        b.Property(x => x.Reference).HasMaxLength(60);
+        b.Property(x => x.CreatedBy).HasMaxLength(250);
+        b.Property(x => x.ModifiedBy).HasMaxLength(250);
+        b.HasIndex(x => x.SpentOn);
+    }
+}
