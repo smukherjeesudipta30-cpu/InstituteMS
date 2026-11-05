@@ -220,6 +220,45 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
             expenses.GroupBy(e => e.Head).OrderByDescending(g => g.Sum(e => e.Amount)).ToDictionary(g => g.Key, g => g.Sum(e => e.Amount)));
     }
 
+    public async Task<Result<PreSchoolIncomeRangeDto>> IncomeRangeAsync(DateOnly from, DateOnly to, CancellationToken ct = default)
+    {
+        if (to < from) return Result<PreSchoolIncomeRangeDto>.Failure("The end date is before the start date.");
+        if (to.DayNumber - from.DayNumber > 3700) return Result<PreSchoolIncomeRangeDto>.Failure("Pick at most about ten years at a time.");
+
+        var prefix = (await _db.PreSchoolSettings.AsNoTracking().Select(x => x.ReceiptPrefix).FirstOrDefaultAsync(ct)) ?? "APS";
+
+        var receipts = await _db.PreSchoolReceipts.AsNoTracking()
+            .Include(r => r.Lines).Include(r => r.Student).ThenInclude(s => s!.Class)
+            .Where(r => !r.IsCancelled && r.ReceivedOn >= from && r.ReceivedOn <= to)
+            .OrderBy(r => r.ReceivedOn).ThenBy(r => r.ReceiptNo)
+            .ToListAsync(ct);
+        var receiptLines = receipts.Select(r => new PreSchoolIncomeReceiptLineDto(
+            r.ReceivedOn, $"{prefix}/{r.ReceiptNo:0000}", r.Student?.ChildName ?? "", r.Student?.Class?.Name ?? "", r.Mode,
+            r.Lines.Where(l => l.Kind == "Admission").Sum(l => l.Amount),
+            r.Lines.Where(l => l.Kind == "Monthly").Sum(l => l.Amount),
+            r.Total)).ToList();
+
+        var salaries = await _db.PreSchoolSalaryPayments.AsNoTracking().Include(p => p.Staff)
+            .Where(p => p.PaidOn >= from && p.PaidOn <= to)
+            .OrderBy(p => p.PaidOn).ThenBy(p => p.Id)
+            .Select(p => new PreSchoolIncomeSalaryLineDto(p.PaidOn, p.Staff!.Name, p.Staff.Role, p.ForMonth, p.Mode, p.NetPaid))
+            .ToListAsync(ct);
+
+        var expenses = (await ListExpensesAsync(from, to, ct)).OrderBy(e => e.SpentOn).ThenBy(e => e.Id).ToList();
+
+        var admission = receiptLines.Sum(r => r.AdmissionFee);
+        var monthly = receiptLines.Sum(r => r.MonthlyFees);
+        var income = receiptLines.Sum(r => r.Total);
+        var paid = salaries.Sum(s => s.Amount);
+        var spent = expenses.Sum(e => e.Amount);
+
+        return Result<PreSchoolIncomeRangeDto>.Success(new PreSchoolIncomeRangeDto(
+            from, to, admission, monthly, income, paid, spent, income - paid - spent,
+            receiptLines.GroupBy(r => r.Mode).ToDictionary(g => g.Key, g => g.Sum(r => r.Total)),
+            expenses.GroupBy(e => e.Head).OrderByDescending(g => g.Sum(e => e.Amount)).ToDictionary(g => g.Key, g => g.Sum(e => e.Amount)),
+            receiptLines, salaries, expenses));
+    }
+
     /* ------------------------------------------------------ own payslips */
 
     public async Task<IReadOnlyList<PreSchoolSalaryPaymentDto>> MyPayslipsAsync(string email, CancellationToken ct = default)

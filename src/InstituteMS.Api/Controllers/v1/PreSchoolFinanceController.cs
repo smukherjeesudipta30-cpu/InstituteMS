@@ -98,4 +98,10 @@ public class PreSchoolFinanceController : ApiControllerBase
     [ProducesResponseType(typeof(ApiResponse<PreSchoolIncomeReportDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Income([FromQuery] int? year, CancellationToken ct)
         => Envelope(Result<PreSchoolIncomeReportDto>.Success(await _finance.IncomeAsync(year ?? DateTime.Today.Year, ct)));
+
+    /// <summary>Income, salaries and expenses between any two dates, with every entry, for downloading.</summary>
+    [HttpGet("reports/income-range")]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolIncomeRangeDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> IncomeRange([FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken ct)
+        => Envelope(await _finance.IncomeRangeAsync(from, to, ct));
 }

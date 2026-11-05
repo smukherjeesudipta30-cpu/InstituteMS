@@ -149,6 +149,28 @@ public record PreSchoolIncomeReportDto(
     IReadOnlyDictionary<string, decimal> IncomeByMode,
     IReadOnlyDictionary<string, decimal> ExpensesByHead);
 
+public record PreSchoolIncomeReceiptLineDto(DateOnly ReceivedOn, string ReceiptCode, string ChildName, string ClassName, string Mode, decimal AdmissionFee, decimal MonthlyFees, decimal Total);
+public record PreSchoolIncomeSalaryLineDto(DateOnly PaidOn, string StaffName, string Role, DateOnly ForMonth, string Mode, decimal Amount);
+
+/// <summary>
+/// The PreSchool's money between any two dates, with every receipt, salary and
+/// expense behind the totals, for downloading. Cancelled receipts count for nothing.
+/// </summary>
+public record PreSchoolIncomeRangeDto(
+    DateOnly From,
+    DateOnly To,
+    decimal AdmissionFees,
+    decimal MonthlyFees,
+    decimal Income,
+    decimal Salaries,
+    decimal Expenses,
+    decimal Net,
+    IReadOnlyDictionary<string, decimal> IncomeByMode,
+    IReadOnlyDictionary<string, decimal> ExpensesByHead,
+    IReadOnlyList<PreSchoolIncomeReceiptLineDto> Receipts,
+    IReadOnlyList<PreSchoolIncomeSalaryLineDto> SalaryPayments,
+    IReadOnlyList<PreSchoolExpenseDto> ExpenseEntries);
+
 /// <summary>The PreSchool's staff and salaries, expenses and income report. Nothing here reads a Computer Centre table.</summary>
 public interface IPreSchoolFinanceService
 {
@@ -168,6 +190,9 @@ public interface IPreSchoolFinanceService
     Task<Result<bool>> DeleteExpenseAsync(int id, CancellationToken ct = default);
 
     Task<PreSchoolIncomeReportDto> IncomeAsync(int year, CancellationToken ct = default);
+
+    /// <summary>Income, salaries and expenses between two dates, with every entry behind them.</summary>
+    Task<Result<PreSchoolIncomeRangeDto>> IncomeRangeAsync(DateOnly from, DateOnly to, CancellationToken ct = default);
 
     /// <summary>
     /// The signed-in staff member's own salary payments, newest first. They are
