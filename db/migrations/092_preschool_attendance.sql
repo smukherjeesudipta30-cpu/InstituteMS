@@ -31,6 +31,12 @@ IF COL_LENGTH('dbo.PreSchoolSetting', 'GeofenceMetres') IS NULL
         CONSTRAINT DF_PreSchoolSetting_GeofenceMetres DEFAULT (100);
 GO
 
+-- The PreSchool's own email, which its mail is answered to: the owner's
+-- address for now. Filled only while empty, so a change made since in the
+-- PreSchool screens is never put back.
+UPDATE dbo.PreSchoolSetting SET Email = N'mail.avijan@gmail.com' WHERE Id = 1 AND (Email IS NULL OR Email = N'');
+GO
+
 IF OBJECT_ID('dbo.PreSchoolAttendance') IS NULL
     CREATE TABLE dbo.PreSchoolAttendance (
         Id              INT            IDENTITY(1,1) NOT NULL CONSTRAINT PK_PreSchoolAttendance PRIMARY KEY,

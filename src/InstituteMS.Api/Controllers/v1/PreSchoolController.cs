@@ -148,4 +148,11 @@ public class PreSchoolController : ApiControllerBase
     [ProducesResponseType(typeof(ApiResponse<PreSchoolSettingDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> SaveSettings([FromBody] PreSchoolSettingSaveRequest request, CancellationToken ct)
         => Envelope(await _masters.SaveSettingsAsync(request, CurrentUserName, ct), "Settings saved.");
+
+    /// <summary>The PreSchool's email only: the admin and the receptionist may change it.</summary>
+    [HttpPut("settings/email")]
+    [Authorize(Roles = UserRoles.PreSchoolOffice)]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolSettingDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SaveEmail([FromBody] PreSchoolEmailSaveRequest request, CancellationToken ct)
+        => Envelope(await _masters.SaveEmailAsync(request, CurrentUserName, ct), "PreSchool email saved.");
 }

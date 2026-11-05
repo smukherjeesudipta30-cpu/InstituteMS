@@ -120,7 +120,9 @@ public class SmtpStudentMailer : IStudentMailer
                 pdfFileName: null,
                 actor: actor,
                 ct: ct,
-                logBody: $"Attendance code for {r.StaffName} — code not recorded.");
+                logBody: $"Attendance code for {r.StaffName} — code not recorded.",
+                fromName: r.School == "Avijan Computer Center" ? null : r.School,
+                replyTo: r.ReplyTo);
 
             /* SendAsync never throws — it logs and moves on, which is right for a
                receipt but not here. The log row it wrote is the only record of
@@ -193,7 +195,12 @@ public class SmtpStudentMailer : IStudentMailer
         // What to keep in the mail log instead of the real body. An attendance code
         // must not be readable from dbo.MailLog_registration_time: anyone with
         // database access could then mark a colleague present.
-        string? logBody = null)
+        string? logBody = null,
+        // The PreSchool's mail carries its own name, and replies go to its own
+        // address. The sending mailbox stays FromAddress: the relay refuses any
+        // other. Left out, both are as they always were.
+        string? fromName = null,
+        string? replyTo = null)
     {
         /* Disabled means DORMANT, not "log that nothing happened". Checked before
            anything else so a switched-off mailer writes no rows at all and an
@@ -232,9 +239,15 @@ public class SmtpStudentMailer : IStudentMailer
 
             using var message = new MailMessage
             {
-                From = new MailAddress(_options.FromAddress, _options.FromName),
+                From = new MailAddress(_options.FromAddress, fromName ?? _options.FromName),
                 Subject = subject
             };
+
+            if (!string.IsNullOrWhiteSpace(replyTo))
+            {
+                try { message.ReplyToList.Add(new MailAddress(replyTo.Trim())); }
+                catch (FormatException) { /* a bad reply address must not stop the mail */ }
+            }
 
             /* Sent as multipart/alternative rather than HTML alone. A message that
                is only HTML, carries credentials and comes from an automated sender

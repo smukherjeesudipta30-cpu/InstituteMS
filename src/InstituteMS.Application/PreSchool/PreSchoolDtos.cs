@@ -162,6 +162,21 @@ public record PreSchoolSettingSaveRequest
     public int GeofenceMetres { get; init; } = 100;
 }
 
+/// <summary>The PreSchool's email: shown to parents, and where replies to its mail go.</summary>
+public record PreSchoolEmailSaveRequest
+{
+    public string Email { get; init; } = string.Empty;
+}
+
+public class PreSchoolEmailSaveRequestValidator : AbstractValidator<PreSchoolEmailSaveRequest>
+{
+    public PreSchoolEmailSaveRequestValidator()
+    {
+        RuleFor(x => x.Email).NotEmpty().WithMessage("Enter the PreSchool's email.")
+            .MaximumLength(150).EmailAddress().WithMessage("Enter a valid email address.");
+    }
+}
+
 public class PreSchoolSettingSaveRequestValidator : AbstractValidator<PreSchoolSettingSaveRequest>
 {
     public PreSchoolSettingSaveRequestValidator()
@@ -211,6 +226,9 @@ public interface IPreSchoolMasterService
     Task<Result<IReadOnlyList<PreSchoolGradeBandDto>>> SaveGradeBandsAsync(PreSchoolGradeBandsSaveRequest request, string? actor, CancellationToken ct = default);
 
     Task<Result<PreSchoolSettingDto>> SaveSettingsAsync(PreSchoolSettingSaveRequest request, string? actor, CancellationToken ct = default);
+
+    /// <summary>Just the PreSchool's email — the one setting the receptionist may change too.</summary>
+    Task<Result<PreSchoolSettingDto>> SaveEmailAsync(PreSchoolEmailSaveRequest request, string? actor, CancellationToken ct = default);
 }
 
 public record PreSchoolHolidayDto(int Id, DateOnly FromDate, DateOnly ToDate, string Title, string? Note);

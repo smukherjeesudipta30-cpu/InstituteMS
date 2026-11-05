@@ -261,6 +261,18 @@ public class PreSchoolMasterService : IPreSchoolMasterService
         return Result<PreSchoolSettingDto>.Success(ToDto(entity));
     }
 
+    public async Task<Result<PreSchoolSettingDto>> SaveEmailAsync(PreSchoolEmailSaveRequest request, string? actor, CancellationToken ct = default)
+    {
+        var entity = await _db.PreSchoolSettings.FirstOrDefaultAsync(ct);
+        if (entity is null) return Result<PreSchoolSettingDto>.Failure("The PreSchool settings have not been set up yet.");
+
+        entity.Email = request.Email.Trim();
+        entity.ModifiedBy = actor;
+        entity.ModifiedOn = DateTime.Now;
+        await _db.SaveChangesAsync(ct);
+        return Result<PreSchoolSettingDto>.Success(ToDto(entity));
+    }
+
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     /* ------------------------------------------------------------ mapping */

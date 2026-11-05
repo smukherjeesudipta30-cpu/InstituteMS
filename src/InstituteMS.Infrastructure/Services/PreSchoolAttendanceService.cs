@@ -379,7 +379,7 @@ public class PreSchoolAttendanceService : IPreSchoolAttendanceService
             .Where(x => !string.IsNullOrWhiteSpace(x)));
         return _mailer.SendAttendanceCodeAsync(
             new AttendanceCodeMailRequest(staff.Name, staff.Email ?? string.Empty, code, direction, school, markedOn, CodeValidMinutes,
-                school, footer.Length > 0 ? footer : school),
+                school, footer.Length > 0 ? footer : school, s?.Email),
             actor, ct);
     }
 
