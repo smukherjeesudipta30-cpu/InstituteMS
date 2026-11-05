@@ -20,13 +20,26 @@ public class PreSchoolController : ApiControllerBase
     private readonly IPreSchoolMasterService _masters;
     private readonly IPreSchoolPublicService _public;
     private readonly IPreSchoolHolidayService _holidays;
+    private readonly IPreSchoolPhotoService _photos;
 
-    public PreSchoolController(IPreSchoolMasterService masters, IPreSchoolPublicService publicPage, IPreSchoolHolidayService holidays)
+    public PreSchoolController(IPreSchoolMasterService masters, IPreSchoolPublicService publicPage, IPreSchoolHolidayService holidays,
+        IPreSchoolPhotoService photos)
     {
         _masters = masters;
         _public = publicPage;
         _holidays = holidays;
+        _photos = photos;
     }
+
+    /// <summary>
+    /// Puts up (or, when empty, takes down) a picture of the school on the public
+    /// page — SmartClass is the classroom. The PreSchool admin only.
+    /// </summary>
+    [HttpPut("site-photos/{slot}")]
+    [Authorize(Roles = UserRoles.PreSchoolHead)]
+    [ProducesResponseType(typeof(ApiResponse<DateTime?>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SaveSitePhoto(string slot, [FromBody] PreSchoolPhotoSaveRequest request, CancellationToken ct)
+        => Envelope(await _photos.SaveSitePhotoAsync(slot, request, CurrentUserName, ct), "Picture saved.");
 
     /// <summary>
     /// The signed-in PreSchool staff member's own salary slips — matched by the

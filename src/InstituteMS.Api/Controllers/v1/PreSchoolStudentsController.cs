@@ -17,8 +17,25 @@ namespace InstituteMS.Api.Controllers.v1;
 public class PreSchoolStudentsController : ApiControllerBase
 {
     private readonly IPreSchoolStudentService _students;
+    private readonly IPreSchoolPhotoService _photos;
 
-    public PreSchoolStudentsController(IPreSchoolStudentService students) => _students = students;
+    public PreSchoolStudentsController(IPreSchoolStudentService students, IPreSchoolPhotoService photos)
+    {
+        _students = students;
+        _photos = photos;
+    }
+
+    /// <summary>The child's and both guardians' photos, for the form and the ID cards.</summary>
+    [HttpGet("students/{id:int}/photos")]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolStudentPhotosDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Photos(int id, CancellationToken ct)
+        => Envelope(await _photos.GetStudentPhotosAsync(id, ct));
+
+    /// <summary>Saves one photo (Child, Guardian1 or Guardian2); an empty one removes it.</summary>
+    [HttpPut("students/{id:int}/photos/{slot}")]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolStudentPhotosDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SavePhoto(int id, string slot, [FromBody] PreSchoolPhotoSaveRequest request, CancellationToken ct)
+        => Envelope(await _photos.SaveStudentPhotoAsync(id, slot, request, CurrentUserName, ct), "Photo saved.");
 
     [HttpGet("students")]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<PreSchoolStudentListItemDto>>), StatusCodes.Status200OK)]

@@ -40,6 +40,12 @@ public record PreSchoolStudentDetailDto(
     string? EmergencyPhone,
     string? Email,
     string? Address,
+    string? GuardianRelation,
+    string? Guardian2Name,
+    string? Guardian2Relation,
+    string? Guardian2Phone,
+    decimal? HeightCm,
+    decimal? WeightKg,
     int ClassId,
     string ClassName,
     DateOnly JoinedOn,
@@ -67,6 +73,12 @@ public record PreSchoolStudentSaveRequest
     public string? EmergencyPhone { get; init; }
     public string? Email { get; init; }
     public string? Address { get; init; }
+    public string? GuardianRelation { get; init; }
+    public string? Guardian2Name { get; init; }
+    public string? Guardian2Relation { get; init; }
+    public string? Guardian2Phone { get; init; }
+    public decimal? HeightCm { get; init; }
+    public decimal? WeightKg { get; init; }
     public int ClassId { get; init; }
     public DateOnly JoinedOn { get; init; }
     public decimal MonthlyDiscount { get; init; }
@@ -97,6 +109,18 @@ public class PreSchoolStudentSaveRequestValidator : AbstractValidator<PreSchoolS
         RuleFor(x => x.Email).MaximumLength(150).EmailAddress().When(x => !string.IsNullOrWhiteSpace(x.Email))
             .WithMessage("Enter a valid email address, or leave it empty.");
         RuleFor(x => x.Address).MaximumLength(400);
+        RuleFor(x => x.GuardianRelation).MaximumLength(30);
+        RuleFor(x => x.Guardian2Name).MaximumLength(100);
+        RuleFor(x => x.Guardian2Relation).MaximumLength(30);
+        RuleFor(x => x.Guardian2Phone).Matches(PhonePattern).When(x => !string.IsNullOrWhiteSpace(x.Guardian2Phone))
+            .WithMessage("Enter a 10-digit phone for the second guardian, or leave it empty.");
+        RuleFor(x => x.Guardian2Name).NotEmpty().When(x => !string.IsNullOrWhiteSpace(x.Guardian2Phone))
+            .WithMessage("Enter the second guardian's name with their phone.");
+        // A pre-schooler is roughly 60–140 cm and 5–40 kg; the wider limits only catch typing slips.
+        RuleFor(x => x.HeightCm).InclusiveBetween(40, 200).When(x => x.HeightCm.HasValue)
+            .WithMessage("Check the height: it is in centimetres.");
+        RuleFor(x => x.WeightKg).InclusiveBetween(2, 80).When(x => x.WeightKg.HasValue)
+            .WithMessage("Check the weight: it is in kilograms.");
         RuleFor(x => x.ClassId).GreaterThan(0).WithMessage("Pick a class.");
         RuleFor(x => x.JoinedOn).NotEqual(default(DateOnly)).WithMessage("Pick the joining date.")
             .LessThanOrEqualTo(_ => DateOnly.FromDateTime(DateTime.Today).AddMonths(3))
@@ -213,6 +237,26 @@ public record PreSchoolAdmissionMonthDto(
     IReadOnlyList<PreSchoolAdmissionRowDto> Children);
 
 public record PreSchoolAdmissionReportDto(int Year, int Total, decimal AdmissionFees, IReadOnlyList<PreSchoolAdmissionMonthDto> Months);
+
+/// <summary>A child's three ID-card photos, as data URLs; null where none has been taken.</summary>
+public record PreSchoolStudentPhotosDto(string? Child, string? Guardian1, string? Guardian2);
+
+/// <summary>A photo as a data URL ("data:image/jpeg;base64,…"), or null to remove it.</summary>
+public record PreSchoolPhotoSaveRequest
+{
+    public string? DataUrl { get; init; }
+}
+
+/// <summary>Photos for the ID cards and the landing page's classroom picture.</summary>
+public interface IPreSchoolPhotoService
+{
+    Task<Result<PreSchoolStudentPhotosDto>> GetStudentPhotosAsync(int studentId, CancellationToken ct = default);
+    Task<Result<PreSchoolStudentPhotosDto>> SaveStudentPhotoAsync(int studentId, string slot, PreSchoolPhotoSaveRequest request, string? actor, CancellationToken ct = default);
+
+    /// <summary>The landing page's classroom picture, or null while the school has not put one up.</summary>
+    Task<(byte[] Data, string ContentType, DateTime UpdatedOn)?> GetSitePhotoAsync(string slot, CancellationToken ct = default);
+    Task<Result<DateTime?>> SaveSitePhotoAsync(string slot, PreSchoolPhotoSaveRequest request, string? actor, CancellationToken ct = default);
+}
 
 /// <summary>PreSchool admissions, fees and receipts. Nothing here reads a Computer Centre table.</summary>
 public interface IPreSchoolStudentService

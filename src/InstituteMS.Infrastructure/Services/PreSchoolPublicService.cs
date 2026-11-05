@@ -32,9 +32,15 @@ public class PreSchoolPublicService : IPreSchoolPublicService
             .OrderBy(c => c.SortOrder).ThenBy(c => c.Name)
             .ToListAsync(ct);
 
+        // Only the date: the picture itself is served on its own, so this page stays small.
+        var smartClassOn = await _db.PreSchoolPhotos.AsNoTracking()
+            .Where(p => p.StudentId == null && p.Slot == PreSchoolPhotoSlots.SmartClass)
+            .Select(p => (DateTime?)p.UpdatedOn)
+            .FirstOrDefaultAsync(ct);
+
         return new PreSchoolPublicDto(
             s?.SchoolName ?? "Avijan PreSchool", s?.Address, s?.Phone, s?.OfficePhone, s?.Email, s?.MapUrl,
-            s?.UniformShopName, s?.UniformShopAddress, s?.UniformShopPhone, s?.UniformShopMapUrl, s?.OpensOn,
+            s?.UniformShopName, s?.UniformShopAddress, s?.UniformShopPhone, s?.UniformShopMapUrl, s?.OpensOn, smartClassOn,
             classes.Select(c => new PreSchoolPublicClassDto(
                     c.Name, c.MinAgeMonths, c.MaxAgeMonths, c.AdmissionFee,
                     c.FeeHeads.Where(f => f.IsActive).Sum(f => f.MonthlyAmount),

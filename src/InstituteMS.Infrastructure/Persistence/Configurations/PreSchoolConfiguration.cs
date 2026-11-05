@@ -115,6 +115,20 @@ public class PreSchoolHolidayConfiguration : IEntityTypeConfiguration<PreSchoolH
     }
 }
 
+public class PreSchoolPhotoConfiguration : IEntityTypeConfiguration<PreSchoolPhoto>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolPhoto> b)
+    {
+        b.ToTable("PreSchoolPhoto");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Slot).HasMaxLength(20).IsRequired();
+        b.Property(x => x.ContentType).HasMaxLength(50).IsRequired();
+        b.Property(x => x.Data).IsRequired();
+        b.Property(x => x.UpdatedBy).HasMaxLength(250);
+        b.HasOne<PreSchoolStudent>().WithMany().HasForeignKey(x => x.StudentId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
 public class PreSchoolStudentConfiguration : IEntityTypeConfiguration<PreSchoolStudent>
 {
     public void Configure(EntityTypeBuilder<PreSchoolStudent> b)
@@ -132,6 +146,12 @@ public class PreSchoolStudentConfiguration : IEntityTypeConfiguration<PreSchoolS
         b.Property(x => x.Email).HasMaxLength(150);
         b.Property(x => x.Address).HasMaxLength(400);
         b.Property(x => x.MonthlyDiscount).HasPrecision(10, 2);
+        b.Property(x => x.GuardianRelation).HasMaxLength(30);
+        b.Property(x => x.Guardian2Name).HasMaxLength(100);
+        b.Property(x => x.Guardian2Relation).HasMaxLength(30);
+        b.Property(x => x.Guardian2Phone).HasMaxLength(20);
+        b.Property(x => x.HeightCm).HasPrecision(5, 1);
+        b.Property(x => x.WeightKg).HasPrecision(5, 1);
         b.Property(x => x.Status).HasMaxLength(20).IsRequired();
         b.Property(x => x.Notes).HasMaxLength(500);
         b.Property(x => x.CreatedBy).HasMaxLength(250);

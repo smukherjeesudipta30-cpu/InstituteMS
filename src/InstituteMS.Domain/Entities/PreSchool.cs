@@ -191,6 +191,35 @@ public class PreSchoolHoliday
 }
 
 /// <summary>
+/// Maps to <c>dbo.PreSchoolPhoto</c> — one picture: a child's or a guardian's
+/// (for the ID cards), or the landing page's classroom picture. Kept apart from
+/// PreSchoolStudent so lists never load image bytes.
+/// </summary>
+public class PreSchoolPhoto
+{
+    public int Id { get; set; }
+
+    /// <summary>Empty for a picture of the school itself (the SmartClass slot).</summary>
+    public int? StudentId { get; set; }
+
+    public string Slot { get; set; } = PreSchoolPhotoSlots.Child;
+    public string ContentType { get; set; } = "image/jpeg";
+    public byte[] Data { get; set; } = [];
+    public string? UpdatedBy { get; set; }
+    public DateTime UpdatedOn { get; set; }
+}
+
+public static class PreSchoolPhotoSlots
+{
+    public const string Child = "Child";
+    public const string Guardian1 = "Guardian1";
+    public const string Guardian2 = "Guardian2";
+    public const string SmartClass = "SmartClass";
+
+    public static readonly string[] ForStudent = [Child, Guardian1, Guardian2];
+}
+
+/// <summary>
 /// Maps to <c>dbo.PreSchoolStudent</c> — one child admitted to the PreSchool.
 /// Not a Computer Centre student: it never appears in dbo.Students, and the
 /// child has no login of their own (the parent signs in instead).
@@ -216,6 +245,18 @@ public class PreSchoolStudent
     public string? EmergencyPhone { get; set; }
     public string? Email { get; set; }
     public string? Address { get; set; }
+
+    /// <summary>How the parent to contact is related: Father, Mother, Grandparent…</summary>
+    public string? GuardianRelation { get; set; }
+
+    /// <summary>The second guardian; with the first, the two who get a pick-up ID card.</summary>
+    public string? Guardian2Name { get; set; }
+    public string? Guardian2Relation { get; set; }
+    public string? Guardian2Phone { get; set; }
+
+    /// <summary>Measured on the day of registration.</summary>
+    public decimal? HeightCm { get; set; }
+    public decimal? WeightKg { get; set; }
 
     public int ClassId { get; set; }
 

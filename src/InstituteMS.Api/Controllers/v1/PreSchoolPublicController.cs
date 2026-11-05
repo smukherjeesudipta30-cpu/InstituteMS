@@ -16,8 +16,30 @@ namespace InstituteMS.Api.Controllers.v1;
 public class PreSchoolPublicController : ApiControllerBase
 {
     private readonly IPreSchoolPublicService _public;
+    private readonly IPreSchoolPhotoService _photos;
 
-    public PreSchoolPublicController(IPreSchoolPublicService service) => _public = service;
+    public PreSchoolPublicController(IPreSchoolPublicService service, IPreSchoolPhotoService photos)
+    {
+        _public = service;
+        _photos = photos;
+    }
+
+    /// <summary>
+    /// A picture of the school for the public page (SmartClass: the classroom).
+    /// Served as an image so a plain img tag shows it; the page adds the date it
+    /// was put up to the address, so a new picture is fetched at once.
+    /// </summary>
+    [HttpGet("site-photos/{slot}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SitePhoto(string slot, CancellationToken ct)
+    {
+        var photo = await _photos.GetSitePhotoAsync(slot, ct);
+        if (photo is null) return NotFound();
+
+        Response.Headers.CacheControl = "public, max-age=86400";
+        return File(photo.Value.Data, photo.Value.ContentType);
+    }
 
     /// <summary>The school's contact details, uniform shop and active classes with their fees.</summary>
     [HttpGet]

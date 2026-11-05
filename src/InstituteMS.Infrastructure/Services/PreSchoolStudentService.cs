@@ -132,6 +132,12 @@ public class PreSchoolStudentService : IPreSchoolStudentService
         e.EmergencyPhone = Clean(r.EmergencyPhone);
         e.Email = Clean(r.Email);
         e.Address = Clean(r.Address);
+        e.GuardianRelation = Clean(r.GuardianRelation);
+        e.Guardian2Name = Clean(r.Guardian2Name);
+        e.Guardian2Relation = Clean(r.Guardian2Relation);
+        e.Guardian2Phone = Clean(r.Guardian2Phone);
+        e.HeightCm = r.HeightCm;
+        e.WeightKg = r.WeightKg;
         e.ClassId = r.ClassId;
         e.JoinedOn = r.JoinedOn;
         e.MonthlyDiscount = r.MonthlyDiscount;
@@ -394,7 +400,8 @@ public class PreSchoolStudentService : IPreSchoolStudentService
 
         return new PreSchoolStudentDetailDto(
             s.Id, AdmissionCode(s, ctx), s.ChildName, s.DateOfBirth, s.Gender, s.BloodGroup, s.FatherName, s.MotherName,
-            s.ParentName, s.Phone, s.EmergencyPhone, s.Email, s.Address, s.ClassId, s.Class?.Name ?? "", s.JoinedOn,
+            s.ParentName, s.Phone, s.EmergencyPhone, s.Email, s.Address,
+            s.GuardianRelation, s.Guardian2Name, s.Guardian2Relation, s.Guardian2Phone, s.HeightCm, s.WeightKg, s.ClassId, s.Class?.Name ?? "", s.JoinedOn,
             s.MonthlyDiscount, s.Status, s.EndedOn, s.Notes, fee, s.Class?.AdmissionFee ?? 0, ctx.AdmissionPaid.Contains(s.Id),
             months, receipts);
     }

@@ -26,6 +26,8 @@ public record PreSchoolPublicDto(
     string? UniformShopMapUrl,
     // The Champahati centre's opening day; the page says "coming soon" until it has passed.
     DateOnly? OpensOn,
+    // When the school last put up its own classroom picture; null shows the drawn one.
+    DateTime? SmartClassPhotoOn,
     IReadOnlyList<PreSchoolPublicClassDto> Classes,
     // Closures that have not ended yet, soonest first.
     IReadOnlyList<PreSchoolHolidayDto> Holidays);
