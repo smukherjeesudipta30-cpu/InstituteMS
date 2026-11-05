@@ -117,6 +117,33 @@ public class PreSchoolHolidayConfiguration : IEntityTypeConfiguration<PreSchoolH
     }
 }
 
+public class PreSchoolStoreItemConfiguration : IEntityTypeConfiguration<PreSchoolStoreItem>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolStoreItem> b)
+    {
+        b.ToTable("PreSchoolStoreItem");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Name).HasMaxLength(100).IsRequired();
+        b.Property(x => x.CreatedBy).HasMaxLength(250);
+        b.Property(x => x.ModifiedBy).HasMaxLength(250);
+        b.HasOne(x => x.Class).WithMany().HasForeignKey(x => x.ClassId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public class PreSchoolStoreMovementConfiguration : IEntityTypeConfiguration<PreSchoolStoreMovement>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolStoreMovement> b)
+    {
+        b.ToTable("PreSchoolStoreMovement");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Kind).HasMaxLength(10).IsRequired();
+        b.Property(x => x.Note).HasMaxLength(200);
+        b.Property(x => x.CreatedBy).HasMaxLength(250);
+        b.HasOne(x => x.Item).WithMany(i => i.Movements).HasForeignKey(x => x.ItemId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne(x => x.Student).WithMany().HasForeignKey(x => x.StudentId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
 public class PreSchoolAttendanceConfiguration : IEntityTypeConfiguration<PreSchoolAttendance>
 {
     public void Configure(EntityTypeBuilder<PreSchoolAttendance> b)

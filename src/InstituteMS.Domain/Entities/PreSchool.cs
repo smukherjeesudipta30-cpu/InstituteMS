@@ -440,6 +440,47 @@ public class PreSchoolAttendanceChallenge
     public DateTime CreatedOn { get; set; }
 }
 
+/// <summary>
+/// Maps to <c>dbo.PreSchoolStoreItem</c> — one thing the PreSchool keeps for a
+/// class (a tuition book set, a bag), or for every class when ClassId is empty.
+/// Stock is worked out from its movements, never stored.
+/// </summary>
+public class PreSchoolStoreItem
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public int? ClassId { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsActive { get; set; } = true;
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+    public string? ModifiedBy { get; set; }
+    public DateTime? ModifiedOn { get; set; }
+
+    public PreSchoolClass? Class { get; set; }
+    public ICollection<PreSchoolStoreMovement> Movements { get; set; } = [];
+}
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolStoreMovement</c> — stock received (<c>In</c>), or
+/// one item given to one child (<c>Out</c>).
+/// </summary>
+public class PreSchoolStoreMovement
+{
+    public int Id { get; set; }
+    public int ItemId { get; set; }
+    public string Kind { get; set; } = "In";
+    public int Quantity { get; set; }
+    public int? StudentId { get; set; }
+    public DateOnly OnDate { get; set; }
+    public string? Note { get; set; }
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+
+    public PreSchoolStoreItem? Item { get; set; }
+    public PreSchoolStudent? Student { get; set; }
+}
+
 public static class PreSchoolStaffRoles
 {
     public const string Receptionist = "Receptionist";
