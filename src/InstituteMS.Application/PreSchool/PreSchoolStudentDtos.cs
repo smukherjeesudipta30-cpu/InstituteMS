@@ -108,7 +108,7 @@ public class PreSchoolStudentSaveRequestValidator : AbstractValidator<PreSchoolS
             .WithMessage("Enter a 10-digit emergency phone, or leave it empty.");
         RuleFor(x => x.Email).MaximumLength(150).EmailAddress().When(x => !string.IsNullOrWhiteSpace(x.Email))
             .WithMessage("Enter a valid email address, or leave it empty.");
-        RuleFor(x => x.Address).MaximumLength(400);
+        RuleFor(x => x.Address).NotEmpty().WithMessage("Enter the home address.").MaximumLength(400);
         RuleFor(x => x.GuardianRelation).MaximumLength(30);
         RuleFor(x => x.Guardian2Name).MaximumLength(100);
         RuleFor(x => x.Guardian2Relation).MaximumLength(30);
