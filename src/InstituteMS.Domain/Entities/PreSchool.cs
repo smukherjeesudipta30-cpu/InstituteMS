@@ -136,6 +136,16 @@ public class PreSchoolSetting
     /// <summary>Starts every PreSchool receipt number, e.g. APS/0001 — one running series.</summary>
     public string ReceiptPrefix { get; set; } = "APS";
 
+    /// <summary>
+    /// The centre of the PreSchool's attendance fence. Until it is set, staff
+    /// cannot mark attendance: the fence is what makes a mark mean "was here".
+    /// </summary>
+    public decimal? Latitude { get; set; }
+    public decimal? Longitude { get; set; }
+
+    /// <summary>How far from that point, in metres, a mark is still accepted.</summary>
+    public int GeofenceMetres { get; set; } = 100;
+
     public string? ModifiedBy { get; set; }
     public DateTime? ModifiedOn { get; set; }
 }
@@ -373,6 +383,61 @@ public class PreSchoolStaffMember
     public DateTime CreatedOn { get; set; }
     public string? ModifiedBy { get; set; }
     public DateTime? ModifiedOn { get; set; }
+}
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolAttendance</c> — one confirmed attendance mark by the
+/// PreSchool's receptionist or a teacher. Arrival and departure are two rows;
+/// hours come from pairing them, as in the Computer Centre's StaffAttendance,
+/// which this is kept apart from.
+/// </summary>
+public class PreSchoolAttendance
+{
+    public int Id { get; set; }
+    public int StaffId { get; set; }
+    public string? StaffName { get; set; }
+    public string? StaffRole { get; set; }
+    public string? LoginId { get; set; }
+    public DateTime ScannedOn { get; set; }
+    public DateOnly OnDate { get; set; }
+
+    /// <summary><c>In</c> or <c>Out</c>, decided by the server.</summary>
+    public string Direction { get; set; } = "In";
+
+    public decimal? Latitude { get; set; }
+    public decimal? Longitude { get; set; }
+    public decimal? AccuracyMetres { get; set; }
+    public decimal? DistanceMetres { get; set; }
+    public DateTime CreatedOn { get; set; }
+}
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolAttendanceChallenge</c> — a PreSchool mark waiting for
+/// the six-digit code emailed to the staff member. <see cref="MarkedOn"/> becomes
+/// the attendance time, so a slow email costs nobody any minutes.
+/// </summary>
+public class PreSchoolAttendanceChallenge
+{
+    public int Id { get; set; }
+    public int StaffId { get; set; }
+    public string? StaffName { get; set; }
+    public string? StaffRole { get; set; }
+    public string? LoginId { get; set; }
+    public DateTime MarkedOn { get; set; }
+    public DateOnly OnDate { get; set; }
+    public decimal? Latitude { get; set; }
+    public decimal? Longitude { get; set; }
+    public decimal? AccuracyMetres { get; set; }
+    public decimal? DistanceMetres { get; set; }
+
+    /// <summary>BCrypt of the six digits — never the digits themselves.</summary>
+    public string CodeHash { get; set; } = string.Empty;
+
+    public string? SentToEmail { get; set; }
+    public DateTime ExpiresOn { get; set; }
+    public int Attempts { get; set; }
+    public DateTime? ConsumedOn { get; set; }
+    public DateTime CreatedOn { get; set; }
 }
 
 public static class PreSchoolStaffRoles

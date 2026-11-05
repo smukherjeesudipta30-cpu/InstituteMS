@@ -681,12 +681,15 @@ public class SmtpStudentMailer : IStudentMailer
         // as a format specifier and breaks the surrounding literal.
         var at = r.MarkedOn.ToString("h:mm tt", CultureInfo.InvariantCulture);
         var on = r.MarkedOn.ToString("d MMM yyyy", CultureInfo.InvariantCulture);
+        var school = System.Net.WebUtility.HtmlEncode(r.School);
+        // The Computer Centre's footer reads exactly as it always has.
+        var footer = System.Net.WebUtility.HtmlEncode(r.FooterLine).Replace(" | ", " &nbsp;|&nbsp; ");
 
         return $$"""
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f6f9;padding:24px 0;">
           <tr><td align="center">
             <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;padding:28px;font-family:Arial,Helvetica,sans-serif;color:#212529;">
-              <tr><td style="font-size:12px;letter-spacing:.12em;color:#6b7280;text-transform:uppercase;">Avijan Computer Center</td></tr>
+              <tr><td style="font-size:12px;letter-spacing:.12em;color:#6b7280;text-transform:uppercase;">{{school}}</td></tr>
               <tr><td style="padding-top:6px;font-size:18px;font-weight:bold;color:#1b5e8c;">Attendance code</td></tr>
               <tr><td style="padding-top:16px;font-size:15px;">Hello {{r.StaffName}},</td></tr>
               <tr><td style="padding-top:8px;font-size:15px;line-height:1.6;">
@@ -702,7 +705,7 @@ public class SmtpStudentMailer : IStudentMailer
                 may be using your sign-in.
               </td></tr>
               <tr><td style="padding-top:18px;border-top:1px solid #e3e8ee;font-size:12px;color:#6b7280;">
-                53, Aghore Sarani, Rajpur, Kol-149 &nbsp;|&nbsp; Mob.: 7688045949<br />
+                {{footer}}<br />
                 This message was sent automatically. Please do not reply to it.
               </td></tr>
             </table>
@@ -765,7 +768,7 @@ public class SmtpStudentMailer : IStudentMailer
             : "departure";
 
         return new StringBuilder()
-            .AppendLine("AVIJAN COMPUTER CENTER")
+            .AppendLine(r.School.ToUpperInvariant())
             .AppendLine("Attendance code")
             .AppendLine()
             .AppendLine($"Hello {r.StaffName},")
@@ -776,7 +779,7 @@ public class SmtpStudentMailer : IStudentMailer
             .AppendLine($"Valid for {r.ValidMinutes} minutes, and can be used once.")
             .AppendLine("If you did not mark your attendance just now, tell the office.")
             .AppendLine()
-            .AppendLine("53, Aghore Sarani, Rajpur, Kol-149 | Mob.: 7688045949")
+            .AppendLine(r.FooterLine)
             .AppendLine("This message was sent automatically. Please do not reply to it.")
             .ToString();
     }

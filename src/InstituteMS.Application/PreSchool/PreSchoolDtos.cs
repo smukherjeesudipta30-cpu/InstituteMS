@@ -36,7 +36,11 @@ public record PreSchoolSettingDto(
     string ReceiptPrefix,
     DateOnly? OpensOn,
     string? ModifiedBy,
-    DateTime? ModifiedOn);
+    DateTime? ModifiedOn,
+    // The attendance fence: staff can mark only within GeofenceMetres of this point.
+    decimal? Latitude = null,
+    decimal? Longitude = null,
+    int GeofenceMetres = 100);
 
 /// <summary>Everything the PreSchool dashboard and masters screen show, in one call.</summary>
 public record PreSchoolOverviewDto(
@@ -153,6 +157,9 @@ public record PreSchoolSettingSaveRequest
     public string? UniformShopMapUrl { get; init; }
     public string ReceiptPrefix { get; init; } = "APS";
     public DateOnly? OpensOn { get; init; }
+    public decimal? Latitude { get; init; }
+    public decimal? Longitude { get; init; }
+    public int GeofenceMetres { get; init; } = 100;
 }
 
 public class PreSchoolSettingSaveRequestValidator : AbstractValidator<PreSchoolSettingSaveRequest>
@@ -169,6 +176,12 @@ public class PreSchoolSettingSaveRequestValidator : AbstractValidator<PreSchoolS
         RuleFor(x => x.UniformShopName).MaximumLength(150);
         RuleFor(x => x.MapUrl).MaximumLength(500).Must(BeWebLink).WithMessage("The map link must start with https://.");
         RuleFor(x => x.UniformShopMapUrl).MaximumLength(500).Must(BeWebLink).WithMessage("The map link must start with https://.");
+        RuleFor(x => x.Latitude).InclusiveBetween(-90, 90).When(x => x.Latitude.HasValue).WithMessage("Latitude runs from -90 to 90.");
+        RuleFor(x => x.Longitude).InclusiveBetween(-180, 180).When(x => x.Longitude.HasValue).WithMessage("Longitude runs from -180 to 180.");
+        RuleFor(x => x).Must(x => x.Latitude.HasValue == x.Longitude.HasValue)
+            .WithMessage("Give both the latitude and the longitude, or neither.");
+        RuleFor(x => x.GeofenceMetres).InclusiveBetween(20, 1000)
+            .WithMessage("The attendance distance must be between 20 and 1000 metres.");
         RuleFor(x => x.ReceiptPrefix).NotEmpty().MaximumLength(10)
             .Matches("^[A-Za-z0-9-]+$").WithMessage("The receipt prefix can only use letters, digits and '-'.");
     }

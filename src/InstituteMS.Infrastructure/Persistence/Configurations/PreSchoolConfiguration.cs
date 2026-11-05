@@ -72,6 +72,8 @@ public class PreSchoolSettingConfiguration : IEntityTypeConfiguration<PreSchoolS
         b.Property(x => x.Address).HasMaxLength(400);
         b.Property(x => x.Phone).HasMaxLength(50);
         b.Property(x => x.OfficePhone).HasMaxLength(50);
+        b.Property(x => x.Latitude).HasPrecision(9, 6);
+        b.Property(x => x.Longitude).HasPrecision(9, 6);
         b.Property(x => x.Email).HasMaxLength(150);
         b.Property(x => x.MapUrl).HasMaxLength(500);
         b.Property(x => x.UniformShopName).HasMaxLength(150);
@@ -112,6 +114,44 @@ public class PreSchoolHolidayConfiguration : IEntityTypeConfiguration<PreSchoolH
         b.Property(x => x.CreatedBy).HasMaxLength(250);
         b.Property(x => x.ModifiedBy).HasMaxLength(250);
         b.HasIndex(x => x.FromDate);
+    }
+}
+
+public class PreSchoolAttendanceConfiguration : IEntityTypeConfiguration<PreSchoolAttendance>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolAttendance> b)
+    {
+        b.ToTable("PreSchoolAttendance");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.StaffName).HasMaxLength(100);
+        b.Property(x => x.StaffRole).HasMaxLength(20);
+        b.Property(x => x.LoginId).HasMaxLength(250);
+        b.Property(x => x.Direction).HasMaxLength(3).IsRequired();
+        b.Property(x => x.Latitude).HasPrecision(9, 6);
+        b.Property(x => x.Longitude).HasPrecision(9, 6);
+        b.Property(x => x.AccuracyMetres).HasPrecision(9, 2);
+        b.Property(x => x.DistanceMetres).HasPrecision(9, 2);
+        b.HasIndex(x => new { x.StaffId, x.OnDate, x.ScannedOn });
+        b.HasOne<PreSchoolStaffMember>().WithMany().HasForeignKey(x => x.StaffId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public class PreSchoolAttendanceChallengeConfiguration : IEntityTypeConfiguration<PreSchoolAttendanceChallenge>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolAttendanceChallenge> b)
+    {
+        b.ToTable("PreSchoolAttendanceChallenge");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.StaffName).HasMaxLength(100);
+        b.Property(x => x.StaffRole).HasMaxLength(20);
+        b.Property(x => x.LoginId).HasMaxLength(250);
+        b.Property(x => x.Latitude).HasPrecision(9, 6);
+        b.Property(x => x.Longitude).HasPrecision(9, 6);
+        b.Property(x => x.AccuracyMetres).HasPrecision(9, 2);
+        b.Property(x => x.DistanceMetres).HasPrecision(9, 2);
+        b.Property(x => x.CodeHash).HasMaxLength(100).IsRequired();
+        b.Property(x => x.SentToEmail).HasMaxLength(150);
+        b.HasOne<PreSchoolStaffMember>().WithMany().HasForeignKey(x => x.StaffId).OnDelete(DeleteBehavior.Restrict);
     }
 }
 

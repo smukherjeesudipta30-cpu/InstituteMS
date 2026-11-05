@@ -251,6 +251,9 @@ public class PreSchoolMasterService : IPreSchoolMasterService
         entity.UniformShopMapUrl = Clean(request.UniformShopMapUrl);
         entity.ReceiptPrefix = request.ReceiptPrefix.Trim().ToUpperInvariant();
         entity.OpensOn = request.OpensOn;
+        entity.Latitude = request.Latitude;
+        entity.Longitude = request.Longitude;
+        entity.GeofenceMetres = request.GeofenceMetres;
         entity.ModifiedBy = actor;
         entity.ModifiedOn = DateTime.Now;
         await _db.SaveChangesAsync(ct);
@@ -280,5 +283,5 @@ public class PreSchoolMasterService : IPreSchoolMasterService
         : new PreSchoolSettingDto(
             s.SchoolName, s.Address, s.Phone, s.OfficePhone, s.Email, s.MapUrl,
             s.UniformShopName, s.UniformShopAddress, s.UniformShopPhone, s.UniformShopMapUrl,
-            s.ReceiptPrefix, s.OpensOn, s.ModifiedBy, s.ModifiedOn);
+            s.ReceiptPrefix, s.OpensOn, s.ModifiedBy, s.ModifiedOn, s.Latitude, s.Longitude, s.GeofenceMetres);
 }

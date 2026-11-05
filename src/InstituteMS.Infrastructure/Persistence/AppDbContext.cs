@@ -55,6 +55,8 @@ public class AppDbContext : DbContext
     public DbSet<PreSchoolHoliday> PreSchoolHolidays => Set<PreSchoolHoliday>();
     public DbSet<PreSchoolStudent> PreSchoolStudents => Set<PreSchoolStudent>();
     public DbSet<PreSchoolPhoto> PreSchoolPhotos => Set<PreSchoolPhoto>();
+    public DbSet<PreSchoolAttendance> PreSchoolAttendance => Set<PreSchoolAttendance>();
+    public DbSet<PreSchoolAttendanceChallenge> PreSchoolAttendanceChallenges => Set<PreSchoolAttendanceChallenge>();
     public DbSet<PreSchoolReceipt> PreSchoolReceipts => Set<PreSchoolReceipt>();
     public DbSet<PreSchoolReceiptLine> PreSchoolReceiptLines => Set<PreSchoolReceiptLine>();
     public DbSet<PreSchoolStaffMember> PreSchoolStaff => Set<PreSchoolStaffMember>();

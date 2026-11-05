@@ -191,7 +191,11 @@ public record AttendanceCodeMailRequest(
     string Direction,
     string? Branch,
     DateTime MarkedOn,
-    int ValidMinutes);
+    int ValidMinutes,
+    // Whose code it is. Left out, it is the Computer Centre's, exactly as before;
+    // the PreSchool passes its own name and address.
+    string School = "Avijan Computer Center",
+    string FooterLine = "53, Aghore Sarani, Rajpur, Kol-149 | Mob.: 7688045949");
 
 /// <summary>The six-digit code sent to someone who has forgotten their password.</summary>
 public record PasswordResetCodeMailRequest(
