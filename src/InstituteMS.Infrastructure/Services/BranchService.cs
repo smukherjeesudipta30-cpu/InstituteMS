@@ -31,7 +31,7 @@ public class BranchService : IBranchService
             .Select(b => new
             {
                 b.Id, b.Name, b.Code, b.IsActive,
-                b.Latitude, b.Longitude, b.GeofenceMetres
+                b.Latitude, b.Longitude, b.GeofenceMetres, b.UpiId, b.UpiPayeeName
             })
             .ToListAsync(ct);
 
@@ -67,7 +67,7 @@ public class BranchService : IBranchService
                 studentCounts.FirstOrDefault(s =>
                     string.Equals(s.Branch, b.Name, StringComparison.OrdinalIgnoreCase))?.Count ?? 0,
                 issued,
-                b.Latitude, b.Longitude, b.GeofenceMetres);
+                b.Latitude, b.Longitude, b.GeofenceMetres, b.UpiId, b.UpiPayeeName);
         }).ToList();
     }
 
@@ -97,6 +97,8 @@ public class BranchService : IBranchService
             Latitude = request.Latitude,
             Longitude = request.Longitude,
             GeofenceMetres = request.GeofenceMetres,
+            UpiId = Clean(request.UpiId),
+            UpiPayeeName = Clean(request.UpiPayeeName),
             CreatedBy = actor,
             CreatedOn = DateTime.UtcNow
         };
@@ -152,6 +154,8 @@ public class BranchService : IBranchService
         branch.Latitude = request.Latitude;
         branch.Longitude = request.Longitude;
         branch.GeofenceMetres = request.GeofenceMetres;
+        branch.UpiId = Clean(request.UpiId);
+        branch.UpiPayeeName = Clean(request.UpiPayeeName);
 
         branch.LegacyName = name;
         branch.LegacyCode = code;
@@ -193,4 +197,6 @@ public class BranchService : IBranchService
         return await _db.Students.CountAsync(
             s => s.RegistrationId != null && s.RegistrationId.StartsWith(prefix), ct);
     }
+
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

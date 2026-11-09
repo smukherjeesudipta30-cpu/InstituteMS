@@ -640,7 +640,7 @@ public class FeeService : IFeeService
             .Where(s => s.RegistrationId == regId)
             .OrderByDescending(s => s.IsActive == true)
             .ThenByDescending(s => s.Id)
-            .Select(s => new { IsActive = s.IsActive == true, IsComplete = s.IsComplete == true })
+            .Select(s => new { IsActive = s.IsActive == true, IsComplete = s.IsComplete == true, s.Branch })
             .FirstOrDefaultAsync(ct);
 
         if (status is null)
@@ -674,8 +674,7 @@ public class FeeService : IFeeService
 
         var b = bill.Value!;
 
-        var upiId = _payments.UpiId;
-        var payeeName = _payments.PayeeName;
+        var (upiId, payeeName) = await UpiForBranchAsync(status.Branch, ct);
 
         /* The payment is being made today, so today is the fee date — exactly as the
            counter records it.
@@ -742,6 +741,31 @@ public class FeeService : IFeeService
             reason,
             upiId,
             payeeName));
+    }
+
+    /// <summary>
+    /// The UPI account a student of this branch pays into: one set on the branch
+    /// in the Branches screen, else one configured for the branch by name
+    /// (Payments:Branches — Champahati), else the institute's usual account.
+    /// Rajpur has neither, so its students pay exactly as before.
+    /// </summary>
+    private async Task<(string? UpiId, string? PayeeName)> UpiForBranchAsync(string? branch, CancellationToken ct)
+    {
+        var name = branch?.Trim();
+        if (!string.IsNullOrEmpty(name))
+        {
+            var own = await _db.Branches.AsNoTracking()
+                .Where(b => b.Name == name && b.UpiId != null && b.UpiId != "")
+                .Select(b => new { b.UpiId, b.UpiPayeeName })
+                .FirstOrDefaultAsync(ct);
+            if (own is not null)
+                return (own.UpiId, string.IsNullOrWhiteSpace(own.UpiPayeeName) ? _payments.PayeeName : own.UpiPayeeName);
+
+            if (_payments.Branches.TryGetValue(name, out var configured) && !string.IsNullOrWhiteSpace(configured.UpiId))
+                return (configured.UpiId, string.IsNullOrWhiteSpace(configured.PayeeName) ? _payments.PayeeName : configured.PayeeName);
+        }
+
+        return (_payments.UpiId, _payments.PayeeName);
     }
 
     public async Task<Result<FeeRecordedDto>> PayOnlineAsync(

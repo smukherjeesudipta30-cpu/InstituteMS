@@ -51,6 +51,15 @@ public class BranchSaveRequestValidator : AbstractValidator<BranchSaveRequest>
             .NotEmpty().WithMessage("Branch name is required.")
             .MaximumLength(50);
 
+        // name@bank, e.g. bom261001361082@mahb or paytm.s1ngj29@pty.
+        RuleFor(x => x.UpiId)
+            .Matches(@"^[A-Za-z0-9.\-_]{2,256}@[A-Za-z]{2,64}$")
+            .WithMessage("A UPI ID looks like name@bank, e.g. bom261001361082@mahb.")
+            .MaximumLength(100)
+            .When(x => !string.IsNullOrWhiteSpace(x.UpiId));
+
+        RuleFor(x => x.UpiPayeeName).MaximumLength(100);
+
         /* Latitude and longitude go together: one without the other is not a place,
            and would leave the fence unusable while looking as though it were set. */
         RuleFor(x => x.Longitude)

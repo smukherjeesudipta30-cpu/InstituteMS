@@ -18,4 +18,19 @@ public class PaymentSettings
 
     /// <summary>The name shown on the payer's app.</summary>
     public string? PayeeName { get; set; }
+
+    /// <summary>
+    /// A branch that takes its fees into its own account, by branch name (as on
+    /// the student record), e.g. "Champahati". A UPI ID set on the branch itself
+    /// in the Branches screen comes first; a branch in neither place pays into
+    /// <see cref="UpiId"/>.
+    /// </summary>
+    public Dictionary<string, BranchUpi> Branches { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>One branch's own UPI account.</summary>
+public class BranchUpi
+{
+    public string? UpiId { get; set; }
+    public string? PayeeName { get; set; }
 }

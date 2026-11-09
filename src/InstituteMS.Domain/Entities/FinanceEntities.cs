@@ -146,6 +146,13 @@ public class Branch
     public decimal? Longitude { get; set; }
     public int GeofenceMetres { get; set; } = 750;
 
+    /// <summary>
+    /// The UPI account this branch's students pay their fees into, and the name
+    /// their app shows. Empty: the institute's usual account (Payments:UpiId).
+    /// </summary>
+    public string? UpiId { get; set; }
+    public string? UpiPayeeName { get; set; }
+
     public string? CreatedBy { get; set; }
     /// <summary>
     /// Nullable: the audit columns were added to the legacy tables by the

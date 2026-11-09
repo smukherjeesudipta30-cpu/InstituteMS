@@ -102,7 +102,11 @@ public record BranchListItemDto(
        would accept a scan from anywhere in the world. */
     decimal? Latitude = null,
     decimal? Longitude = null,
-    int GeofenceMetres = 150);
+    int GeofenceMetres = 150,
+    /* The UPI account this branch's students pay into from Pay My Fees, and the
+       name their app shows. Null: the institute's usual account. */
+    string? UpiId = null,
+    string? UpiPayeeName = null);
 
 public record BranchSaveRequest
 {
@@ -121,6 +125,12 @@ public record BranchSaveRequest
 
     /// <summary>How far from that point still counts as being at the centre.</summary>
     public int GeofenceMetres { get; init; } = 150;
+
+    /// <summary>The UPI ID this branch's fees are paid into; empty for the institute's usual one.</summary>
+    public string? UpiId { get; init; }
+
+    /// <summary>The name the payer's UPI app shows for that account.</summary>
+    public string? UpiPayeeName { get; init; }
 }
 
 /* ----------------------------------------------------------------- contracts */
