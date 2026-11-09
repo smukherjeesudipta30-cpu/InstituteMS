@@ -3,7 +3,7 @@
 -- Adds tables only. No Computer Centre table, column or row is changed, and
 -- nothing that already exists reads these.
 --
--- PreSchoolClass      Pre-Nursery, Nursery, KG-1, KG-2, with the admission fee.
+-- PreSchoolClass      Play Group, Nursery, LKG, UKG (ages in 094), with the admission fee.
 -- PreSchoolSubject    what each class is examined in, with full marks.
 -- PreSchoolFeeHead    each class's monthly charges (every PreSchool fee is monthly).
 -- PreSchoolGradeBand  the grade for a percentage on the report card.
@@ -110,7 +110,7 @@ GO
 -- The four classes, in the order children move up.
 INSERT INTO dbo.PreSchoolClass (Name, SortOrder, CreatedBy)
 SELECT v.Name, v.SortOrder, 'migration 086'
-FROM (VALUES (N'Pre-Nursery', 1), (N'Nursery', 2), (N'KG-1', 3), (N'KG-2', 4)) AS v (Name, SortOrder)
+FROM (VALUES (N'Play Group', 1), (N'Nursery', 2), (N'LKG', 3), (N'UKG', 4)) AS v (Name, SortOrder)
 WHERE NOT EXISTS (SELECT 1 FROM dbo.PreSchoolClass c WHERE c.Name = v.Name);
 GO
 
@@ -122,7 +122,7 @@ SELECT c.Id, s.Name, 100, s.SortOrder, 'migration 086'
 FROM dbo.PreSchoolClass c
 CROSS JOIN (VALUES (N'English', 1), (N'Bengali', 2), (N'Mathematics', 3),
                    (N'Drawing', 4), (N'Rhymes', 5), (N'General Awareness', 6)) AS s (Name, SortOrder)
-WHERE c.Name IN (N'Pre-Nursery', N'Nursery', N'KG-1', N'KG-2')
+WHERE c.Name IN (N'Play Group', N'Nursery', N'LKG', N'UKG')
   AND NOT EXISTS (SELECT 1 FROM dbo.PreSchoolSubject x WHERE x.ClassId = c.Id AND x.Name = s.Name)
   AND NOT EXISTS (SELECT 1 FROM dbo.PreSchoolSubject y WHERE y.ClassId = c.Id AND y.CreatedBy <> 'migration 086');
 GO
