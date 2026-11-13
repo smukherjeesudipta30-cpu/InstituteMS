@@ -117,6 +117,34 @@ public class PreSchoolHolidayConfiguration : IEntityTypeConfiguration<PreSchoolH
     }
 }
 
+public class PreSchoolExamConfiguration : IEntityTypeConfiguration<PreSchoolExam>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolExam> b)
+    {
+        b.ToTable("PreSchoolExam");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Name).HasMaxLength(80).IsRequired();
+        b.Property(x => x.CreatedBy).HasMaxLength(250);
+        b.Property(x => x.ModifiedBy).HasMaxLength(250);
+        b.HasIndex(x => x.Name).IsUnique();
+    }
+}
+
+public class PreSchoolMarkConfiguration : IEntityTypeConfiguration<PreSchoolMark>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolMark> b)
+    {
+        b.ToTable("PreSchoolMark");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Marks).HasPrecision(6, 2);
+        b.Property(x => x.UpdatedBy).HasMaxLength(250);
+        b.HasIndex(x => new { x.ExamId, x.StudentId, x.SubjectId }).IsUnique();
+        b.HasOne<PreSchoolExam>().WithMany().HasForeignKey(x => x.ExamId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<PreSchoolStudent>().WithMany().HasForeignKey(x => x.StudentId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<PreSchoolSubject>().WithMany().HasForeignKey(x => x.SubjectId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
 public class PreSchoolStoreItemConfiguration : IEntityTypeConfiguration<PreSchoolStoreItem>
 {
     public void Configure(EntityTypeBuilder<PreSchoolStoreItem> b)

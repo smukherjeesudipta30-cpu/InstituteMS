@@ -81,6 +81,7 @@ public static class DependencyInjection
         services.AddScoped<InstituteMS.Application.PreSchool.IPreSchoolPhotoService, PreSchoolPhotoService>();
         services.AddScoped<InstituteMS.Application.PreSchool.IPreSchoolAttendanceService, PreSchoolAttendanceService>();
         services.AddScoped<InstituteMS.Application.PreSchool.IPreSchoolStoreService, PreSchoolStoreService>();
+        services.AddScoped<InstituteMS.Application.PreSchool.IPreSchoolMarkService, PreSchoolMarkService>();
         services.AddScoped<InstituteMS.Application.PreSchool.IPreSchoolFinanceService, PreSchoolFinanceService>();
         services.AddScoped<InstituteMS.Application.PreSchool.IPreSchoolAlertService, PreSchoolAlertService>();
         services.AddScoped<InstituteMS.Application.BankStatements.IBankStatementService, BankStatementService>();

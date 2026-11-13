@@ -481,6 +481,35 @@ public class PreSchoolStoreMovement
     public PreSchoolStudent? Student { get; set; }
 }
 
+/// <summary>Maps to <c>dbo.PreSchoolExam</c> — one offline exam, held for every class.</summary>
+public class PreSchoolExam
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public DateOnly? HeldOn { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsActive { get; set; } = true;
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+    public string? ModifiedBy { get; set; }
+    public DateTime? ModifiedOn { get; set; }
+}
+
+/// <summary>Maps to <c>dbo.PreSchoolMark</c> — one child's mark in one subject of one exam.</summary>
+public class PreSchoolMark
+{
+    public int Id { get; set; }
+    public int ExamId { get; set; }
+    public int StudentId { get; set; }
+    public int SubjectId { get; set; }
+
+    /// <summary>Null while not entered yet, or when absent.</summary>
+    public decimal? Marks { get; set; }
+    public bool IsAbsent { get; set; }
+    public string? UpdatedBy { get; set; }
+    public DateTime UpdatedOn { get; set; }
+}
+
 public static class PreSchoolStaffRoles
 {
     public const string Receptionist = "Receptionist";
