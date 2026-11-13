@@ -11,7 +11,7 @@ namespace InstituteMS.Domain.Entities;
  * a calendar.
  */
 
-/// <summary>Maps to <c>dbo.PreSchoolClass</c> — Play Group, Nursery, LKG, UKG.</summary>
+/// <summary>Maps to <c>dbo.PreSchoolClass</c> — Pre-Nursery, Nursery, LKG, UKG.</summary>
 public class PreSchoolClass
 {
     public int Id { get; set; }
