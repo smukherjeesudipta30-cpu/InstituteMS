@@ -24,6 +24,7 @@ public class PreSchoolStudentService : IPreSchoolStudentService
 {
     private const string KindAdmission = "Admission";
     private const string KindMonthly = "Monthly";
+    private const string KindCharge = "Charge";
 
     /// <summary>How far ahead a parent may pay.</summary>
     private const int AdvanceMonths = 12;
@@ -144,6 +145,7 @@ public class PreSchoolStudentService : IPreSchoolStudentService
         e.Status = r.Status;
         e.EndedOn = r.Status == PreSchoolStudentStatus.Active ? null : r.EndedOn;
         e.Notes = Clean(r.Notes);
+        e.Section = Clean(r.Section)?.ToUpperInvariant();
     }
 
     /* ------------------------------------------------------------- fees */
@@ -196,8 +198,24 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             }
         }
 
+        // The receipt's other rows, in the printed order; a zero amount is simply not printed.
+        foreach (var head in PreSchoolChargeHeads.Labels.Keys)
+        {
+            var c = request.Charges.FirstOrDefault(x => x.Head == head);
+            if (c is null || c.Amount <= 0) continue;
+            var note = Clean(c.Note);
+            lines.Add(new PreSchoolReceiptLine
+            {
+                Kind = KindCharge,
+                ChargeHead = head,
+                Description = note is null ? PreSchoolChargeHeads.Labels[head] : $"{PreSchoolChargeHeads.Labels[head]} — {note}",
+                Amount = c.Amount
+            });
+        }
+
         var total = lines.Sum(l => l.Amount);
         if (total <= 0) return Result<PreSchoolReceiptDto>.Failure("There is nothing to collect for what was ticked.");
+        var byCheque = request.Mode is "Cheque" or "DD";
 
         var receipt = new PreSchoolReceipt
         {
@@ -206,6 +224,8 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             ReceivedOn = request.ReceivedOn ?? DateOnly.FromDateTime(DateTime.Today),
             Mode = request.Mode,
             Reference = request.Mode == "Cash" ? null : Clean(request.Reference),
+            ChequeDate = byCheque ? request.ChequeDate : null,
+            DrawnOn = byCheque ? Clean(request.DrawnOn) : null,
             Total = total,
             Notes = Clean(request.Notes),
             CreatedBy = actor,
@@ -235,8 +255,9 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             NumberToWords.Convert(r.Total), r.Notes, r.IsCancelled, r.CreatedBy,
             s.Id, AdmissionCode(prefix, s.AdmissionNo), s.ChildName, s.Class?.Name ?? "", s.ParentName, s.Phone,
             settings?.SchoolName ?? "Avijan PreSchool", settings?.Address, settings?.Phone,
-            r.Lines.OrderBy(l => l.Kind == KindAdmission ? 0 : 1).ThenBy(l => l.ForMonth).ThenBy(l => l.Amount < 0).ThenBy(l => l.Id)
-                .Select(l => new PreSchoolReceiptLineDto(l.Kind, l.ForMonth, l.Description, l.Amount)).ToList()));
+            r.Lines.OrderBy(l => l.Kind == KindAdmission ? 0 : l.Kind == KindMonthly ? 1 : 2).ThenBy(l => l.ForMonth).ThenBy(l => l.Amount < 0).ThenBy(l => l.Id)
+                .Select(l => new PreSchoolReceiptLineDto(l.Kind, l.ForMonth, l.Description, l.Amount, l.ChargeHead)).ToList(),
+            s.Section, s.FatherName, s.MotherName, s.Address, r.ChequeDate, r.DrawnOn));
     }
 
     /// <summary>A receipt made in error is cancelled, not deleted: its number stays used and its months become due again.</summary>
@@ -403,7 +424,7 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             s.ParentName, s.Phone, s.EmergencyPhone, s.Email, s.Address,
             s.GuardianRelation, s.Guardian2Name, s.Guardian2Relation, s.Guardian2Phone, s.HeightCm, s.WeightKg, s.ClassId, s.Class?.Name ?? "", s.JoinedOn,
             s.MonthlyDiscount, s.Status, s.EndedOn, s.Notes, fee, s.Class?.AdmissionFee ?? 0, ctx.AdmissionPaid.Contains(s.Id),
-            months, receipts);
+            months, receipts, s.Section);
     }
 
     /// <summary>"Admission + Nov 2026, Dec 2026" — what a receipt paid for, in a line.</summary>
@@ -412,6 +433,8 @@ public class PreSchoolStudentService : IPreSchoolStudentService
         var parts = new List<string>();
         if (r.Lines.Any(l => l.Kind == KindAdmission)) parts.Add("Admission");
         parts.AddRange(r.Lines.Where(l => l.ForMonth != null).Select(l => l.ForMonth!.Value).Distinct().OrderBy(m => m).Select(m => m.ToString("MMM yyyy")));
+        parts.AddRange(r.Lines.Where(l => l.Kind == KindCharge && l.ChargeHead != null)
+            .Select(l => PreSchoolChargeHeads.Labels.GetValueOrDefault(l.ChargeHead!, l.ChargeHead!)));
         return string.Join(", ", parts);
     }
 

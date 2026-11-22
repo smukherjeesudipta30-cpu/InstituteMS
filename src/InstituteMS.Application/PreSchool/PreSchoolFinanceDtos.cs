@@ -132,7 +132,9 @@ public record PreSchoolIncomeMonthDto(
     decimal Income,
     decimal Salaries,
     decimal Expenses,
-    decimal Net);
+    decimal Net,
+    // Registration, annual, kit, food, transport and the receipt's other rows.
+    decimal OtherFees = 0);
 
 /// <summary>
 /// A year of the PreSchool's money, month by month: fees received (by receipt
@@ -149,7 +151,7 @@ public record PreSchoolIncomeReportDto(
     IReadOnlyDictionary<string, decimal> IncomeByMode,
     IReadOnlyDictionary<string, decimal> ExpensesByHead);
 
-public record PreSchoolIncomeReceiptLineDto(DateOnly ReceivedOn, string ReceiptCode, string ChildName, string ClassName, string Mode, decimal AdmissionFee, decimal MonthlyFees, decimal Total);
+public record PreSchoolIncomeReceiptLineDto(DateOnly ReceivedOn, string ReceiptCode, string ChildName, string ClassName, string Mode, decimal AdmissionFee, decimal MonthlyFees, decimal Total, decimal OtherFees = 0);
 public record PreSchoolIncomeSalaryLineDto(DateOnly PaidOn, string StaffName, string Role, DateOnly ForMonth, string Mode, decimal Amount);
 
 /// <summary>
@@ -169,7 +171,8 @@ public record PreSchoolIncomeRangeDto(
     IReadOnlyDictionary<string, decimal> ExpensesByHead,
     IReadOnlyList<PreSchoolIncomeReceiptLineDto> Receipts,
     IReadOnlyList<PreSchoolIncomeSalaryLineDto> SalaryPayments,
-    IReadOnlyList<PreSchoolExpenseDto> ExpenseEntries);
+    IReadOnlyList<PreSchoolExpenseDto> ExpenseEntries,
+    decimal OtherFees = 0);
 
 /// <summary>The PreSchool's staff and salaries, expenses and income report. Nothing here reads a Computer Centre table.</summary>
 public interface IPreSchoolFinanceService

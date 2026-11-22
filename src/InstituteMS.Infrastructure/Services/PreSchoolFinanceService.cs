@@ -205,9 +205,11 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
         {
             var admission = lines.Where(l => l.ReceivedOn.Month == m && l.Kind == "Admission").Sum(l => l.Amount);
             var monthly = lines.Where(l => l.ReceivedOn.Month == m && l.Kind == "Monthly").Sum(l => l.Amount);
+            var other = lines.Where(l => l.ReceivedOn.Month == m && l.Kind == "Charge").Sum(l => l.Amount);
             var paid = salaries.Where(p => p.PaidOn.Month == m).Sum(p => p.NetPaid);
             var spent = expenses.Where(e => e.SpentOn.Month == m).Sum(e => e.Amount);
-            return new PreSchoolIncomeMonthDto(new DateOnly(year, m, 1), admission, monthly, admission + monthly, paid, spent, admission + monthly - paid - spent);
+            var fees = admission + monthly + other;
+            return new PreSchoolIncomeMonthDto(new DateOnly(year, m, 1), admission, monthly, fees, paid, spent, fees - paid - spent, other);
         }).ToList();
 
         var income = months.Sum(m => m.Income);
@@ -236,7 +238,8 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
             r.ReceivedOn, $"{prefix}/{r.ReceiptNo:0000}", r.Student?.ChildName ?? "", r.Student?.Class?.Name ?? "", r.Mode,
             r.Lines.Where(l => l.Kind == "Admission").Sum(l => l.Amount),
             r.Lines.Where(l => l.Kind == "Monthly").Sum(l => l.Amount),
-            r.Total)).ToList();
+            r.Total,
+            r.Lines.Where(l => l.Kind == "Charge").Sum(l => l.Amount))).ToList();
 
         var salaries = await _db.PreSchoolSalaryPayments.AsNoTracking().Include(p => p.Staff)
             .Where(p => p.PaidOn >= from && p.PaidOn <= to)
@@ -256,7 +259,7 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
             from, to, admission, monthly, income, paid, spent, income - paid - spent,
             receiptLines.GroupBy(r => r.Mode).ToDictionary(g => g.Key, g => g.Sum(r => r.Total)),
             expenses.GroupBy(e => e.Head).OrderByDescending(g => g.Sum(e => e.Amount)).ToDictionary(g => g.Key, g => g.Sum(e => e.Amount)),
-            receiptLines, salaries, expenses));
+            receiptLines, salaries, expenses, receiptLines.Sum(r => r.OtherFees)));
     }
 
     /* ------------------------------------------------------ own payslips */

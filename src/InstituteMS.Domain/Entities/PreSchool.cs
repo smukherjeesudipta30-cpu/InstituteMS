@@ -175,6 +175,52 @@ public class PreSchoolEnquiry
     public bool IsHandled { get; set; }
     public string? HandledBy { get; set; }
     public DateTime? HandledOn { get; set; }
+
+    // The printed Enquiry Form. ParentName and Phone above are the person to call back.
+
+    /// <summary>"2026-27".</summary>
+    public string? Session { get; set; }
+    public string? Gender { get; set; }
+
+    public string? MotherName { get; set; }
+    public string? MotherOccupation { get; set; }
+    public string? MotherPhone { get; set; }
+    public string? MotherEmail { get; set; }
+    public string? MotherAddress { get; set; }
+
+    public string? FatherName { get; set; }
+    public string? FatherOccupation { get; set; }
+    public string? FatherPhone { get; set; }
+    public string? FatherEmail { get; set; }
+    public string? FatherAddress { get; set; }
+
+    public string? GuardianName { get; set; }
+    public string? GuardianOccupation { get; set; }
+    public string? GuardianPhone { get; set; }
+    public string? GuardianAddress { get; set; }
+
+    /// <summary>Comma-separated: Advertisement, Friends, Facebook, Leaflet, Hoardings, Others.</summary>
+    public string? HeardFrom { get; set; }
+
+    /// <summary>Website, App or Office (a walk-in typed in by the receptionist).</summary>
+    public string? Source { get; set; }
+    public string? CreatedBy { get; set; }
+
+    public ICollection<PreSchoolEnquiryFeedback> Feedback { get; set; } = [];
+}
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolEnquiryFeedback</c> — one dated note of a talk with
+/// the family, printed on the Enquiry Form's "Enquiry Feedback" page.
+/// </summary>
+public class PreSchoolEnquiryFeedback
+{
+    public int Id { get; set; }
+    public int EnquiryId { get; set; }
+    public DateOnly FeedbackOn { get; set; }
+    public string Note { get; set; } = string.Empty;
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
 }
 
 /// <summary>
@@ -282,6 +328,9 @@ public class PreSchoolStudent
     /// <summary>When the child completed the class or left; fees stop after this month.</summary>
     public DateOnly? EndedOn { get; set; }
 
+    /// <summary>"A", "B" … printed on the fee receipt; set by the office.</summary>
+    public string? Section { get; set; }
+
     public string? Notes { get; set; }
 
     public string? CreatedBy { get; set; }
@@ -291,6 +340,38 @@ public class PreSchoolStudent
 
     public PreSchoolClass? Class { get; set; }
     public ICollection<PreSchoolReceipt> Receipts { get; set; } = [];
+}
+
+/// <summary>
+/// The fee receipt's rows besides the admission fee and the monthly tuition, in
+/// the printed order. Part I: Registration, Annual, Activities, LateFee.
+/// Part II: Prospectus, AdmissionKit, Food, Transport, Others.
+/// </summary>
+public static class PreSchoolChargeHeads
+{
+    public const string Registration = "Registration";
+    public const string Annual = "Annual";
+    public const string Activities = "Activities";
+    public const string LateFee = "LateFee";
+    public const string Prospectus = "Prospectus";
+    public const string AdmissionKit = "AdmissionKit";
+    public const string Food = "Food";
+    public const string Transport = "Transport";
+    public const string Others = "Others";
+
+    /// <summary>Head → the words printed on the receipt.</summary>
+    public static readonly IReadOnlyDictionary<string, string> Labels = new Dictionary<string, string>
+    {
+        [Registration] = "Registration Fee",
+        [Annual] = "Annual Charges",
+        [Activities] = "Activities Fee",
+        [LateFee] = "Late Fee/ Others",
+        [Prospectus] = "Prospectus",
+        [AdmissionKit] = "Admission Kit",
+        [Food] = "Food Charges",
+        [Transport] = "Transport Charges",
+        [Others] = "Others",
+    };
 }
 
 public static class PreSchoolStudentStatus
@@ -313,11 +394,15 @@ public class PreSchoolReceipt
     public int StudentId { get; set; }
     public DateOnly ReceivedOn { get; set; }
 
-    /// <summary>Cash, UPI or Paytm.</summary>
+    /// <summary>Cash, UPI, Paytm, Cheque or DD.</summary>
     public string Mode { get; set; } = "Cash";
 
-    /// <summary>The UPI or Paytm transaction reference.</summary>
+    /// <summary>The UPI or Paytm transaction reference, or the cheque / DD number.</summary>
     public string? Reference { get; set; }
+
+    /// <summary>For a cheque or DD: its date and the bank it is drawn on.</summary>
+    public DateOnly? ChequeDate { get; set; }
+    public string? DrawnOn { get; set; }
 
     public decimal Total { get; set; }
     public string? Notes { get; set; }
@@ -344,8 +429,11 @@ public class PreSchoolReceiptLine
     public int Id { get; set; }
     public int ReceiptId { get; set; }
 
-    /// <summary>Admission or Monthly.</summary>
+    /// <summary>Admission, Monthly or Charge (one of the receipt's other rows).</summary>
     public string Kind { get; set; } = "Monthly";
+
+    /// <summary>For a Charge: which row of the receipt, one of <see cref="PreSchoolChargeHeads"/>.</summary>
+    public string? ChargeHead { get; set; }
 
     /// <summary>The first of the month paid for; null for the admission fee.</summary>
     public DateOnly? ForMonth { get; set; }

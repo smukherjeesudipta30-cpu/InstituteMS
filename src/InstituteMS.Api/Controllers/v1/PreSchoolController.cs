@@ -95,6 +95,39 @@ public class PreSchoolController : ApiControllerBase
         => Envelope(await _public.SetEnquiryHandledAsync(id, handled, CurrentUserName, ct),
             handled ? "Marked as called back." : "Marked as open.");
 
+    /// <summary>One enquiry with its feedback notes, for the printed Enquiry Form.</summary>
+    [HttpGet("enquiries/{id:int}")]
+    [Authorize(Roles = UserRoles.PreSchoolOffice)]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolEnquiryDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Enquiry(int id, CancellationToken ct)
+        => Envelope(await _public.GetEnquiryAsync(id, ct));
+
+    /// <summary>A walk-in or phone enquiry typed in by the office.</summary>
+    [HttpPost("enquiries")]
+    [Authorize(Roles = UserRoles.PreSchoolOffice)]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolEnquiryDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> CreateEnquiry([FromBody] PreSchoolEnquiryRequest request, CancellationToken ct)
+        => Envelope(await _public.CreateEnquiryAsync(request, CurrentUserName, ct), "Enquiry saved.");
+
+    [HttpPut("enquiries/{id:int}")]
+    [Authorize(Roles = UserRoles.PreSchoolOffice)]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolEnquiryDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> UpdateEnquiry(int id, [FromBody] PreSchoolEnquiryRequest request, CancellationToken ct)
+        => Envelope(await _public.UpdateEnquiryAsync(id, request, ct), "Enquiry saved.");
+
+    /// <summary>A dated note of a talk with the family, for the form's "Enquiry Feedback" page.</summary>
+    [HttpPost("enquiries/{id:int}/feedback")]
+    [Authorize(Roles = UserRoles.PreSchoolOffice)]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolEnquiryDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> AddFeedback(int id, [FromBody] PreSchoolEnquiryFeedbackRequest request, CancellationToken ct)
+        => Envelope(await _public.AddFeedbackAsync(id, request, CurrentUserName, ct), "Feedback added.");
+
+    [HttpDelete("enquiries/{id:int}/feedback/{feedbackId:int}")]
+    [Authorize(Roles = UserRoles.PreSchoolOffice)]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolEnquiryDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> DeleteFeedback(int id, int feedbackId, CancellationToken ct)
+        => Envelope(await _public.DeleteFeedbackAsync(id, feedbackId, ct), "Feedback removed.");
+
     /// <summary>Settings, classes with their subjects and monthly fees, and the grade table.</summary>
     [HttpGet("overview")]
     [ProducesResponseType(typeof(ApiResponse<PreSchoolOverviewDto>), StatusCodes.Status200OK)]

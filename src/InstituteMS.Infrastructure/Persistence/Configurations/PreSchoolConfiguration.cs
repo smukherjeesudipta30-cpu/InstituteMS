@@ -99,7 +99,38 @@ public class PreSchoolEnquiryConfiguration : IEntityTypeConfiguration<PreSchoolE
         b.Property(x => x.Message).HasMaxLength(1000);
         b.Property(x => x.ClientIp).HasMaxLength(50);
         b.Property(x => x.HandledBy).HasMaxLength(250);
+        b.Property(x => x.Session).HasMaxLength(9);
+        b.Property(x => x.Gender).HasMaxLength(10);
+        b.Property(x => x.MotherName).HasMaxLength(100);
+        b.Property(x => x.MotherOccupation).HasMaxLength(60);
+        b.Property(x => x.MotherPhone).HasMaxLength(20);
+        b.Property(x => x.MotherEmail).HasMaxLength(150);
+        b.Property(x => x.MotherAddress).HasMaxLength(400);
+        b.Property(x => x.FatherName).HasMaxLength(100);
+        b.Property(x => x.FatherOccupation).HasMaxLength(60);
+        b.Property(x => x.FatherPhone).HasMaxLength(20);
+        b.Property(x => x.FatherEmail).HasMaxLength(150);
+        b.Property(x => x.FatherAddress).HasMaxLength(400);
+        b.Property(x => x.GuardianName).HasMaxLength(100);
+        b.Property(x => x.GuardianOccupation).HasMaxLength(60);
+        b.Property(x => x.GuardianPhone).HasMaxLength(20);
+        b.Property(x => x.GuardianAddress).HasMaxLength(400);
+        b.Property(x => x.HeardFrom).HasMaxLength(100);
+        b.Property(x => x.Source).HasMaxLength(10);
+        b.Property(x => x.CreatedBy).HasMaxLength(250);
         b.HasIndex(x => x.CreatedOn);
+        b.HasMany(x => x.Feedback).WithOne().HasForeignKey(x => x.EnquiryId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public class PreSchoolEnquiryFeedbackConfiguration : IEntityTypeConfiguration<PreSchoolEnquiryFeedback>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolEnquiryFeedback> b)
+    {
+        b.ToTable("PreSchoolEnquiryFeedback");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Note).HasMaxLength(1000).IsRequired();
+        b.Property(x => x.CreatedBy).HasMaxLength(250);
     }
 }
 
@@ -248,6 +279,7 @@ public class PreSchoolStudentConfiguration : IEntityTypeConfiguration<PreSchoolS
         b.Property(x => x.HeightCm).HasPrecision(5, 1);
         b.Property(x => x.WeightKg).HasPrecision(5, 1);
         b.Property(x => x.Status).HasMaxLength(20).IsRequired();
+        b.Property(x => x.Section).HasMaxLength(10);
         b.Property(x => x.Notes).HasMaxLength(500);
         b.Property(x => x.CreatedBy).HasMaxLength(250);
         b.Property(x => x.ModifiedBy).HasMaxLength(250);
@@ -264,6 +296,7 @@ public class PreSchoolReceiptConfiguration : IEntityTypeConfiguration<PreSchoolR
         b.HasKey(x => x.Id);
         b.Property(x => x.Mode).HasMaxLength(10).IsRequired();
         b.Property(x => x.Reference).HasMaxLength(60);
+        b.Property(x => x.DrawnOn).HasMaxLength(80);
         b.Property(x => x.Total).HasPrecision(10, 2);
         b.Property(x => x.Notes).HasMaxLength(300);
         b.Property(x => x.CancelledBy).HasMaxLength(250);
@@ -281,6 +314,7 @@ public class PreSchoolReceiptLineConfiguration : IEntityTypeConfiguration<PreSch
         b.ToTable("PreSchoolReceiptLine");
         b.HasKey(x => x.Id);
         b.Property(x => x.Kind).HasMaxLength(10).IsRequired();
+        b.Property(x => x.ChargeHead).HasMaxLength(20).IsUnicode(false);
         b.Property(x => x.Description).HasMaxLength(120).IsRequired();
         b.Property(x => x.Amount).HasPrecision(10, 2);
         b.HasOne(x => x.Receipt).WithMany(r => r.Lines).HasForeignKey(x => x.ReceiptId).OnDelete(DeleteBehavior.Cascade);

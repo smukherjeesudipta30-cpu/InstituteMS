@@ -58,7 +58,8 @@ public record PreSchoolStudentDetailDto(
     decimal AdmissionFee,
     bool AdmissionPaid,
     IReadOnlyList<PreSchoolMonthDto> Months,
-    IReadOnlyList<PreSchoolReceiptSummaryDto> Receipts);
+    IReadOnlyList<PreSchoolReceiptSummaryDto> Receipts,
+    string? Section = null);
 
 public record PreSchoolStudentSaveRequest
 {
@@ -85,6 +86,9 @@ public record PreSchoolStudentSaveRequest
     public string Status { get; init; } = PreSchoolStudentStatus.Active;
     public DateOnly? EndedOn { get; init; }
     public string? Notes { get; init; }
+
+    /// <summary>"A", "B" … printed on the fee receipt.</summary>
+    public string? Section { get; init; }
 }
 
 public class PreSchoolStudentSaveRequestValidator : AbstractValidator<PreSchoolStudentSaveRequest>
@@ -133,6 +137,7 @@ public class PreSchoolStudentSaveRequestValidator : AbstractValidator<PreSchoolS
         RuleFor(x => x).Must(x => x.EndedOn is null || x.EndedOn >= x.JoinedOn)
             .WithMessage("The end date cannot be before the joining date.");
         RuleFor(x => x.Notes).MaximumLength(500);
+        RuleFor(x => x.Section).MaximumLength(10);
     }
 }
 
@@ -147,8 +152,17 @@ public record PreSchoolCollectRequest
     /// <summary>The months paid for, as their first day.</summary>
     public IReadOnlyList<DateOnly> Months { get; init; } = [];
 
+    /// <summary>The receipt's other rows (registration, annual, kit, food…) with the amount taken for each.</summary>
+    public IReadOnlyList<PreSchoolChargeRequest> Charges { get; init; } = [];
+
     public string Mode { get; init; } = "Cash";
+
+    /// <summary>UPI / Paytm reference, or the cheque / DD number.</summary>
     public string? Reference { get; init; }
+
+    /// <summary>Cheque or DD only: its date and the bank it is drawn on.</summary>
+    public DateOnly? ChequeDate { get; init; }
+    public string? DrawnOn { get; init; }
 
     /// <summary>When left out, today.</summary>
     public DateOnly? ReceivedOn { get; init; }
@@ -160,21 +174,39 @@ public class PreSchoolCollectRequestValidator : AbstractValidator<PreSchoolColle
 {
     public PreSchoolCollectRequestValidator()
     {
-        RuleFor(x => x).Must(x => x.IncludeAdmission || x.Months.Count > 0)
-            .WithMessage("Tick the admission fee or at least one month.");
+        RuleFor(x => x).Must(x => x.IncludeAdmission || x.Months.Count > 0 || x.Charges.Any(c => c.Amount > 0))
+            .WithMessage("Tick the admission fee, a month, or enter another charge.");
+        RuleForEach(x => x.Charges).ChildRules(c =>
+        {
+            c.RuleFor(x => x.Head).Must(h => PreSchoolChargeHeads.Labels.ContainsKey(h)).WithMessage("Unknown charge on the receipt.");
+            c.RuleFor(x => x.Amount).GreaterThanOrEqualTo(0).LessThan(1_000_000).WithMessage("A charge cannot be negative.");
+            c.RuleFor(x => x.Note).MaximumLength(60);
+        });
+        RuleFor(x => x.Charges).Must(c => c.Select(x => x.Head).Distinct().Count() == c.Count)
+            .WithMessage("Each charge can appear once on a receipt.");
         RuleFor(x => x.Months.Count).LessThanOrEqualTo(24).WithMessage("At most 24 months on one receipt.");
         RuleFor(x => x.AdmissionAmount).GreaterThan(0).When(x => x.AdmissionAmount.HasValue)
             .WithMessage("The admission amount must be above zero.");
-        RuleFor(x => x.Mode).Must(m => m is "Cash" or "UPI" or "Paytm").WithMessage("Payment mode is Cash, UPI or Paytm.");
+        RuleFor(x => x.Mode).Must(m => m is "Cash" or "UPI" or "Paytm" or "Cheque" or "DD")
+            .WithMessage("Payment mode is Cash, UPI, Paytm, Cheque or DD.");
         RuleFor(x => x.Reference).NotEmpty().When(x => x.Mode is "UPI" or "Paytm")
             .WithMessage("Enter the UPI or Paytm reference number.").MaximumLength(60);
+        RuleFor(x => x.Reference).NotEmpty().When(x => x.Mode is "Cheque" or "DD")
+            .WithMessage("Enter the cheque / DD number.");
+        RuleFor(x => x.ChequeDate).NotNull().When(x => x.Mode is "Cheque" or "DD")
+            .WithMessage("Enter the cheque / DD date.");
+        RuleFor(x => x.DrawnOn).NotEmpty().When(x => x.Mode is "Cheque" or "DD")
+            .WithMessage("Enter the bank the cheque / DD is drawn on.").MaximumLength(80);
         RuleFor(x => x.ReceivedOn).LessThanOrEqualTo(_ => DateOnly.FromDateTime(DateTime.Today))
             .When(x => x.ReceivedOn.HasValue).WithMessage("The payment date cannot be in the future.");
         RuleFor(x => x.Notes).MaximumLength(300);
     }
 }
 
-public record PreSchoolReceiptLineDto(string Kind, DateOnly? ForMonth, string Description, decimal Amount);
+/// <summary>One of the receipt's other rows and the amount taken. <see cref="Note"/> is printed beside "Others".</summary>
+public record PreSchoolChargeRequest(string Head, decimal Amount, string? Note = null);
+
+public record PreSchoolReceiptLineDto(string Kind, DateOnly? ForMonth, string Description, decimal Amount, string? ChargeHead = null);
 
 /// <summary>A receipt with everything printed on it.</summary>
 public record PreSchoolReceiptDto(
@@ -197,7 +229,14 @@ public record PreSchoolReceiptDto(
     string SchoolName,
     string? SchoolAddress,
     string? SchoolPhone,
-    IReadOnlyList<PreSchoolReceiptLineDto> Lines);
+    IReadOnlyList<PreSchoolReceiptLineDto> Lines,
+    // From the registration, for the printed receipt.
+    string? Section = null,
+    string? FatherName = null,
+    string? MotherName = null,
+    string? Address = null,
+    DateOnly? ChequeDate = null,
+    string? DrawnOn = null);
 
 public record PreSchoolPendingRowDto(
     int StudentId,

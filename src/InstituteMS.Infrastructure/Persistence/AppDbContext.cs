@@ -52,6 +52,7 @@ public class AppDbContext : DbContext
     public DbSet<PreSchoolGradeBand> PreSchoolGradeBands => Set<PreSchoolGradeBand>();
     public DbSet<PreSchoolSetting> PreSchoolSettings => Set<PreSchoolSetting>();
     public DbSet<PreSchoolEnquiry> PreSchoolEnquiries => Set<PreSchoolEnquiry>();
+    public DbSet<PreSchoolEnquiryFeedback> PreSchoolEnquiryFeedback => Set<PreSchoolEnquiryFeedback>();
     public DbSet<PreSchoolHoliday> PreSchoolHolidays => Set<PreSchoolHoliday>();
     public DbSet<PreSchoolStudent> PreSchoolStudents => Set<PreSchoolStudent>();
     public DbSet<PreSchoolPhoto> PreSchoolPhotos => Set<PreSchoolPhoto>();
