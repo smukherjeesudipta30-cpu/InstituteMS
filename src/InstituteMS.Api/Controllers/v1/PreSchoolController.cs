@@ -170,6 +170,13 @@ public class PreSchoolController : ApiControllerBase
     public async Task<IActionResult> UpdateFeeHead(int id, [FromBody] PreSchoolFeeHeadSaveRequest request, CancellationToken ct)
         => Envelope(await _masters.UpdateFeeHeadAsync(id, request, CurrentUserName, ct), "Fee saved.");
 
+    /// <summary>The class's usual Fee Receipt amounts (registration, annual, kit…); admin and receptionist.</summary>
+    [HttpPut("classes/{id:int}/charge-rates")]
+    [Authorize(Roles = UserRoles.PreSchoolOffice)]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolClassDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SaveChargeRates(int id, [FromBody] PreSchoolChargeRatesSaveRequest request, CancellationToken ct)
+        => Envelope(await _masters.SaveChargeRatesAsync(id, request, CurrentUserName, ct), "Receipt charges saved.");
+
     [HttpPut("grade-bands")]
     [Authorize(Roles = UserRoles.PreSchoolHead)]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<PreSchoolGradeBandDto>>), StatusCodes.Status200OK)]

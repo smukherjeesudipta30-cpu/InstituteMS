@@ -1,5 +1,6 @@
 using FluentValidation;
 using InstituteMS.Application.Common;
+using InstituteMS.Domain.Entities;
 
 namespace InstituteMS.Application.PreSchool;
 
@@ -18,7 +19,26 @@ public record PreSchoolClassDto(
     bool IsActive,
     decimal MonthlyTotal,
     IReadOnlyList<PreSchoolSubjectDto> Subjects,
-    IReadOnlyList<PreSchoolFeeHeadDto> FeeHeads);
+    IReadOnlyList<PreSchoolFeeHeadDto> FeeHeads,
+    // Head → usual amount for the Fee Receipt's other rows (Registration, Annual, Admission Kit…).
+    IReadOnlyDictionary<string, decimal>? ChargeRates = null);
+
+/// <summary>A class's usual Fee Receipt amounts; a head left out (or zero) is not filled in.</summary>
+public record PreSchoolChargeRatesSaveRequest
+{
+    public IReadOnlyDictionary<string, decimal> Rates { get; init; } = new Dictionary<string, decimal>();
+}
+
+public class PreSchoolChargeRatesSaveRequestValidator : AbstractValidator<PreSchoolChargeRatesSaveRequest>
+{
+    public PreSchoolChargeRatesSaveRequestValidator()
+    {
+        RuleFor(x => x.Rates).Must(r => r.Keys.All(k => PreSchoolChargeHeads.Labels.ContainsKey(k)))
+            .WithMessage("Unknown charge on the receipt.");
+        RuleFor(x => x.Rates).Must(r => r.Values.All(v => v >= 0 && v < 1_000_000))
+            .WithMessage("Amounts must be zero or more.");
+    }
+}
 
 public record PreSchoolGradeBandDto(int Id, decimal MinPercent, string Grade, string? Remark);
 
@@ -222,6 +242,9 @@ public interface IPreSchoolMasterService
 
     Task<Result<PreSchoolFeeHeadDto>> CreateFeeHeadAsync(PreSchoolFeeHeadSaveRequest request, string? actor, CancellationToken ct = default);
     Task<Result<PreSchoolFeeHeadDto>> UpdateFeeHeadAsync(int id, PreSchoolFeeHeadSaveRequest request, string? actor, CancellationToken ct = default);
+
+    /// <summary>The class's usual Fee Receipt amounts; the admin and the receptionist may set them.</summary>
+    Task<Result<PreSchoolClassDto>> SaveChargeRatesAsync(int classId, PreSchoolChargeRatesSaveRequest request, string? actor, CancellationToken ct = default);
 
     Task<Result<IReadOnlyList<PreSchoolGradeBandDto>>> SaveGradeBandsAsync(PreSchoolGradeBandsSaveRequest request, string? actor, CancellationToken ct = default);
 

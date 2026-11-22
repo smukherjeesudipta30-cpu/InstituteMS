@@ -67,12 +67,12 @@ public class PreSchoolAttendanceService : IPreSchoolAttendanceService
     public async Task<Result<AttendanceQrDto>> GetQrAsync(CancellationToken ct = default)
     {
         var s = await SettingsAsync(ct);
-        if (s?.Latitude is null || s.Longitude is null)
+        if (await FenceAsync(s, ct) is null)
             return Result<AttendanceQrDto>.Failure(NoFenceMessage);
 
         var (token, expiresOn) = _tokens.Create(QrBranchId);
         return Result<AttendanceQrDto>.Success(new AttendanceQrDto(
-            QrBranchId, s.SchoolName, $"{_siteBaseUrl}/preschool/attendance/scan?t={token}", expiresOn, _tokens.TokenSeconds));
+            QrBranchId, s?.SchoolName ?? "Avijan PreSchool", $"{_siteBaseUrl}/preschool/attendance/scan?t={token}", expiresOn, _tokens.TokenSeconds));
     }
 
     /* ================================================== scanning or marking */
@@ -95,16 +95,18 @@ public class PreSchoolAttendanceService : IPreSchoolAttendanceService
         if (staff is null) return Result<AttendanceChallengeDto>.Failure(NotLinkedMessage, ResultStatus.Forbidden);
 
         var s = await SettingsAsync(ct);
-        if (s?.Latitude is null || s.Longitude is null) return Result<AttendanceChallengeDto>.Failure(NoFenceMessage);
+        var fence = await FenceAsync(s, ct);
+        if (fence is null) return Result<AttendanceChallengeDto>.Failure(NoFenceMessage);
+        var school = s?.SchoolName ?? "Avijan PreSchool";
 
         if (request.AccuracyMetres is > 0 && request.AccuracyMetres > _options.MaxAccuracyMetres)
             return Result<AttendanceChallengeDto>.Failure(
                 $"Your phone could only place you to within {request.AccuracyMetres:0} metres. Step outside or turn on GPS, then try again.");
 
-        var distance = (decimal)DistanceMetres((double)s.Latitude.Value, (double)s.Longitude.Value, request.Latitude, request.Longitude);
-        if (distance > s.GeofenceMetres)
+        var distance = (decimal)DistanceMetres((double)fence.Value.Latitude, (double)fence.Value.Longitude, request.Latitude, request.Longitude);
+        if (distance > fence.Value.Metres)
             return Result<AttendanceChallengeDto>.Failure(
-                $"You have to be inside the {s.SchoolName} premises — only then can you mark your attendance. " +
+                $"You have to be inside the {school} premises — only then can you mark your attendance. " +
                 $"You are about {distance:0} metres away.", ResultStatus.Forbidden);
 
         if (string.IsNullOrWhiteSpace(staff.Email))
@@ -152,7 +154,7 @@ public class PreSchoolAttendanceService : IPreSchoolAttendanceService
 
         var masked = MaskEmail(staff.Email);
         return Result<AttendanceChallengeDto>.Success(new AttendanceChallengeDto(
-            challenge.Id, masked, now, direction, s.SchoolName, challenge.ExpiresOn,
+            challenge.Id, masked, now, direction, school, challenge.ExpiresOn,
             sent
                 ? $"A six-digit code has been sent to {masked}. Enter it to confirm your {(direction == "In" ? "arrival" : "departure")} at {now:h:mm tt}."
                 : "Your mark is held, but the code email could not be sent. Try 'Send again', or ask the PreSchool admin to check your email address."));
@@ -340,7 +342,33 @@ public class PreSchoolAttendanceService : IPreSchoolAttendanceService
         "Ask the PreSchool admin to put your sign-in email on your staff record.";
 
     private const string NoFenceMessage =
-        "The PreSchool's location is not set yet, so attendance cannot be taken. The PreSchool admin sets it in School Settings.";
+        "The Champahati centre's location is not set yet, so attendance cannot be taken. " +
+        "Set the location of the Champahati branch (Computer Centre › Branches), or the PreSchool's own in School Settings.";
+
+    /// <summary>The Computer Centre branch the PreSchool shares premises with.</summary>
+    private const string HomeBranch = "Champahati";
+
+    /// <summary>
+    /// Where staff must stand to mark attendance. The PreSchool shares the
+    /// Champahati Computer Centre's premises, so that branch's location and
+    /// radius are used; the PreSchool's own location in School Settings is the
+    /// fallback while the branch has none. Null when neither is set.
+    /// </summary>
+    private async Task<(decimal Latitude, decimal Longitude, int Metres)?> FenceAsync(PreSchoolSetting? s, CancellationToken ct)
+    {
+        var branch = await _db.Branches.AsNoTracking()
+            .Where(b => b.IsActive && b.Latitude != null && b.Longitude != null
+                        && ((b.Name != null && b.Name.Contains(HomeBranch)) || (b.Code != null && b.Code.Contains(HomeBranch))))
+            .OrderBy(b => b.Id)
+            .Select(b => new { b.Latitude, b.Longitude, b.GeofenceMetres })
+            .FirstOrDefaultAsync(ct);
+        if (branch is not null)
+            return (branch.Latitude!.Value, branch.Longitude!.Value, branch.GeofenceMetres > 0 ? branch.GeofenceMetres : 150);
+
+        if (s?.Latitude is decimal lat && s.Longitude is decimal lng)
+            return (lat, lng, s.GeofenceMetres);
+        return null;
+    }
 
     private sealed record StaffRef(int Id, string Name, string Role, string? Email);
 

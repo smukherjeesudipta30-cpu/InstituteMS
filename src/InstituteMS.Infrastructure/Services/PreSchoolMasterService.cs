@@ -36,8 +36,48 @@ public class PreSchoolMasterService : IPreSchoolMasterService
             .ToListAsync(ct);
 
         var settings = await _db.PreSchoolSettings.AsNoTracking().FirstOrDefaultAsync(ct);
+        var rates = await RatesAsync(null, ct);
 
-        return new PreSchoolOverviewDto(ToDto(settings), classes.Select(ToDto).ToList(), bands);
+        return new PreSchoolOverviewDto(ToDto(settings), classes.Select(c => ToDto(c, rates)).ToList(), bands);
+    }
+
+    public async Task<Result<PreSchoolClassDto>> SaveChargeRatesAsync(int classId, PreSchoolChargeRatesSaveRequest request, string? actor, CancellationToken ct = default)
+    {
+        var cls = await _db.PreSchoolClasses.Include(c => c.Subjects).Include(c => c.FeeHeads)
+            .FirstOrDefaultAsync(c => c.Id == classId, ct);
+        if (cls is null) return Result<PreSchoolClassDto>.Failure("That class no longer exists.", ResultStatus.NotFound);
+
+        var existing = await _db.PreSchoolChargeRates.Where(r => r.ClassId == classId).ToListAsync(ct);
+        foreach (var head in PreSchoolChargeHeads.Labels.Keys)
+        {
+            var amount = request.Rates.TryGetValue(head, out var a) ? a : 0m;
+            var row = existing.FirstOrDefault(r => r.Head == head);
+            if (amount <= 0)
+            {
+                if (row is not null) _db.PreSchoolChargeRates.Remove(row);
+                continue;
+            }
+            if (row is null)
+            {
+                row = new PreSchoolChargeRate { ClassId = classId, Head = head };
+                _db.PreSchoolChargeRates.Add(row);
+            }
+            row.Amount = amount;
+            row.ModifiedBy = actor;
+            row.ModifiedOn = DateTime.Now;
+        }
+        await _db.SaveChangesAsync(ct);
+
+        return Result<PreSchoolClassDto>.Success(ToDto(cls, await RatesAsync(classId, ct)));
+    }
+
+    /// <summary>Class → head → amount, for one class or all of them.</summary>
+    private async Task<Dictionary<int, Dictionary<string, decimal>>> RatesAsync(int? classId, CancellationToken ct)
+    {
+        var rows = await _db.PreSchoolChargeRates.AsNoTracking()
+            .Where(r => classId == null || r.ClassId == classId)
+            .ToListAsync(ct);
+        return rows.GroupBy(r => r.ClassId).ToDictionary(g => g.Key, g => g.ToDictionary(r => r.Head, r => r.Amount));
     }
 
     /* ------------------------------------------------------------ classes */
@@ -277,11 +317,14 @@ public class PreSchoolMasterService : IPreSchoolMasterService
 
     /* ------------------------------------------------------------ mapping */
 
-    private static PreSchoolClassDto ToDto(PreSchoolClass c) => new(
+    private static PreSchoolClassDto ToDto(PreSchoolClass c) => ToDto(c, null);
+
+    private static PreSchoolClassDto ToDto(PreSchoolClass c, Dictionary<int, Dictionary<string, decimal>>? rates) => new(
         c.Id, c.Name, c.SortOrder, c.AdmissionFee, c.MinAgeMonths, c.MaxAgeMonths, c.IsActive,
         c.FeeHeads.Where(f => f.IsActive).Sum(f => f.MonthlyAmount),
         c.Subjects.OrderBy(s => s.SortOrder).ThenBy(s => s.Name).Select(ToDto).ToList(),
-        c.FeeHeads.OrderBy(f => f.SortOrder).ThenBy(f => f.Name).Select(ToDto).ToList());
+        c.FeeHeads.OrderBy(f => f.SortOrder).ThenBy(f => f.Name).Select(ToDto).ToList(),
+        rates?.GetValueOrDefault(c.Id) ?? new Dictionary<string, decimal>());
 
     private static PreSchoolSubjectDto ToDto(PreSchoolSubject s) =>
         new(s.Id, s.ClassId, s.Name, s.MaxMarks, s.SortOrder, s.IsActive);

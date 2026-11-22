@@ -123,6 +123,18 @@ public class PreSchoolEnquiryConfiguration : IEntityTypeConfiguration<PreSchoolE
     }
 }
 
+public class PreSchoolChargeRateConfiguration : IEntityTypeConfiguration<PreSchoolChargeRate>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolChargeRate> b)
+    {
+        b.ToTable("PreSchoolChargeRate");
+        b.HasKey(x => new { x.ClassId, x.Head });
+        b.Property(x => x.Head).HasMaxLength(20).IsUnicode(false);
+        b.Property(x => x.Amount).HasPrecision(10, 2);
+        b.Property(x => x.ModifiedBy).HasMaxLength(250).IsUnicode(false);
+    }
+}
+
 public class PreSchoolEnquiryFeedbackConfiguration : IEntityTypeConfiguration<PreSchoolEnquiryFeedback>
 {
     public void Configure(EntityTypeBuilder<PreSchoolEnquiryFeedback> b)

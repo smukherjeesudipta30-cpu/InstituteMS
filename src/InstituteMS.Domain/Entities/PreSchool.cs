@@ -347,6 +347,19 @@ public class PreSchoolStudent
 /// the printed order. Part I: Registration, Annual, Activities, LateFee.
 /// Part II: Prospectus, AdmissionKit, Food, Transport, Others.
 /// </summary>
+/// <summary>
+/// Maps to <c>dbo.PreSchoolChargeRate</c> — a class's usual amount for one of the
+/// Fee Receipt's other rows; filled in when fees are collected, and changeable there.
+/// </summary>
+public class PreSchoolChargeRate
+{
+    public int ClassId { get; set; }
+    public string Head { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
+    public string? ModifiedBy { get; set; }
+    public DateTime ModifiedOn { get; set; }
+}
+
 public static class PreSchoolChargeHeads
 {
     public const string Registration = "Registration";

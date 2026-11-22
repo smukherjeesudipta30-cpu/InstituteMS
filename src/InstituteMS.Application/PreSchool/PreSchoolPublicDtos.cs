@@ -136,7 +136,27 @@ public class PreSchoolEnquiryRequestValidator : AbstractValidator<PreSchoolEnqui
         RuleFor(x => x.ChildDateOfBirth)
             .Must(d => d is null || (d <= DateOnly.FromDateTime(DateTime.Today) && d >= DateOnly.FromDateTime(DateTime.Today).AddYears(-10)))
             .WithMessage("Check the child's date of birth.");
+
+        // The full Enquiry Form (every current website, app and office form says
+        // where it came from). The 2.84 app's short form sends no source and
+        // keeps working with the rules above.
+        When(x => !string.IsNullOrWhiteSpace(x.Source), () =>
+        {
+            RuleFor(x => x.Session).NotEmpty().WithMessage("Choose the session.");
+            RuleFor(x => x.Gender).NotEmpty().WithMessage("Choose the child's gender.");
+            RuleFor(x => x.ChildDateOfBirth).NotNull().WithMessage("Enter the child's date of birth.");
+            RuleFor(x => x.ClassWanted).NotEmpty().WithMessage("Choose the class.");
+            RuleFor(x => x.HeardFrom).NotEmpty().WithMessage("Tick where you heard of the school.");
+            RuleFor(x => x).Must(x =>
+                    (Filled(x.MotherName, x.MotherPhone, x.MotherAddress)) ||
+                    (Filled(x.FatherName, x.FatherPhone, x.FatherAddress)) ||
+                    (Filled(x.GuardianName, x.GuardianPhone, x.GuardianAddress)))
+                .WithName("MotherAddress")
+                .WithMessage("Enter the mother's, father's or guardian's name, contact number and address.");
+        });
     }
+
+    private static bool Filled(params string?[] values) => values.All(v => !string.IsNullOrWhiteSpace(v));
 }
 
 public record PreSchoolEnquiryFeedbackRequest
