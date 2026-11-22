@@ -93,6 +93,16 @@ public class PreSchoolMasterService : IPreSchoolMasterService
         _db.PreSchoolClasses.Add(entity);
         await _db.SaveChangesAsync(ct);
 
+        // Every class keeps the same four things in the store, with no stock yet.
+        var slot = 0;
+        foreach (var item in PreSchoolStoreItemNames.Standard)
+            _db.PreSchoolStoreItems.Add(new PreSchoolStoreItem
+            {
+                Name = item, ClassId = entity.Id, SortOrder = entity.SortOrder * 10 + ++slot, CreatedBy = actor, CreatedOn = DateTime.Now,
+                ChargeHead = PreSchoolStoreItemNames.ChargeHeadFor(item)
+            });
+        await _db.SaveChangesAsync(ct);
+
         return Result<PreSchoolClassDto>.Success(ToDto(entity));
     }
 

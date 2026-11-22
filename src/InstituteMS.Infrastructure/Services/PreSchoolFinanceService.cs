@@ -200,6 +200,11 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
             .Where(e => e.SpentOn >= from && e.SpentOn <= to)
             .Select(e => new { e.SpentOn, e.Head, e.Amount })
             .ToListAsync(ct);
+        // Store stock is a cost when My Chhota School is paid (in bulk), not when it arrives.
+        var purchases = await _db.PreSchoolSupplierPayments.AsNoTracking()
+            .Where(p => p.PaidOn >= from && p.PaidOn <= to)
+            .Select(p => new { OnDate = p.PaidOn, p.Amount })
+            .ToListAsync(ct);
 
         var months = Enumerable.Range(1, 12).Select(m =>
         {
@@ -208,18 +213,21 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
             var other = lines.Where(l => l.ReceivedOn.Month == m && l.Kind == "Charge").Sum(l => l.Amount);
             var paid = salaries.Where(p => p.PaidOn.Month == m).Sum(p => p.NetPaid);
             var spent = expenses.Where(e => e.SpentOn.Month == m).Sum(e => e.Amount);
+            var bought = purchases.Where(p => p.OnDate.Month == m).Sum(p => p.Amount);
             var fees = admission + monthly + other;
-            return new PreSchoolIncomeMonthDto(new DateOnly(year, m, 1), admission, monthly, fees, paid, spent, fees - paid - spent, other);
+            return new PreSchoolIncomeMonthDto(new DateOnly(year, m, 1), admission, monthly, fees, paid, spent, fees - paid - spent - bought, other, bought);
         }).ToList();
 
         var income = months.Sum(m => m.Income);
         var salaryTotal = months.Sum(m => m.Salaries);
         var expenseTotal = months.Sum(m => m.Expenses);
+        var purchaseTotal = months.Sum(m => m.Purchases);
 
         return new PreSchoolIncomeReportDto(
-            year, months, income, salaryTotal, expenseTotal, income - salaryTotal - expenseTotal,
+            year, months, income, salaryTotal, expenseTotal, income - salaryTotal - expenseTotal - purchaseTotal,
             lines.GroupBy(l => l.Mode).ToDictionary(g => g.Key, g => g.Sum(l => l.Amount)),
-            expenses.GroupBy(e => e.Head).OrderByDescending(g => g.Sum(e => e.Amount)).ToDictionary(g => g.Key, g => g.Sum(e => e.Amount)));
+            expenses.GroupBy(e => e.Head).OrderByDescending(g => g.Sum(e => e.Amount)).ToDictionary(g => g.Key, g => g.Sum(e => e.Amount)),
+            purchaseTotal);
     }
 
     public async Task<Result<PreSchoolIncomeRangeDto>> IncomeRangeAsync(DateOnly from, DateOnly to, CancellationToken ct = default)
@@ -255,11 +263,53 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
         var paid = salaries.Sum(s => s.Amount);
         var spent = expenses.Sum(e => e.Amount);
 
+        // Store stock bought in these dates, and per kind of item what parents paid for it against what it cost.
+        var deliveries = await _db.PreSchoolStoreMovements.AsNoTracking().Include(m => m.Item).ThenInclude(i => i!.Class)
+            .Where(m => m.Kind == "In" && m.OnDate >= from && m.OnDate <= to)
+            .OrderBy(m => m.OnDate).ThenBy(m => m.Id)
+            .ToListAsync(ct);
+        var purchaseLines = deliveries.Where(m => m.UnitCost != null)
+            .Select(m => new PreSchoolIncomePurchaseLineDto(m.OnDate, m.Item?.Name ?? "", m.Item?.Class?.Name ?? "All classes",
+                m.Supplier ?? "My Chhota School", m.Quantity, m.UnitCost!.Value, m.Quantity * m.UnitCost.Value))
+            .ToList();
+        var received = purchaseLines.Sum(p => p.Amount);
+        var supplierPayments = await _db.PreSchoolSupplierPayments.AsNoTracking()
+            .Where(p => p.PaidOn >= from && p.PaidOn <= to)
+            .OrderBy(p => p.PaidOn).ThenBy(p => p.Id)
+            .Select(p => new PreSchoolSupplierPaymentDto(p.Id, p.Supplier, p.PaidOn, p.Amount, p.Mode, p.Reference, p.Note, p.CreatedBy))
+            .ToListAsync(ct);
+        var bought = supplierPayments.Sum(p => p.Amount);
+        var everBought = await _db.PreSchoolStoreMovements.AsNoTracking()
+            .Where(m => m.Kind == "In" && m.UnitCost != null && m.OnDate <= to)
+            .SumAsync(m => (decimal?)(m.Quantity * m.UnitCost!.Value), ct) ?? 0m;
+        var everPaid = await _db.PreSchoolSupplierPayments.AsNoTracking()
+            .Where(p => p.PaidOn <= to).SumAsync(p => (decimal?)p.Amount, ct) ?? 0m;
+        var given = await _db.PreSchoolStoreMovements.AsNoTracking().Include(m => m.Item)
+            .Where(m => m.Kind == "Out" && m.OnDate >= from && m.OnDate <= to)
+            .Select(m => new { m.Item!.Name, m.Item.ChargeHead, m.Quantity })
+            .ToListAsync(ct);
+        var charged = receipts.SelectMany(r => r.Lines).Where(l => l.Kind == "Charge" && l.ChargeHead != null)
+            .GroupBy(l => l.ChargeHead!).ToDictionary(g => g.Key, g => g.Sum(l => l.Amount));
+        var margins = deliveries.Select(m => new { m.Item!.Name, m.Item.ChargeHead })
+            .Concat(given.Select(g => new { g.Name, g.ChargeHead }))
+            .GroupBy(x => x.Name).Select(g => g.First())
+            .Select(x =>
+            {
+                var fromParents = x.ChargeHead is null ? 0m : charged.GetValueOrDefault(x.ChargeHead);
+                var cost = purchaseLines.Where(p => p.ItemName == x.Name).Sum(p => p.Amount);
+                return new PreSchoolStoreMarginDto(x.Name, x.ChargeHead, fromParents, cost, fromParents - cost,
+                    deliveries.Where(m => m.Item!.Name == x.Name).Sum(m => m.Quantity),
+                    given.Where(g => g.Name == x.Name).Sum(g => g.Quantity));
+            })
+            .OrderBy(x => x.Item)
+            .ToList();
+
         return Result<PreSchoolIncomeRangeDto>.Success(new PreSchoolIncomeRangeDto(
-            from, to, admission, monthly, income, paid, spent, income - paid - spent,
+            from, to, admission, monthly, income, paid, spent, income - paid - spent - bought,
             receiptLines.GroupBy(r => r.Mode).ToDictionary(g => g.Key, g => g.Sum(r => r.Total)),
             expenses.GroupBy(e => e.Head).OrderByDescending(g => g.Sum(e => e.Amount)).ToDictionary(g => g.Key, g => g.Sum(e => e.Amount)),
-            receiptLines, salaries, expenses, receiptLines.Sum(r => r.OtherFees)));
+            receiptLines, salaries, expenses, receiptLines.Sum(r => r.OtherFees), bought, purchaseLines, margins,
+            supplierPayments, Math.Round(everBought - everPaid, 2), Math.Round(received, 2)));
     }
 
     /* ------------------------------------------------------ own payslips */

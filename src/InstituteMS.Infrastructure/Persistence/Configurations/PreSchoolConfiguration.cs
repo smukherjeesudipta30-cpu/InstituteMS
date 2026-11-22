@@ -195,9 +195,27 @@ public class PreSchoolStoreItemConfiguration : IEntityTypeConfiguration<PreSchoo
         b.ToTable("PreSchoolStoreItem");
         b.HasKey(x => x.Id);
         b.Property(x => x.Name).HasMaxLength(100).IsRequired();
+        b.Property(x => x.UnitCost).HasPrecision(10, 2);
+        b.Property(x => x.ChargeHead).HasMaxLength(20).IsUnicode(false);
         b.Property(x => x.CreatedBy).HasMaxLength(250);
         b.Property(x => x.ModifiedBy).HasMaxLength(250);
         b.HasOne(x => x.Class).WithMany().HasForeignKey(x => x.ClassId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public class PreSchoolSupplierPaymentConfiguration : IEntityTypeConfiguration<PreSchoolSupplierPayment>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolSupplierPayment> b)
+    {
+        b.ToTable("PreSchoolSupplierPayment");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Supplier).HasMaxLength(100).IsRequired();
+        b.Property(x => x.Amount).HasPrecision(12, 2);
+        b.Property(x => x.Mode).HasMaxLength(10).IsRequired();
+        b.Property(x => x.Reference).HasMaxLength(60);
+        b.Property(x => x.Note).HasMaxLength(300);
+        b.Property(x => x.CreatedBy).HasMaxLength(250).IsUnicode(false);
+        b.HasIndex(x => x.PaidOn);
     }
 }
 
@@ -209,6 +227,8 @@ public class PreSchoolStoreMovementConfiguration : IEntityTypeConfiguration<PreS
         b.HasKey(x => x.Id);
         b.Property(x => x.Kind).HasMaxLength(10).IsRequired();
         b.Property(x => x.Note).HasMaxLength(200);
+        b.Property(x => x.UnitCost).HasPrecision(10, 2);
+        b.Property(x => x.Supplier).HasMaxLength(100);
         b.Property(x => x.CreatedBy).HasMaxLength(250);
         b.HasOne(x => x.Item).WithMany(i => i.Movements).HasForeignKey(x => x.ItemId).OnDelete(DeleteBehavior.Restrict);
         b.HasOne(x => x.Student).WithMany().HasForeignKey(x => x.StudentId).OnDelete(DeleteBehavior.Restrict);

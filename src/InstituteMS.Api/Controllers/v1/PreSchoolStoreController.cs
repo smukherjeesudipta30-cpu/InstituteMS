@@ -42,6 +42,18 @@ public class PreSchoolStoreController : ApiControllerBase
     public async Task<IActionResult> StockIn(int id, [FromBody] PreSchoolStockInRequest request, CancellationToken ct)
         => Envelope(await _store.StockInAsync(id, request, CurrentUserName, ct), "Stock added.");
 
+    /// <summary>A bulk payment to My Chhota School for store stock.</summary>
+    [HttpPost("store/supplier-payments")]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolSupplierAccountDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> AddSupplierPayment([FromBody] PreSchoolSupplierPaymentRequest request, CancellationToken ct)
+        => Envelope(await _store.AddSupplierPaymentAsync(request, CurrentUserName, ct), "Payment to My Chhota School recorded.");
+
+    [HttpDelete("store/supplier-payments/{id:int}")]
+    [Authorize(Roles = UserRoles.PreSchoolHead)]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolSupplierAccountDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> RemoveSupplierPayment(int id, CancellationToken ct)
+        => Envelope(await _store.RemoveSupplierPaymentAsync(id, ct), "Payment removed.");
+
     [HttpDelete("store/movements/{id:int}")]
     [Authorize(Roles = UserRoles.PreSchoolHead)]
     [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]

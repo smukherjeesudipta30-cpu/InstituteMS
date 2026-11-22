@@ -32,7 +32,8 @@ public class PreSchoolStoreService : IPreSchoolStoreService
 
         return new PreSchoolStoreDto(items, recent.Select(m => new PreSchoolStoreMovementDto(
             m.Id, m.ItemId, m.Item?.Name ?? "", m.Kind, m.Quantity, m.StudentId, m.Student?.ChildName,
-            m.Student is null ? null : $"{prefix}-{m.Student.AdmissionNo:0000}", m.OnDate, m.Note, m.CreatedBy)).ToList());
+            m.Student is null ? null : $"{prefix}-{m.Student.AdmissionNo:0000}", m.OnDate, m.Note, m.CreatedBy, m.UnitCost, m.Supplier)).ToList(),
+            await AccountAsync(ct));
     }
 
     public async Task<Result<PreSchoolStoreItemDto>> SaveItemAsync(int? id, PreSchoolStoreItemSaveRequest request, string? actor, CancellationToken ct = default)
@@ -63,6 +64,8 @@ public class PreSchoolStoreService : IPreSchoolStoreService
         item.ClassId = classId;
         item.SortOrder = request.SortOrder;
         item.IsActive = request.IsActive;
+        item.UnitCost = request.UnitCost;
+        item.ChargeHead = string.IsNullOrWhiteSpace(request.ChargeHead) ? null : request.ChargeHead;
         await _db.SaveChangesAsync(ct);
 
         return Result<PreSchoolStoreItemDto>.Success((await LoadItemsAsync(item.Id, ct)).Single());
@@ -70,12 +73,15 @@ public class PreSchoolStoreService : IPreSchoolStoreService
 
     public async Task<Result<PreSchoolStoreItemDto>> StockInAsync(int itemId, PreSchoolStockInRequest request, string? actor, CancellationToken ct = default)
     {
-        if (!await _db.PreSchoolStoreItems.AnyAsync(i => i.Id == itemId, ct))
+        var stocked = await _db.PreSchoolStoreItems.AsNoTracking().FirstOrDefaultAsync(i => i.Id == itemId, ct);
+        if (stocked is null)
             return Result<PreSchoolStoreItemDto>.Failure("That item no longer exists.", ResultStatus.NotFound);
 
         _db.PreSchoolStoreMovements.Add(new PreSchoolStoreMovement
         {
             ItemId = itemId, Kind = In, Quantity = request.Quantity,
+            UnitCost = request.UnitCost ?? stocked.UnitCost,
+            Supplier = string.IsNullOrWhiteSpace(request.Supplier) ? DefaultSupplier : request.Supplier.Trim(),
             OnDate = request.OnDate ?? DateOnly.FromDateTime(DateTime.Today),
             Note = string.IsNullOrWhiteSpace(request.Note) ? null : request.Note.Trim(),
             CreatedBy = actor, CreatedOn = DateTime.Now
@@ -167,6 +173,11 @@ public class PreSchoolStoreService : IPreSchoolStoreService
             .GroupBy(m => new { m.ItemId, m.Kind })
             .Select(g => new { g.Key.ItemId, g.Key.Kind, Total = g.Sum(x => x.Quantity) })
             .ToListAsync(ct);
+        var spent = await _db.PreSchoolStoreMovements.AsNoTracking()
+            .Where(m => ids.Contains(m.ItemId) && m.Kind == In && m.UnitCost != null)
+            .GroupBy(m => m.ItemId)
+            .Select(g => new { ItemId = g.Key, Amount = g.Sum(x => x.Quantity * x.UnitCost!.Value) })
+            .ToDictionaryAsync(x => x.ItemId, x => x.Amount, ct);
 
         // Active children per class, and per item those who already have it.
         var activeByClass = await _db.PreSchoolStudents.AsNoTracking()
@@ -189,10 +200,55 @@ public class PreSchoolStoreService : IPreSchoolStoreService
                 var students = i.ClassId is int c ? activeByClass.GetValueOrDefault(c) : activeTotal;
                 return new PreSchoolStoreItemDto(
                     i.Id, i.Name, i.ClassId, i.Class?.Name ?? "All classes", i.SortOrder, i.IsActive,
-                    received, given, received - given, students, Math.Max(0, students - haveIt.GetValueOrDefault(i.Id)));
+                    received, given, received - given, students, Math.Max(0, students - haveIt.GetValueOrDefault(i.Id)),
+                    i.UnitCost, i.ChargeHead, Math.Round(spent.GetValueOrDefault(i.Id), 2));
             })
             .ToList();
     }
+
+    public async Task<Result<PreSchoolSupplierAccountDto>> AddSupplierPaymentAsync(PreSchoolSupplierPaymentRequest request, string? actor, CancellationToken ct = default)
+    {
+        _db.PreSchoolSupplierPayments.Add(new PreSchoolSupplierPayment
+        {
+            Supplier = DefaultSupplier,
+            PaidOn = request.PaidOn ?? DateOnly.FromDateTime(DateTime.Today),
+            Amount = request.Amount,
+            Mode = request.Mode,
+            Reference = string.IsNullOrWhiteSpace(request.Reference) ? null : request.Reference.Trim(),
+            Note = string.IsNullOrWhiteSpace(request.Note) ? null : request.Note.Trim(),
+            CreatedBy = actor,
+            CreatedOn = DateTime.Now
+        });
+        await _db.SaveChangesAsync(ct);
+        return Result<PreSchoolSupplierAccountDto>.Success(await AccountAsync(ct));
+    }
+
+    public async Task<Result<PreSchoolSupplierAccountDto>> RemoveSupplierPaymentAsync(int paymentId, CancellationToken ct = default)
+    {
+        var p = await _db.PreSchoolSupplierPayments.FirstOrDefaultAsync(x => x.Id == paymentId, ct);
+        if (p is null) return Result<PreSchoolSupplierAccountDto>.Failure("That payment no longer exists.", ResultStatus.NotFound);
+        _db.PreSchoolSupplierPayments.Remove(p);
+        await _db.SaveChangesAsync(ct);
+        return Result<PreSchoolSupplierAccountDto>.Success(await AccountAsync(ct));
+    }
+
+    /// <summary>Bought (deliveries with a price), paid, the balance, and the payments newest first.</summary>
+    private async Task<PreSchoolSupplierAccountDto> AccountAsync(CancellationToken ct)
+    {
+        var bought = await _db.PreSchoolStoreMovements.AsNoTracking()
+            .Where(m => m.Kind == In && m.UnitCost != null)
+            .SumAsync(m => (decimal?)(m.Quantity * m.UnitCost!.Value), ct) ?? 0m;
+        var payments = await _db.PreSchoolSupplierPayments.AsNoTracking()
+            .OrderByDescending(p => p.PaidOn).ThenByDescending(p => p.Id)
+            .ToListAsync(ct);
+        var paid = payments.Sum(p => p.Amount);
+        bought = Math.Round(bought, 2);
+        return new PreSchoolSupplierAccountDto(DefaultSupplier, bought, paid, bought - paid,
+            payments.Take(100).Select(p => new PreSchoolSupplierPaymentDto(p.Id, p.Supplier, p.PaidOn, p.Amount, p.Mode, p.Reference, p.Note, p.CreatedBy)).ToList());
+    }
+
+    /// <summary>The PreSchool buys its kits, garments and prospectus from My Chhota School.</summary>
+    private const string DefaultSupplier = "My Chhota School";
 
     private async Task<string> PrefixAsync(CancellationToken ct) =>
         (await _db.PreSchoolSettings.AsNoTracking().Select(x => x.ReceiptPrefix).FirstOrDefaultAsync(ct)) ?? "APS";

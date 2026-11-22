@@ -134,7 +134,9 @@ public record PreSchoolIncomeMonthDto(
     decimal Expenses,
     decimal Net,
     // Registration, annual, kit, food, transport and the receipt's other rows.
-    decimal OtherFees = 0);
+    decimal OtherFees = 0,
+    // Paid to My Chhota School for store stock, by the day paid (bulk payments, not deliveries).
+    decimal Purchases = 0);
 
 /// <summary>
 /// A year of the PreSchool's money, month by month: fees received (by receipt
@@ -149,7 +151,17 @@ public record PreSchoolIncomeReportDto(
     decimal Expenses,
     decimal Net,
     IReadOnlyDictionary<string, decimal> IncomeByMode,
-    IReadOnlyDictionary<string, decimal> ExpensesByHead);
+    IReadOnlyDictionary<string, decimal> ExpensesByHead,
+    decimal Purchases = 0);
+
+/// <summary>One delivery of store stock, with what it cost.</summary>
+public record PreSchoolIncomePurchaseLineDto(DateOnly OnDate, string ItemName, string ClassName, string Supplier, int Quantity, decimal UnitCost, decimal Amount);
+
+/// <summary>
+/// One kind of store item over the dates: what parents paid for it on their
+/// receipts against what was spent buying it, and how many were bought and given.
+/// </summary>
+public record PreSchoolStoreMarginDto(string Item, string? ChargeHead, decimal ReceivedFromParents, decimal Spent, decimal Margin, int Bought, int Given);
 
 public record PreSchoolIncomeReceiptLineDto(DateOnly ReceivedOn, string ReceiptCode, string ChildName, string ClassName, string Mode, decimal AdmissionFee, decimal MonthlyFees, decimal Total, decimal OtherFees = 0);
 public record PreSchoolIncomeSalaryLineDto(DateOnly PaidOn, string StaffName, string Role, DateOnly ForMonth, string Mode, decimal Amount);
@@ -172,7 +184,15 @@ public record PreSchoolIncomeRangeDto(
     IReadOnlyList<PreSchoolIncomeReceiptLineDto> Receipts,
     IReadOnlyList<PreSchoolIncomeSalaryLineDto> SalaryPayments,
     IReadOnlyList<PreSchoolExpenseDto> ExpenseEntries,
-    decimal OtherFees = 0);
+    decimal OtherFees = 0,
+    decimal Purchases = 0,
+    IReadOnlyList<PreSchoolIncomePurchaseLineDto>? PurchaseEntries = null,
+    IReadOnlyList<PreSchoolStoreMarginDto>? StoreMargins = null,
+    // Payments to My Chhota School in these dates (counted in Purchases), and what was still owed on the last day.
+    IReadOnlyList<PreSchoolSupplierPaymentDto>? SupplierPayments = null,
+    decimal OwedToSupplier = 0,
+    // Stock received in these dates at its price (owed, not yet a cost until paid).
+    decimal StockReceived = 0);
 
 /// <summary>The PreSchool's staff and salaries, expenses and income report. Nothing here reads a Computer Centre table.</summary>
 public interface IPreSchoolFinanceService

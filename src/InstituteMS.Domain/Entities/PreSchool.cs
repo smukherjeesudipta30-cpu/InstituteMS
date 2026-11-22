@@ -370,6 +370,7 @@ public static class PreSchoolChargeHeads
     public const string AdmissionKit = "AdmissionKit";
     public const string Food = "Food";
     public const string Transport = "Transport";
+    public const string WinterGarments = "WinterGarments";
     public const string Others = "Others";
 
     /// <summary>Head → the words printed on the receipt.</summary>
@@ -383,6 +384,7 @@ public static class PreSchoolChargeHeads
         [AdmissionKit] = "Admission Kit",
         [Food] = "Food Charges",
         [Transport] = "Transport Charges",
+        [WinterGarments] = "Winter Garments",
         [Others] = "Others",
     };
 }
@@ -543,14 +545,36 @@ public class PreSchoolAttendanceChallenge
 
 /// <summary>
 /// Maps to <c>dbo.PreSchoolStoreItem</c> — one thing the PreSchool keeps for a
-/// class (a tuition book set, a bag), or for every class when ClassId is empty.
+/// class (tuition kit, school bag, winter garments, prospectus), or for every
+/// class when ClassId is empty.
 /// Stock is worked out from its movements, never stored.
 /// </summary>
+/// <summary>What every class keeps in the store, in order (migration 099; new classes get them too).</summary>
+public static class PreSchoolStoreItemNames
+{
+    public static readonly string[] Standard = ["Tuition Kit", "School Bag", "Winter Garments", "Prospectus"];
+
+    /// <summary>The Fee Receipt line parents pay a standard item on; the School Bag has none of its own.</summary>
+    public static string? ChargeHeadFor(string item) => item switch
+    {
+        "Tuition Kit" => PreSchoolChargeHeads.AdmissionKit,
+        "Winter Garments" => PreSchoolChargeHeads.WinterGarments,
+        "Prospectus" => PreSchoolChargeHeads.Prospectus,
+        _ => null
+    };
+}
+
 public class PreSchoolStoreItem
 {
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public int? ClassId { get; set; }
+
+    /// <summary>The usual price paid per piece (to My Chhota School); fills in when stock comes in.</summary>
+    public decimal? UnitCost { get; set; }
+
+    /// <summary>The Fee Receipt line parents pay this item on, one of <see cref="PreSchoolChargeHeads"/>.</summary>
+    public string? ChargeHead { get; set; }
     public int SortOrder { get; set; }
     public bool IsActive { get; set; } = true;
     public string? CreatedBy { get; set; }
@@ -566,6 +590,26 @@ public class PreSchoolStoreItem
 /// Maps to <c>dbo.PreSchoolStoreMovement</c> — stock received (<c>In</c>), or
 /// one item given to one child (<c>Out</c>).
 /// </summary>
+/// <summary>
+/// Maps to <c>dbo.PreSchoolSupplierPayment</c> — one payment to My Chhota School
+/// for store stock, covering any number of deliveries. The income report counts
+/// it on the day paid; deliveries less payments is what is still owed.
+/// </summary>
+public class PreSchoolSupplierPayment
+{
+    public int Id { get; set; }
+    public string Supplier { get; set; } = "My Chhota School";
+    public DateOnly PaidOn { get; set; }
+    public decimal Amount { get; set; }
+
+    /// <summary>Cash, Bank, UPI or Cheque.</summary>
+    public string Mode { get; set; } = "Bank";
+    public string? Reference { get; set; }
+    public string? Note { get; set; }
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+}
+
 public class PreSchoolStoreMovement
 {
     public int Id { get; set; }
@@ -575,6 +619,10 @@ public class PreSchoolStoreMovement
     public int? StudentId { get; set; }
     public DateOnly OnDate { get; set; }
     public string? Note { get; set; }
+
+    /// <summary>Stock in only: the price paid per piece. Quantity × UnitCost is a purchase on OnDate.</summary>
+    public decimal? UnitCost { get; set; }
+    public string? Supplier { get; set; }
     public string? CreatedBy { get; set; }
     public DateTime CreatedOn { get; set; }
 
