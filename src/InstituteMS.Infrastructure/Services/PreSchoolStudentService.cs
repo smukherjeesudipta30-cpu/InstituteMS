@@ -25,6 +25,7 @@ public class PreSchoolStudentService : IPreSchoolStudentService
     private const string KindAdmission = "Admission";
     private const string KindMonthly = "Monthly";
     private const string KindCharge = "Charge";
+    private const string KindDiscount = "Discount";
 
     /// <summary>How far ahead a parent may pay.</summary>
     private const int AdvanceMonths = 12;
@@ -213,8 +214,31 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             });
         }
 
+        var gross = lines.Sum(l => l.Amount);
+        if (gross <= 0) return Result<PreSchoolReceiptDto>.Failure("There is nothing to collect for what was ticked.");
+
+        // The discount comes off the whole receipt, then the special offer off what is left.
+        var percent = request.DiscountPercent ?? 0m;
+        var percentOff = percent > 0 ? Math.Round(gross * percent / 100m, 2, MidpointRounding.AwayFromZero) : 0m;
+        if (percentOff > 0)
+            lines.Add(new PreSchoolReceiptLine
+            {
+                Kind = KindDiscount, ChargeHead = "Discount", Description = $"Discount ({percent:0.##}%)", Amount = -percentOff
+            });
+        var offer = request.SpecialOffer ?? 0m;
+        if (offer > gross - percentOff)
+            return Result<PreSchoolReceiptDto>.Failure($"The special offer is more than the {gross - percentOff:0.##} left to pay.");
+        if (offer > 0)
+        {
+            var note = Clean(request.OfferNote);
+            lines.Add(new PreSchoolReceiptLine
+            {
+                Kind = KindDiscount, ChargeHead = "SpecialOffer",
+                Description = note is null ? "Special offer" : $"Special offer — {note}", Amount = -offer
+            });
+        }
+
         var total = lines.Sum(l => l.Amount);
-        if (total <= 0) return Result<PreSchoolReceiptDto>.Failure("There is nothing to collect for what was ticked.");
         var byCheque = request.Mode is "Cheque" or "DD";
 
         var receipt = new PreSchoolReceipt
@@ -255,7 +279,7 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             NumberToWords.Convert(r.Total), r.Notes, r.IsCancelled, r.CreatedBy,
             s.Id, AdmissionCode(prefix, s.AdmissionNo), s.ChildName, s.Class?.Name ?? "", s.ParentName, s.Phone,
             settings?.SchoolName ?? "Avijan PreSchool", settings?.Address, settings?.Phone,
-            r.Lines.OrderBy(l => l.Kind == KindAdmission ? 0 : l.Kind == KindMonthly ? 1 : 2).ThenBy(l => l.ForMonth).ThenBy(l => l.Amount < 0).ThenBy(l => l.Id)
+            r.Lines.OrderBy(l => l.Kind == KindAdmission ? 0 : l.Kind == KindMonthly ? 1 : l.Kind == KindCharge ? 2 : 3).ThenBy(l => l.ForMonth).ThenBy(l => l.Amount < 0).ThenBy(l => l.Id)
                 .Select(l => new PreSchoolReceiptLineDto(l.Kind, l.ForMonth, l.Description, l.Amount, l.ChargeHead)).ToList(),
             s.Section, s.FatherName, s.MotherName, s.Address, r.ChequeDate, r.DrawnOn));
     }
@@ -435,6 +459,7 @@ public class PreSchoolStudentService : IPreSchoolStudentService
         parts.AddRange(r.Lines.Where(l => l.ForMonth != null).Select(l => l.ForMonth!.Value).Distinct().OrderBy(m => m).Select(m => m.ToString("MMM yyyy")));
         parts.AddRange(r.Lines.Where(l => l.Kind == KindCharge && l.ChargeHead != null)
             .Select(l => PreSchoolChargeHeads.Labels.GetValueOrDefault(l.ChargeHead!, l.ChargeHead!)));
+        if (r.Lines.Any(l => l.Kind == KindDiscount)) parts.Add("less discount");
         return string.Join(", ", parts);
     }
 

@@ -164,6 +164,15 @@ public record PreSchoolCollectRequest
     public DateOnly? ChequeDate { get; init; }
     public string? DrawnOn { get; init; }
 
+    /// <summary>A percentage off the receipt's total (e.g. 10 on admission).</summary>
+    public decimal? DiscountPercent { get; init; }
+
+    /// <summary>A special offer: a fixed amount off, after the percentage discount.</summary>
+    public decimal? SpecialOffer { get; init; }
+
+    /// <summary>What the special offer is, printed beside it ("Opening offer").</summary>
+    public string? OfferNote { get; init; }
+
     /// <summary>When left out, today.</summary>
     public DateOnly? ReceivedOn { get; init; }
 
@@ -182,6 +191,11 @@ public class PreSchoolCollectRequestValidator : AbstractValidator<PreSchoolColle
             c.RuleFor(x => x.Amount).GreaterThanOrEqualTo(0).LessThan(1_000_000).WithMessage("A charge cannot be negative.");
             c.RuleFor(x => x.Note).MaximumLength(60);
         });
+        RuleFor(x => x.DiscountPercent).InclusiveBetween(0, 100).When(x => x.DiscountPercent.HasValue)
+            .WithMessage("The discount is a percentage from 0 to 100.");
+        RuleFor(x => x.SpecialOffer).GreaterThanOrEqualTo(0).When(x => x.SpecialOffer.HasValue)
+            .WithMessage("The special offer cannot be negative.");
+        RuleFor(x => x.OfferNote).MaximumLength(60);
         RuleFor(x => x.Charges).Must(c => c.Select(x => x.Head).Distinct().Count() == c.Count)
             .WithMessage("Each charge can appear once on a receipt.");
         RuleFor(x => x.Months.Count).LessThanOrEqualTo(24).WithMessage("At most 24 months on one receipt.");

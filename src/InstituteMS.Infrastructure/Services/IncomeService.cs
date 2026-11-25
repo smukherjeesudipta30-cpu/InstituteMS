@@ -38,6 +38,16 @@ public class IncomeService : IIncomeService
 
     public IncomeService(AppDbContext db) => _db = db;
 
+    public async Task<string?> ReceptionistBranchAsync(string login, CancellationToken ct = default)
+    {
+        var key = login.Trim().ToLower();
+        var branch = await _db.Receptionists.AsNoTracking()
+            .Where(r => r.LoginId != null && r.LoginId.ToLower() == key)
+            .Select(r => r.Branch)
+            .FirstOrDefaultAsync(ct);
+        return string.IsNullOrWhiteSpace(branch) ? null : branch.Trim();
+    }
+
     public async Task<Result<IncomeReportDto>> GetReportAsync(
         DateOnly from, DateOnly to, string? branch = null, CancellationToken ct = default)
     {

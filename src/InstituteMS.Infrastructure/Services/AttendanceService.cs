@@ -148,6 +148,9 @@ public class AttendanceService : IAttendanceService
                 "That centre has no location set, so attendance cannot be recorded there.");
         }
 
+        if (WrongBranch(staff, branch) is { } wrong)
+            return Result<AttendanceChallengeDto>.Failure(wrong, ResultStatus.Forbidden);
+
         return await RecordAsync(
             staff, email, branch, request.Latitude, request.Longitude, request.AccuracyMetres, ct);
     }
@@ -177,6 +180,17 @@ public class AttendanceService : IAttendanceService
         var fenced = await _db.Branches.AsNoTracking()
             .Where(b => b.IsActive && b.Latitude != null && b.Longitude != null)
             .ToListAsync(ct);
+
+        // A receptionist is checked against their own branch's fence only: being
+        // inside another centre does not mark them present.
+        if (staff.HomeBranch is { Length: > 0 } home)
+        {
+            var own = fenced.Where(b => string.Equals(b.Name?.Trim(), home.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+            if (own.Count == 0)
+                return Result<AttendanceChallengeDto>.Failure(
+                    $"The {home} branch has no location set, so your attendance cannot be recorded. Ask the office to set it.");
+            fenced = own;
+        }
 
         if (fenced.Count == 0)
         {
@@ -844,7 +858,14 @@ public class AttendanceService : IAttendanceService
 
     /* ============================================================ helpers */
 
-    private sealed record StaffRef(string Type, int Id, string Name, string? PersonalEmail);
+    /// <summary>HomeBranch: a receptionist's own branch, the only one they may mark at. Teachers have none.</summary>
+    private sealed record StaffRef(string Type, int Id, string Name, string? PersonalEmail, string? HomeBranch = null);
+
+    /// <summary>Null when this person may be marked present at the branch; otherwise why not.</summary>
+    private static string? WrongBranch(StaffRef staff, Domain.Entities.Branch branch) =>
+        staff.HomeBranch is { Length: > 0 } home && !string.Equals(home.Trim(), branch.Name?.Trim(), StringComparison.OrdinalIgnoreCase)
+            ? $"You are the receptionist at the {home} branch, so your attendance can be marked there only."
+            : null;
 
     /// <summary>One line of the rota, flattened for the deadline calculation.</summary>
     private sealed record RotaEntry(byte DayOfWeek, TimeOnly StartTime, TimeOnly ScanOutBy);
@@ -921,12 +942,12 @@ public class AttendanceService : IAttendanceService
 
         var receptionist = await _db.Receptionists.AsNoTracking()
             .Where(r => r.LoginId != null && r.LoginId.ToLower() == login.ToLower())
-            .Select(r => new { r.Id, r.Name, r.PersonalEmail })
+            .Select(r => new { r.Id, r.Name, r.PersonalEmail, r.Branch })
             .FirstOrDefaultAsync(ct);
 
         return receptionist is null
             ? null
-            : new StaffRef("Receptionist", receptionist.Id, receptionist.Name, receptionist.PersonalEmail);
+            : new StaffRef("Receptionist", receptionist.Id, receptionist.Name, receptionist.PersonalEmail, receptionist.Branch);
     }
 
     /// <summary>

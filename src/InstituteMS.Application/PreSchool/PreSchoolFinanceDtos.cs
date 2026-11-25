@@ -136,7 +136,9 @@ public record PreSchoolIncomeMonthDto(
     // Registration, annual, kit, food, transport and the receipt's other rows.
     decimal OtherFees = 0,
     // Paid to My Chhota School for store stock, by the day paid (bulk payments, not deliveries).
-    decimal Purchases = 0);
+    decimal Purchases = 0,
+    // Discounts and special offers given on receipts (already taken off Income).
+    decimal Discounts = 0);
 
 /// <summary>
 /// A year of the PreSchool's money, month by month: fees received (by receipt
@@ -163,7 +165,7 @@ public record PreSchoolIncomePurchaseLineDto(DateOnly OnDate, string ItemName, s
 /// </summary>
 public record PreSchoolStoreMarginDto(string Item, string? ChargeHead, decimal ReceivedFromParents, decimal Spent, decimal Margin, int Bought, int Given);
 
-public record PreSchoolIncomeReceiptLineDto(DateOnly ReceivedOn, string ReceiptCode, string ChildName, string ClassName, string Mode, decimal AdmissionFee, decimal MonthlyFees, decimal Total, decimal OtherFees = 0);
+public record PreSchoolIncomeReceiptLineDto(DateOnly ReceivedOn, string ReceiptCode, string ChildName, string ClassName, string Mode, decimal AdmissionFee, decimal MonthlyFees, decimal Total, decimal OtherFees = 0, decimal Discount = 0);
 public record PreSchoolIncomeSalaryLineDto(DateOnly PaidOn, string StaffName, string Role, DateOnly ForMonth, string Mode, decimal Amount);
 
 /// <summary>
@@ -192,7 +194,9 @@ public record PreSchoolIncomeRangeDto(
     IReadOnlyList<PreSchoolSupplierPaymentDto>? SupplierPayments = null,
     decimal OwedToSupplier = 0,
     // Stock received in these dates at its price (owed, not yet a cost until paid).
-    decimal StockReceived = 0);
+    decimal StockReceived = 0,
+    // Discounts and special offers given on receipts in these dates (already taken off Income).
+    decimal Discounts = 0);
 
 /// <summary>The PreSchool's staff and salaries, expenses and income report. Nothing here reads a Computer Centre table.</summary>
 public interface IPreSchoolFinanceService

@@ -144,6 +144,9 @@ public class IncomeDetailQuery : PagedQuery
 
 public interface IIncomeService
 {
+    /// <summary>The branch a receptionist's sign-in belongs to; null when they have none set.</summary>
+    Task<string?> ReceptionistBranchAsync(string login, CancellationToken ct = default);
+
     Task<Result<IncomeReportDto>> GetReportAsync(
         DateOnly from, DateOnly to, string? branch = null, CancellationToken ct = default);
 

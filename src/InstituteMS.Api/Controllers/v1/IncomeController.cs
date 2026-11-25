@@ -41,6 +41,20 @@ public class IncomeController : ApiControllerBase
         User.IsInRole(UserRoles.SuperAdmin) || User.IsInRole(UserRoles.Admin);
 
     /// <summary>
+    /// A Receptionist sees their own branch only, whatever branch the page asks for.
+    /// Admin and SuperAdmin keep the branch they chose (or the whole institute).
+    /// Null with a message when a receptionist has no branch to be shown.
+    /// </summary>
+    private async Task<(string? Branch, string? Refusal)> ScopeAsync(string? asked, CancellationToken ct)
+    {
+        if (SeesProprietorByName || !User.IsInRole(UserRoles.Receptionist)) return (asked, null);
+        var own = CurrentUserName is { } login ? await _income.ReceptionistBranchAsync(login, ct) : null;
+        return own is null
+            ? (null, "Your receptionist record has no branch set, so the income report cannot be shown. Ask the admin to set your branch.")
+            : (own, null);
+    }
+
+    /// <summary>
     /// Consolidated report for one date range: income, cost, net, margin, the
     /// per-section totals and a monthly trend.
     /// </summary>
@@ -63,7 +77,9 @@ public class IncomeController : ApiControllerBase
         [FromQuery] string? branch,
         CancellationToken ct)
     {
-        var result = await _income.GetReportAsync(from, to, branch, ct);
+        var (scoped, refusal) = await ScopeAsync(branch, ct);
+        if (refusal is not null) return Envelope(Result<IncomeReportDto>.Failure(refusal, ResultStatus.Forbidden));
+        var result = await _income.GetReportAsync(from, to, scoped, ct);
 
         if (result.Succeeded && result.Value is { } report && !SeesProprietorByName)
         {
@@ -92,6 +108,10 @@ public class IncomeController : ApiControllerBase
         // they come back named "Administrative expenses" too.
         if (query.Section == IncomeSection.ProprietorHonorarium && !SeesProprietorByName)
             return Forbid();
+
+        var (scoped, refusal) = await ScopeAsync(query.Branch, ct);
+        if (refusal is not null) return Envelope(Result<bool>.Failure(refusal, ResultStatus.Forbidden));
+        query.Branch = scoped;
 
         return Envelope(await _income.GetDetailAsync(query, ct));
     }

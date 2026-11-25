@@ -211,11 +211,12 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
             var admission = lines.Where(l => l.ReceivedOn.Month == m && l.Kind == "Admission").Sum(l => l.Amount);
             var monthly = lines.Where(l => l.ReceivedOn.Month == m && l.Kind == "Monthly").Sum(l => l.Amount);
             var other = lines.Where(l => l.ReceivedOn.Month == m && l.Kind == "Charge").Sum(l => l.Amount);
+            var discounts = -lines.Where(l => l.ReceivedOn.Month == m && l.Kind == "Discount").Sum(l => l.Amount);
             var paid = salaries.Where(p => p.PaidOn.Month == m).Sum(p => p.NetPaid);
             var spent = expenses.Where(e => e.SpentOn.Month == m).Sum(e => e.Amount);
             var bought = purchases.Where(p => p.OnDate.Month == m).Sum(p => p.Amount);
-            var fees = admission + monthly + other;
-            return new PreSchoolIncomeMonthDto(new DateOnly(year, m, 1), admission, monthly, fees, paid, spent, fees - paid - spent - bought, other, bought);
+            var fees = admission + monthly + other - discounts;
+            return new PreSchoolIncomeMonthDto(new DateOnly(year, m, 1), admission, monthly, fees, paid, spent, fees - paid - spent - bought, other, bought, discounts);
         }).ToList();
 
         var income = months.Sum(m => m.Income);
@@ -247,7 +248,8 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
             r.Lines.Where(l => l.Kind == "Admission").Sum(l => l.Amount),
             r.Lines.Where(l => l.Kind == "Monthly").Sum(l => l.Amount),
             r.Total,
-            r.Lines.Where(l => l.Kind == "Charge").Sum(l => l.Amount))).ToList();
+            r.Lines.Where(l => l.Kind == "Charge").Sum(l => l.Amount),
+            -r.Lines.Where(l => l.Kind == "Discount").Sum(l => l.Amount))).ToList();
 
         var salaries = await _db.PreSchoolSalaryPayments.AsNoTracking().Include(p => p.Staff)
             .Where(p => p.PaidOn >= from && p.PaidOn <= to)
@@ -309,7 +311,7 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
             receiptLines.GroupBy(r => r.Mode).ToDictionary(g => g.Key, g => g.Sum(r => r.Total)),
             expenses.GroupBy(e => e.Head).OrderByDescending(g => g.Sum(e => e.Amount)).ToDictionary(g => g.Key, g => g.Sum(e => e.Amount)),
             receiptLines, salaries, expenses, receiptLines.Sum(r => r.OtherFees), bought, purchaseLines, margins,
-            supplierPayments, Math.Round(everBought - everPaid, 2), Math.Round(received, 2)));
+            supplierPayments, Math.Round(everBought - everPaid, 2), Math.Round(received, 2), receiptLines.Sum(r => r.Discount)));
     }
 
     /* ------------------------------------------------------ own payslips */
