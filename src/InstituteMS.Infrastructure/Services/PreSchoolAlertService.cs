@@ -17,7 +17,8 @@ public class PreSchoolAlertService : IPreSchoolAlertService
     /// <summary>PreSchool alerts this viewer may see: not the PreSchool admin's own changes, unless SuperAdmin.</summary>
     private IQueryable<AdminNotification> Visible(bool viewerIsSuperAdmin)
     {
-        var all = _db.AdminNotifications.Where(n => n.Type == AdminNotificationTypes.PreSchoolPasswordChange);
+        var all = _db.AdminNotifications.Where(n => n.Type == AdminNotificationTypes.PreSchoolPasswordChange
+                                                    || n.Type == AdminNotificationTypes.PreSchoolReceiptDeleted);
         return viewerIsSuperAdmin ? all : all.Where(n => n.CourseName != UserRoles.PreSchoolHead);
     }
 

@@ -122,7 +122,7 @@ public class DashboardService : IDashboardService
     private IQueryable<Domain.Entities.AdminNotification> VisibleNotifications(bool viewerIsSuperAdmin)
     {
         var computerCentre = _db.AdminNotifications
-            .Where(n => n.Type != Domain.Entities.AdminNotificationTypes.PreSchoolPasswordChange);
+            .Where(n => !n.Type.StartsWith("PreSchool"));
         return viewerIsSuperAdmin
             ? computerCentre
             : computerCentre.Where(n => !(n.Type == Domain.Entities.AdminNotificationTypes.StaffPasswordChange

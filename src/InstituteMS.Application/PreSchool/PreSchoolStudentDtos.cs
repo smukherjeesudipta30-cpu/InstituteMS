@@ -30,6 +30,17 @@ public record PreSchoolMonthDto(DateOnly Month, bool IsPaid, decimal Amount, str
 public record PreSchoolReceiptSummaryDto(int Id, string ReceiptCode, DateOnly ReceivedOn, decimal Total, string Mode, bool IsCancelled, string Summary,
     decimal Paid = 0, decimal Balance = 0, IReadOnlyList<PreSchoolPaymentDto>? Payments = null);
 
+/// <summary>One subject's result in one exam, for the parent's page.</summary>
+public record PreSchoolResultSubjectDto(string Subject, int MaxMarks, decimal? Marks, bool IsAbsent);
+
+/// <summary>A child's result in one exam: the subjects marked so far, the total, percentage and grade.</summary>
+public record PreSchoolResultDto(int ExamId, string ExamName, DateOnly? HeldOn, IReadOnlyList<PreSchoolResultSubjectDto> Subjects,
+    decimal Total, decimal OutOf, decimal? Percent, string? Grade);
+
+/// <summary>One child on the parent's page: everything the office sees about them, and their exam results.</summary>
+public record PreSchoolParentChildDto(PreSchoolStudentDetailDto Child, IReadOnlyList<PreSchoolResultDto> Results,
+    decimal AmountDue, decimal InstalmentDue);
+
 /// <summary>Whether a receipt went to the guardian, and to which address (or why not).</summary>
 public record PreSchoolReceiptMailResultDto(bool Sent, string Message, string? To = null);
 
@@ -209,6 +220,13 @@ public record PreSchoolCollectRequest
     /// <summary>The months paid for, as their first day.</summary>
     public IReadOnlyList<DateOnly> Months { get; init; } = [];
 
+    /// <summary>
+    /// What is taken for a month when it is less than the month's fee — a
+    /// concession for this child. The month counts as paid; the difference is
+    /// printed and reported as a concession. Months not listed are charged in full.
+    /// </summary>
+    public IReadOnlyList<PreSchoolMonthAmount> MonthAmounts { get; init; } = [];
+
     /// <summary>The receipt's other rows (registration, annual, kit, food…) with the amount taken for each.</summary>
     public IReadOnlyList<PreSchoolChargeRequest> Charges { get; init; } = [];
 
@@ -262,6 +280,8 @@ public class PreSchoolCollectRequestValidator : AbstractValidator<PreSchoolColle
         RuleFor(x => x.Charges).Must(c => c.Select(x => x.Head).Distinct().Count() == c.Count)
             .WithMessage("Each charge can appear once on a receipt.");
         RuleFor(x => x.Months.Count).LessThanOrEqualTo(24).WithMessage("At most 24 months on one receipt.");
+        RuleForEach(x => x.MonthAmounts).ChildRules(m =>
+            m.RuleFor(a => a.Amount).GreaterThanOrEqualTo(0).WithMessage("A month's amount cannot be negative."));
         RuleFor(x => x.AdmissionAmount).GreaterThan(0).When(x => x.AdmissionAmount.HasValue)
             .WithMessage("The admission amount must be above zero.");
         RuleFor(x => x.Mode).Must(m => m is "Cash" or "Bank" or "UPI" or "Paytm" or "Cheque" or "DD")
@@ -281,6 +301,9 @@ public class PreSchoolCollectRequestValidator : AbstractValidator<PreSchoolColle
             .WithMessage("Enter the first instalment received.");
     }
 }
+
+/// <summary>The amount taken for one month (its first day).</summary>
+public record PreSchoolMonthAmount(DateOnly Month, decimal Amount);
 
 /// <summary>One of the receipt's other rows and the amount taken. <see cref="Note"/> is printed beside "Others".</summary>
 public record PreSchoolChargeRequest(string Head, decimal Amount, string? Note = null);
@@ -408,6 +431,25 @@ public interface IPreSchoolStudentService
 
     /// <summary>Emails the receipt (with the parent copy as a PDF, when given) to the guardian's email.</summary>
     Task<Result<PreSchoolReceiptMailResultDto>> EmailReceiptAsync(int receiptId, byte[]? pdf, string? actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// The children whose guardian email or phone matches the signed-in parent's,
+    /// with their admission details, months, receipts and exam results.
+    /// </summary>
+    Task<IReadOnlyList<PreSchoolParentChildDto>> ParentChildrenAsync(string? email, string? phone, CancellationToken ct = default);
+
+    /// <summary>A receipt, only if it is for one of the signed-in parent's children.</summary>
+    Task<Result<PreSchoolReceiptDto>> ParentReceiptAsync(int receiptId, string? email, string? phone, CancellationToken ct = default);
+
+    /// <summary>
+    /// Deletes a receipt entered by mistake, with its lines and payments; its
+    /// months are due again. Refused once a reference fee from it has been paid
+    /// with an honorarium. The PreSchool admin is alerted.
+    /// </summary>
+    Task<Result<bool>> DeleteReceiptAsync(int receiptId, string? actor, string? actorRole, CancellationToken ct = default);
+
+    /// <summary>Deletes the latest instalment (2nd, 3rd or 4th) of a receipt, entered by mistake. The PreSchool admin is alerted.</summary>
+    Task<Result<PreSchoolReceiptDto>> DeletePaymentAsync(int receiptId, int paymentId, string? actor, string? actorRole, CancellationToken ct = default);
 
     /// <summary>A further instalment against a receipt being paid in parts.</summary>
     Task<Result<PreSchoolReceiptDto>> AddPaymentAsync(int receiptId, PreSchoolPaymentRequest request, string? actor, CancellationToken ct = default);

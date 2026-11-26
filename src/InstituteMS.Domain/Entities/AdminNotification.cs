@@ -54,6 +54,13 @@ public static class AdminNotificationTypes
     /// Centre's. A PreSchool admin's own change is SuperAdmin's alone.
     /// </summary>
     public const string PreSchoolPasswordChange = "PreSchoolPasswordChange";
+
+    /// <summary>
+    /// A PreSchool receipt or instalment entered by mistake was deleted — seen by
+    /// the PreSchool admin (and SuperAdmin) on the PreSchool dashboard, so money
+    /// taken off the books is never invisible.
+    /// </summary>
+    public const string PreSchoolReceiptDeleted = "PreSchoolReceiptDeleted";
     public const string CompetitionDraftPasswordChange = "CompetitionDraftPasswordChange";
     public const string CompetitionDraftStarted = "CompetitionDraftStarted";
 

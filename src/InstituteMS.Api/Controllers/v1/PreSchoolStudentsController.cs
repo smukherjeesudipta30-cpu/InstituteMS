@@ -97,6 +97,24 @@ public class PreSchoolStudentsController : ApiControllerBase
         return Envelope(await _students.EmailReceiptAsync(id, pdf, CurrentUserName, ct));
     }
 
+    /// <summary>Deletes a receipt entered by mistake (PreSchool admin or receptionist); the admin is alerted.</summary>
+    [HttpDelete("receipts/{id:int}")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> DeleteReceipt(int id, CancellationToken ct)
+        => Envelope(await _students.DeleteReceiptAsync(id, CurrentUserName, ActorRole, ct), "Receipt deleted.");
+
+    /// <summary>Deletes the latest instalment of a receipt, entered by mistake; the admin is alerted.</summary>
+    [HttpDelete("receipts/{id:int}/payments/{paymentId:int}")]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolReceiptDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> DeletePayment(int id, int paymentId, CancellationToken ct)
+        => Envelope(await _students.DeletePaymentAsync(id, paymentId, CurrentUserName, ActorRole, ct), "Instalment deleted.");
+
+    /// <summary>Recorded on the alert, so the admin's own deletions do not alert the admin.</summary>
+    private string ActorRole =>
+        User.IsInRole(UserRoles.SuperAdmin) ? UserRoles.SuperAdmin
+        : User.IsInRole(UserRoles.PreSchoolHead) ? UserRoles.PreSchoolHead
+        : UserRoles.PreSchoolFrontDesk;
+
     /// <summary>The PreSchool's teachers and receptionists who can be named as a child's referrer.</summary>
     [HttpGet("referrers")]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<PreSchoolReferrerDto>>), StatusCodes.Status200OK)]

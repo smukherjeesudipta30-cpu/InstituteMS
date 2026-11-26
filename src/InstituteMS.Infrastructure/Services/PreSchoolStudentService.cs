@@ -265,6 +265,19 @@ public class PreSchoolStudentService : IPreSchoolStudentService
                 var discount = Math.Min(s.MonthlyDiscount, monthTotal);
                 if (discount > 0)
                     lines.Add(new PreSchoolReceiptLine { Kind = KindMonthly, ForMonth = m, Description = $"Discount — {m:MMM yyyy}", Amount = -discount });
+
+                // A concession for this month: less taken than the fee; the month still counts as paid.
+                var due = monthTotal - discount;
+                if (request.MonthAmounts.FirstOrDefault(a => FirstOfMonth(a.Month) == m) is { } taken)
+                {
+                    if (taken.Amount > due)
+                        return Result<PreSchoolReceiptDto>.Failure($"{m:MMM yyyy}: {taken.Amount:0.##} is more than the month's fee of {due:0.##}.");
+                    if (taken.Amount < due)
+                        lines.Add(new PreSchoolReceiptLine
+                        {
+                            Kind = KindMonthly, ForMonth = m, Description = $"Concession — {m:MMM yyyy}", Amount = -(due - taken.Amount)
+                        });
+                }
             }
         }
 
@@ -284,7 +297,9 @@ public class PreSchoolStudentService : IPreSchoolStudentService
         }
 
         var gross = lines.Sum(l => l.Amount);
-        if (gross <= 0) return Result<PreSchoolReceiptDto>.Failure("There is nothing to collect for what was ticked.");
+        // A month taken at nothing (a full concession) still makes a receipt, so the month shows as settled.
+        if (gross < 0 || (gross == 0 && months.Count == 0))
+            return Result<PreSchoolReceiptDto>.Failure("There is nothing to collect for what was ticked.");
 
         // The discount comes off the whole receipt, then the special offer off what is left.
         var percent = request.DiscountPercent ?? 0m;
@@ -374,6 +389,155 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             s.Section, s.FatherName, s.MotherName, s.Address, r.ChequeDate, r.DrawnOn,
             Paid(r), Balance(r), NumberToWords.Convert(Paid(r)), Payments(r)));
     }
+
+    /* ----------------------------------------------------------- parent */
+
+    /// <summary>Last ten digits of a phone number, so "+91 98300 00000" and "9830000000" match.</summary>
+    private static string PhoneKey(string? phone)
+    {
+        var digits = new string((phone ?? "").Where(char.IsDigit).ToArray());
+        return digits.Length > 10 ? digits[^10..] : digits;
+    }
+
+    private async Task<List<int>> ParentChildIdsAsync(string? email, string? phone, CancellationToken ct)
+    {
+        var mail = email?.Trim().ToLower();
+        var key = PhoneKey(phone);
+        if (string.IsNullOrEmpty(mail) && key.Length < 10) return [];
+        var candidates = await _db.PreSchoolStudents.AsNoTracking()
+            .Select(s => new { s.Id, s.Email, s.Phone, s.Guardian2Phone, s.EmergencyPhone })
+            .ToListAsync(ct);
+        return candidates.Where(s =>
+                (!string.IsNullOrEmpty(mail) && string.Equals(s.Email?.Trim(), mail, StringComparison.OrdinalIgnoreCase)) ||
+                (key.Length == 10 && (PhoneKey(s.Phone) == key || PhoneKey(s.Guardian2Phone) == key)))
+            .Select(s => s.Id).ToList();
+    }
+
+    public async Task<IReadOnlyList<PreSchoolParentChildDto>> ParentChildrenAsync(string? email, string? phone, CancellationToken ct = default)
+    {
+        var ids = await ParentChildIdsAsync(email, phone, ct);
+        if (ids.Count == 0) return [];
+
+        var children = await _db.PreSchoolStudents.AsNoTracking().Include(s => s.Class).Include(s => s.ReferredBy)
+            .Where(s => ids.Contains(s.Id)).OrderBy(s => s.ChildName).ToListAsync(ct);
+        var ctx = await LoadContextAsync(ids, ct);
+
+        // Results: every exam already held that has marks for the child.
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var marks = await _db.PreSchoolMarks.AsNoTracking().Where(m => ids.Contains(m.StudentId)).ToListAsync(ct);
+        var examIds = marks.Select(m => m.ExamId).Distinct().ToList();
+        var exams = await _db.PreSchoolExams.AsNoTracking().Where(e => examIds.Contains(e.Id) && (e.HeldOn == null || e.HeldOn <= today)).ToListAsync(ct);
+        var subjectIds = marks.Select(m => m.SubjectId).Distinct().ToList();
+        var subjects = await _db.PreSchoolSubjects.AsNoTracking().Where(s => subjectIds.Contains(s.Id)).ToListAsync(ct);
+        var bands = await _db.PreSchoolGradeBands.AsNoTracking().OrderByDescending(b => b.MinPercent).ToListAsync(ct);
+
+        return children.Select(s =>
+        {
+            var detail = ToDetail(s, ctx) with { ReferenceType = null, ReferredByStaffId = null, ReferredByName = null };
+            var results = exams.OrderByDescending(e => e.HeldOn ?? DateOnly.MinValue).ThenByDescending(e => e.SortOrder)
+                .Select(e =>
+                {
+                    var mine = marks.Where(m => m.StudentId == s.Id && m.ExamId == e.Id).ToList();
+                    if (mine.Count == 0) return null;
+                    var rows = mine.Select(m => (m, subject: subjects.FirstOrDefault(x => x.Id == m.SubjectId)))
+                        .Where(x => x.subject is not null)
+                        .OrderBy(x => x.subject!.SortOrder).ThenBy(x => x.subject!.Name)
+                        .Select(x => new PreSchoolResultSubjectDto(x.subject!.Name, x.subject.MaxMarks, x.m.Marks, x.m.IsAbsent)).ToList();
+                    var entered = rows.Where(r => r.Marks.HasValue || r.IsAbsent).ToList();
+                    var total = entered.Sum(r => r.Marks ?? 0);
+                    var outOf = entered.Sum(r => r.MaxMarks);
+                    decimal? percent = outOf > 0 ? Math.Round(total * 100m / outOf, 1) : null;
+                    var grade = percent is decimal p ? bands.FirstOrDefault(b => p >= b.MinPercent)?.Grade : null;
+                    return new PreSchoolResultDto(e.Id, e.Name, e.HeldOn, rows, total, outOf, percent, grade);
+                })
+                .Where(r => r is not null).Select(r => r!).ToList();
+            var fee = MonthlyFee(s, ctx);
+            var due = s.Status == PreSchoolStudentStatus.Active ? DueMonths(s, ctx, fee).Count * fee : 0;
+            var admissionDue = s.Status == PreSchoolStudentStatus.Active && !ctx.AdmissionPaid.Contains(s.Id) ? s.Class?.AdmissionFee ?? 0 : 0;
+            var instalments = InstalmentDue(s.Id, ctx);
+            return new PreSchoolParentChildDto(detail, results, due + admissionDue + instalments, instalments);
+        }).ToList();
+    }
+
+    public async Task<Result<PreSchoolReceiptDto>> ParentReceiptAsync(int receiptId, string? email, string? phone, CancellationToken ct = default)
+    {
+        var ids = await ParentChildIdsAsync(email, phone, ct);
+        var studentId = await _db.PreSchoolReceipts.AsNoTracking().Where(r => r.Id == receiptId).Select(r => (int?)r.StudentId).FirstOrDefaultAsync(ct);
+        if (studentId is null || !ids.Contains(studentId.Value))
+            return Result<PreSchoolReceiptDto>.Failure("That receipt is not for your child.", ResultStatus.NotFound);
+        return await GetReceiptAsync(receiptId, ct);
+    }
+
+    /* --------------------------------------------------------- deleting */
+
+    public async Task<Result<bool>> DeleteReceiptAsync(int receiptId, string? actor, string? actorRole, CancellationToken ct = default)
+    {
+        var r = await _db.PreSchoolReceipts.Include(x => x.Lines).Include(x => x.Payments).Include(x => x.Student)
+            .FirstOrDefaultAsync(x => x.Id == receiptId, ct);
+        if (r is null) return Result<bool>.Failure("That receipt does not exist.", ResultStatus.NotFound);
+
+        var paymentIds = r.Payments.Select(p => p.Id).ToList();
+        var credits = await _db.PreSchoolReferralCredits.Where(c => paymentIds.Contains(c.ReceiptPaymentId)).ToListAsync(ct);
+        if (credits.Any(c => c.SalaryPaymentId != null))
+            return Result<bool>.Failure("A reference fee from this receipt has already been paid with an honorarium, so it cannot be deleted. Cancel it instead.", ResultStatus.Conflict);
+
+        var prefix = await PrefixAsync(ct);
+        var code = ReceiptCode(prefix, r.ReceiptNo);
+        _db.PreSchoolReferralCredits.RemoveRange(credits);
+        _db.PreSchoolReceipts.Remove(r);
+        Alert($"Receipt {code} deleted: {r.Total:#,##0.##} for {r.Student?.ChildName}", r, prefix, actor, actorRole,
+            $"{Summarise(r)} · received {r.ReceivedOn:dd/MM/yyyy} by {r.CreatedBy}");
+        await _db.SaveChangesAsync(ct);
+        return Result<bool>.Success(true);
+    }
+
+    public async Task<Result<PreSchoolReceiptDto>> DeletePaymentAsync(int receiptId, int paymentId, string? actor, string? actorRole, CancellationToken ct = default)
+    {
+        var r = await _db.PreSchoolReceipts.Include(x => x.Lines).Include(x => x.Payments).Include(x => x.Student)
+            .FirstOrDefaultAsync(x => x.Id == receiptId, ct);
+        if (r is null) return Result<PreSchoolReceiptDto>.Failure("That receipt does not exist.", ResultStatus.NotFound);
+        var p = r.Payments.FirstOrDefault(x => x.Id == paymentId);
+        if (p is null) return Result<PreSchoolReceiptDto>.Failure("That instalment does not exist.", ResultStatus.NotFound);
+        if (p.InstalmentNo == 1)
+            return Result<PreSchoolReceiptDto>.Failure("The first payment is the receipt itself: delete the whole receipt instead.");
+        if (p.InstalmentNo != r.Payments.Max(x => x.InstalmentNo))
+            return Result<PreSchoolReceiptDto>.Failure("Only the latest instalment can be deleted.");
+
+        var credit = await _db.PreSchoolReferralCredits.FirstOrDefaultAsync(c => c.ReceiptPaymentId == p.Id, ct);
+        if (credit?.SalaryPaymentId != null)
+            return Result<PreSchoolReceiptDto>.Failure("The reference fee from this instalment has already been paid with an honorarium, so it cannot be deleted.", ResultStatus.Conflict);
+
+        var prefix = await PrefixAsync(ct);
+        if (credit is not null) _db.PreSchoolReferralCredits.Remove(credit);
+        r.Payments.Remove(p);
+        _db.PreSchoolReceiptPayments.Remove(p);
+        Alert($"Instalment {p.InstalmentNo} of {ReceiptCode(prefix, r.ReceiptNo)} deleted: {p.Amount:#,##0.##} for {r.Student?.ChildName}", r, prefix, actor, actorRole,
+            $"paid {p.PaidOn:dd/MM/yyyy} by {p.Mode}, collected by {p.CollectedBy}");
+        await _db.SaveChangesAsync(ct);
+        return await GetReceiptAsync(receiptId, ct);
+    }
+
+    private async Task<string> PrefixAsync(CancellationToken ct) =>
+        (await _db.PreSchoolSettings.AsNoTracking().Select(x => x.ReceiptPrefix).FirstOrDefaultAsync(ct)) ?? "APS";
+
+    /// <summary>Tells the PreSchool admin what was deleted and by whom (their own deletions are shown to SuperAdmin only).</summary>
+    private void Alert(string title, PreSchoolReceipt r, string prefix, string? actor, string? actorRole, string detail)
+    {
+        var who = string.IsNullOrWhiteSpace(actor) ? "someone" : actor;
+        _db.AdminNotifications.Add(new AdminNotification
+        {
+            Type = AdminNotificationTypes.PreSchoolReceiptDeleted,
+            Title = Trim($"{title} — by {who}", 300),
+            StudentName = r.Student?.ChildName,
+            RegistrationId = r.Student is null ? null : AdmissionCode(prefix, r.Student.AdmissionNo),
+            CourseName = actorRole,
+            LoginId = actor,
+            DetailValue = Trim(detail, 300),
+            CreatedOn = DateTime.Now
+        });
+    }
+
+    private static string Trim(string s, int max) => s.Length <= max ? s : s[..max];
 
     /* ------------------------------------------------------------ email */
 
