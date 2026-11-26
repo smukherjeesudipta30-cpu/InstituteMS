@@ -75,11 +75,24 @@ public class PreSchoolStudentsController : ApiControllerBase
     public async Task<IActionResult> CancelReceipt(int id, CancellationToken ct)
         => Envelope(await _students.CancelReceiptAsync(id, CurrentUserName, ct), "Receipt cancelled.");
 
-    /// <summary>Admissions in one calendar year (this year when none is given), month by month.</summary>
+    /// <summary>A further instalment against a receipt being paid in parts; the login that took it is recorded.</summary>
+    [HttpPost("receipts/{id:int}/payments")]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolReceiptDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> AddPayment(int id, [FromBody] PreSchoolPaymentRequest request, CancellationToken ct)
+        => Envelope(await _students.AddPaymentAsync(id, request, CurrentUserName, ct), "Instalment received.");
+
+    /// <summary>
+    /// Admissions between two dates (by joining date), month by month. With no
+    /// dates, one calendar year (this year when none is given).
+    /// </summary>
     [HttpGet("reports/admissions")]
     [ProducesResponseType(typeof(ApiResponse<PreSchoolAdmissionReportDto>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> Admissions([FromQuery] int? year, [FromQuery] int? classId, CancellationToken ct)
-        => Envelope(Result<PreSchoolAdmissionReportDto>.Success(await _students.AdmissionsAsync(year ?? DateTime.Today.Year, classId, ct)));
+    public async Task<IActionResult> Admissions([FromQuery] int? year, [FromQuery] DateOnly? from, [FromQuery] DateOnly? to,
+        [FromQuery] int? classId, CancellationToken ct)
+    {
+        var y = year ?? DateTime.Today.Year;
+        return Envelope(await _students.AdmissionsAsync(from ?? new DateOnly(y, 1, 1), to ?? new DateOnly(y, 12, 31), classId, ct));
+    }
 
     /// <summary>Active children with unpaid months, owing at least <paramref name="minMonths"/> of them.</summary>
     [HttpGet("reports/pending-fees")]

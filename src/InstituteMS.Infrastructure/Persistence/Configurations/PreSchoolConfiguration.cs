@@ -339,6 +339,23 @@ public class PreSchoolReceiptConfiguration : IEntityTypeConfiguration<PreSchoolR
     }
 }
 
+public class PreSchoolReceiptPaymentConfiguration : IEntityTypeConfiguration<PreSchoolReceiptPayment>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolReceiptPayment> b)
+    {
+        b.ToTable("PreSchoolReceiptPayment");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Amount).HasPrecision(10, 2);
+        b.Property(x => x.Mode).HasMaxLength(10).IsRequired();
+        b.Property(x => x.Reference).HasMaxLength(60);
+        b.Property(x => x.Notes).HasMaxLength(300);
+        b.Property(x => x.CollectedBy).HasMaxLength(250);
+        b.HasIndex(x => x.PaidOn);
+        b.HasIndex(x => new { x.ReceiptId, x.InstalmentNo }).IsUnique();
+        b.HasOne(x => x.Receipt).WithMany(r => r.Payments).HasForeignKey(x => x.ReceiptId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
 public class PreSchoolReceiptLineConfiguration : IEntityTypeConfiguration<PreSchoolReceiptLine>
 {
     public void Configure(EntityTypeBuilder<PreSchoolReceiptLine> b)

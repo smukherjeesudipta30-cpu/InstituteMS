@@ -59,9 +59,11 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             var fee = MonthlyFee(s, ctx);
             var due = DueMonths(s, ctx, fee);
             var admissionDue = s.Status == PreSchoolStudentStatus.Active && !ctx.AdmissionPaid.Contains(s.Id) ? s.Class?.AdmissionFee ?? 0 : 0;
+            var instalmentDue = InstalmentDue(s.Id, ctx);
             return new PreSchoolStudentListItemDto(
                 s.Id, AdmissionCode(s, ctx), s.ChildName, s.ClassId, s.Class?.Name ?? "", s.ParentName, s.Phone,
-                s.JoinedOn, s.Status, fee, due.Count, admissionDue, fee * due.Count + admissionDue);
+                s.JoinedOn, s.Status, fee, due.Count, admissionDue, fee * due.Count + admissionDue + instalmentDue,
+                s.Section, instalmentDue);
         }).ToList();
     }
 
@@ -241,11 +243,22 @@ public class PreSchoolStudentService : IPreSchoolStudentService
         var total = lines.Sum(l => l.Amount);
         var byCheque = request.Mode is "Cheque" or "DD";
 
+        // Paying in instalments: the admission package (not monthly fees alone) may be paid in up to four parts.
+        var paidNow = request.PaidNow is decimal part && part < total ? part : total;
+        if (paidNow < total)
+        {
+            if (!lines.Any(l => l.Kind is KindAdmission or KindCharge))
+                return Result<PreSchoolReceiptDto>.Failure("Only the admission and registration fees can be paid in instalments; monthly fees are paid in full.");
+            if (paidNow <= 0)
+                return Result<PreSchoolReceiptDto>.Failure("Enter the first instalment received.");
+        }
+        var receivedOn = request.ReceivedOn ?? DateOnly.FromDateTime(DateTime.Today);
+
         var receipt = new PreSchoolReceipt
         {
             ReceiptNo = await NextAsync("PreSchoolReceiptNo", ct),
             StudentId = s.Id,
-            ReceivedOn = request.ReceivedOn ?? DateOnly.FromDateTime(DateTime.Today),
+            ReceivedOn = receivedOn,
             Mode = request.Mode,
             Reference = request.Mode == "Cash" ? null : Clean(request.Reference),
             ChequeDate = byCheque ? request.ChequeDate : null,
@@ -254,7 +267,16 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             Notes = Clean(request.Notes),
             CreatedBy = actor,
             CreatedOn = DateTime.Now,
-            Lines = lines
+            Lines = lines,
+            Payments =
+            [
+                new PreSchoolReceiptPayment
+                {
+                    InstalmentNo = 1, PaidOn = receivedOn, Amount = paidNow, Mode = request.Mode,
+                    Reference = request.Mode == "Cash" ? null : Clean(request.Reference),
+                    CollectedBy = actor, CreatedOn = DateTime.Now
+                }
+            ]
         };
         _db.PreSchoolReceipts.Add(receipt);
         await _db.SaveChangesAsync(ct);
@@ -266,6 +288,7 @@ public class PreSchoolStudentService : IPreSchoolStudentService
     {
         var r = await _db.PreSchoolReceipts.AsNoTracking()
             .Include(x => x.Lines)
+            .Include(x => x.Payments)
             .Include(x => x.Student).ThenInclude(s => s!.Class)
             .FirstOrDefaultAsync(x => x.Id == receiptId, ct);
         if (r is null) return Result<PreSchoolReceiptDto>.Failure("That receipt does not exist.", ResultStatus.NotFound);
@@ -281,8 +304,55 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             settings?.SchoolName ?? "Avijan PreSchool", settings?.Address, settings?.Phone,
             r.Lines.OrderBy(l => l.Kind == KindAdmission ? 0 : l.Kind == KindMonthly ? 1 : l.Kind == KindCharge ? 2 : 3).ThenBy(l => l.ForMonth).ThenBy(l => l.Amount < 0).ThenBy(l => l.Id)
                 .Select(l => new PreSchoolReceiptLineDto(l.Kind, l.ForMonth, l.Description, l.Amount, l.ChargeHead)).ToList(),
-            s.Section, s.FatherName, s.MotherName, s.Address, r.ChequeDate, r.DrawnOn));
+            s.Section, s.FatherName, s.MotherName, s.Address, r.ChequeDate, r.DrawnOn,
+            Paid(r), Balance(r), NumberToWords.Convert(Paid(r)), Payments(r)));
     }
+
+    /* ------------------------------------------------------ instalments */
+
+    public async Task<Result<PreSchoolReceiptDto>> AddPaymentAsync(int receiptId, PreSchoolPaymentRequest request, string? actor, CancellationToken ct = default)
+    {
+        var r = await _db.PreSchoolReceipts.Include(x => x.Payments).FirstOrDefaultAsync(x => x.Id == receiptId, ct);
+        if (r is null) return Result<PreSchoolReceiptDto>.Failure("That receipt does not exist.", ResultStatus.NotFound);
+        if (r.IsCancelled) return Result<PreSchoolReceiptDto>.Failure("That receipt is cancelled.", ResultStatus.Conflict);
+
+        var balance = Balance(r);
+        if (balance <= 0) return Result<PreSchoolReceiptDto>.Failure("This receipt is already paid in full.", ResultStatus.Conflict);
+        if (request.Amount > balance)
+            return Result<PreSchoolReceiptDto>.Failure($"Only {balance:0.##} is left to pay on this receipt.");
+
+        var next = r.Payments.Count == 0 ? 1 : r.Payments.Max(p => p.InstalmentNo) + 1;
+        if (next > PreSchoolReceiptPayment.MaxInstalments)
+            return Result<PreSchoolReceiptDto>.Failure($"A receipt can be paid in at most {PreSchoolReceiptPayment.MaxInstalments} instalments.");
+        if (next == PreSchoolReceiptPayment.MaxInstalments && request.Amount < balance)
+            return Result<PreSchoolReceiptDto>.Failure($"This is the last instalment allowed: it must clear the {balance:0.##} left.");
+
+        var paidOn = request.PaidOn ?? DateOnly.FromDateTime(DateTime.Today);
+        if (paidOn < r.ReceivedOn) return Result<PreSchoolReceiptDto>.Failure("An instalment cannot be dated before the receipt.");
+
+        r.Payments.Add(new PreSchoolReceiptPayment
+        {
+            InstalmentNo = next, PaidOn = paidOn, Amount = request.Amount, Mode = request.Mode,
+            Reference = request.Mode == "Cash" ? null : Clean(request.Reference), Notes = Clean(request.Notes),
+            CollectedBy = actor, CreatedOn = DateTime.Now
+        });
+        await _db.SaveChangesAsync(ct);
+
+        return await GetReceiptAsync(receiptId, ct);
+    }
+
+    /// <summary>Received so far. A receipt from before instalments has no payment rows: it was paid in full.</summary>
+    private static decimal Paid(PreSchoolReceipt r) => r.Payments.Count == 0 ? r.Total : r.Payments.Sum(p => p.Amount);
+
+    /// <summary>Still to come on a receipt; nothing on a cancelled one.</summary>
+    private static decimal Balance(PreSchoolReceipt r) => r.IsCancelled ? 0 : Math.Max(0, r.Total - Paid(r));
+
+    private static List<PreSchoolPaymentDto> Payments(PreSchoolReceipt r) => r.Payments.OrderBy(p => p.InstalmentNo)
+        .Select(p => new PreSchoolPaymentDto(p.Id, p.InstalmentNo, p.PaidOn, p.Amount, p.Mode, p.Reference, p.Notes, p.CollectedBy))
+        .ToList();
+
+    private static decimal InstalmentDue(int studentId, FeeContext ctx) =>
+        (ctx.Receipts.GetValueOrDefault(studentId) ?? []).Sum(Balance);
 
     /// <summary>A receipt made in error is cancelled, not deleted: its number stays used and its months become due again.</summary>
     public async Task<Result<PreSchoolReceiptDto>> CancelReceiptAsync(int receiptId, string? actor, CancellationToken ct = default)
@@ -316,11 +386,12 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             var fee = MonthlyFee(s, ctx);
             var due = DueMonths(s, ctx, fee);
             var admissionDue = !ctx.AdmissionPaid.Contains(s.Id) ? s.Class!.AdmissionFee : 0;
-            if (due.Count < Math.Max(1, minMonths) && !(minMonths <= 1 && admissionDue > 0)) continue;
+            var instalmentDue = InstalmentDue(s.Id, ctx);
+            if (due.Count < Math.Max(1, minMonths) && !(minMonths <= 1 && (admissionDue > 0 || instalmentDue > 0))) continue;
 
             rows.Add(new PreSchoolPendingRowDto(
                 s.Id, AdmissionCode(s, ctx), s.ChildName, s.Class?.Name ?? "", s.ParentName, s.Phone,
-                due, fee, admissionDue, fee * due.Count + admissionDue));
+                due, fee, admissionDue, fee * due.Count + admissionDue + instalmentDue, instalmentDue));
         }
 
         return new PreSchoolPendingReportDto(rows, rows.Count, rows.Sum(r => r.Months.Count), rows.Sum(r => r.Amount));
@@ -328,10 +399,11 @@ public class PreSchoolStudentService : IPreSchoolStudentService
 
     /* ------------------------------------------------------- admissions */
 
-    public async Task<PreSchoolAdmissionReportDto> AdmissionsAsync(int year, int? classId, CancellationToken ct = default)
+    public async Task<Result<PreSchoolAdmissionReportDto>> AdmissionsAsync(DateOnly start, DateOnly end, int? classId, CancellationToken ct = default)
     {
-        var start = new DateOnly(year, 1, 1);
-        var end = new DateOnly(year, 12, 31);
+        if (end < start) return Result<PreSchoolAdmissionReportDto>.Failure("The end date is before the start date.");
+        if (end.DayNumber - start.DayNumber > 3700) return Result<PreSchoolAdmissionReportDto>.Failure("Pick at most about ten years at a time.");
+
         var query = _db.PreSchoolStudents.AsNoTracking().Include(s => s.Class)
             .Where(s => s.JoinedOn >= start && s.JoinedOn <= end);
         if (classId is > 0) query = query.Where(s => s.ClassId == classId);
@@ -346,19 +418,36 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             .GroupBy(x => x.StudentId)
             .ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
 
-        var months = Enumerable.Range(1, 12).Select(m =>
+        // The admission receipt(s) of each child: what was billed, received so far and still to come.
+        var admissionReceipts = ctx.Receipts.Values.SelectMany(r => r)
+            .Where(r => !r.IsCancelled && r.Lines.Any(l => l.Kind == KindAdmission))
+            .GroupBy(r => r.StudentId)
+            .ToDictionary(g => g.Key, g => (Billed: g.Sum(r => r.Total), Paid: g.Sum(Paid), Balance: g.Sum(Balance)));
+
+        var firstMonth = FirstOfMonth(start);
+        var monthCount = (end.Year - start.Year) * 12 + end.Month - start.Month + 1;
+        var months = Enumerable.Range(0, monthCount).Select(i =>
         {
-            var inMonth = students.Where(s => s.JoinedOn.Month == m).ToList();
-            var rows = inMonth.Select(s => new PreSchoolAdmissionRowDto(
-                s.Id, AdmissionCode(s, ctx), s.ChildName, s.Class?.Name ?? "", s.ParentName, s.Phone, s.JoinedOn, s.Status,
-                feeByStudent.GetValueOrDefault(s.Id))).ToList();
+            var month = firstMonth.AddMonths(i);
+            var inMonth = students.Where(s => s.JoinedOn.Year == month.Year && s.JoinedOn.Month == month.Month).ToList();
+            var rows = inMonth.Select(s =>
+            {
+                var bill = admissionReceipts.GetValueOrDefault(s.Id);
+                return new PreSchoolAdmissionRowDto(
+                    s.Id, AdmissionCode(s, ctx), s.ChildName, s.Class?.Name ?? "", s.ParentName, s.Phone, s.JoinedOn, s.Status,
+                    feeByStudent.GetValueOrDefault(s.Id), s.Section, bill.Billed, bill.Paid, bill.Balance, s.DateOfBirth);
+            }).ToList();
             return new PreSchoolAdmissionMonthDto(
-                new DateOnly(year, m, 1), rows.Count, rows.Sum(r => r.AdmissionFeeReceived),
+                month, rows.Count, rows.Sum(r => r.AdmissionFeeReceived),
                 rows.GroupBy(r => r.ClassName).ToDictionary(g => g.Key, g => g.Count()),
                 rows);
         }).ToList();
 
-        return new PreSchoolAdmissionReportDto(year, students.Count, months.Sum(m => m.AdmissionFees), months);
+        var all = months.SelectMany(m => m.Children).ToList();
+        return Result<PreSchoolAdmissionReportDto>.Success(new PreSchoolAdmissionReportDto(
+            start.Year, students.Count, months.Sum(m => m.AdmissionFees), months,
+            start, end, all.Sum(r => r.Billed), all.Sum(r => r.Paid), all.Sum(r => r.Balance),
+            all.GroupBy(r => r.ClassName).ToDictionary(g => g.Key, g => g.Count())));
     }
 
     /* ---------------------------------------------------------- helpers */
@@ -382,7 +471,7 @@ public class PreSchoolStudentService : IPreSchoolStudentService
 
         var receipts = studentIds.Count == 0
             ? []
-            : await _db.PreSchoolReceipts.AsNoTracking().Include(r => r.Lines)
+            : await _db.PreSchoolReceipts.AsNoTracking().Include(r => r.Lines).Include(r => r.Payments)
                 .Where(r => studentIds.Contains(r.StudentId))
                 .OrderByDescending(r => r.ReceivedOn).ThenByDescending(r => r.ReceiptNo)
                 .ToListAsync(ct);
@@ -440,7 +529,8 @@ public class PreSchoolStudentService : IPreSchoolStudentService
 
         var receipts = (ctx.Receipts.GetValueOrDefault(s.Id) ?? [])
             .Select(r => new PreSchoolReceiptSummaryDto(
-                r.Id, ReceiptCode(ctx.Prefix, r.ReceiptNo), r.ReceivedOn, r.Total, r.Mode, r.IsCancelled, Summarise(r)))
+                r.Id, ReceiptCode(ctx.Prefix, r.ReceiptNo), r.ReceivedOn, r.Total, r.Mode, r.IsCancelled, Summarise(r),
+                Paid(r), Balance(r), Payments(r)))
             .ToList();
 
         return new PreSchoolStudentDetailDto(

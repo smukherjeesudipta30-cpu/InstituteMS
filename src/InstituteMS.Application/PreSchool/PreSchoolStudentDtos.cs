@@ -18,13 +18,46 @@ public record PreSchoolStudentListItemDto(
     int MonthsDue,
     // The admission fee when it has not been taken yet; zero once it has.
     decimal AdmissionDue,
-    // Unpaid months plus any admission fee still due.
-    decimal AmountDue);
+    // Unpaid months, any admission fee still due and any instalment balance.
+    decimal AmountDue,
+    string? Section = null,
+    // Still to come on receipts being paid in instalments.
+    decimal InstalmentDue = 0);
 
 /// <summary>One month of a child's fees: paid (with the receipt) or still due.</summary>
 public record PreSchoolMonthDto(DateOnly Month, bool IsPaid, decimal Amount, string? ReceiptCode);
 
-public record PreSchoolReceiptSummaryDto(int Id, string ReceiptCode, DateOnly ReceivedOn, decimal Total, string Mode, bool IsCancelled, string Summary);
+public record PreSchoolReceiptSummaryDto(int Id, string ReceiptCode, DateOnly ReceivedOn, decimal Total, string Mode, bool IsCancelled, string Summary,
+    decimal Paid = 0, decimal Balance = 0, IReadOnlyList<PreSchoolPaymentDto>? Payments = null);
+
+/// <summary>One payment (instalment) against a receipt, with the login that collected it.</summary>
+public record PreSchoolPaymentDto(int Id, int InstalmentNo, DateOnly PaidOn, decimal Amount, string Mode, string? Reference, string? Notes, string? CollectedBy);
+
+/// <summary>A further instalment against a receipt being paid in parts.</summary>
+public record PreSchoolPaymentRequest
+{
+    public decimal Amount { get; init; }
+    /// <summary>When left out, today.</summary>
+    public DateOnly? PaidOn { get; init; }
+    public string Mode { get; init; } = "Cash";
+    public string? Reference { get; init; }
+    public string? Notes { get; init; }
+}
+
+public class PreSchoolPaymentRequestValidator : AbstractValidator<PreSchoolPaymentRequest>
+{
+    public PreSchoolPaymentRequestValidator()
+    {
+        RuleFor(x => x.Amount).GreaterThan(0).LessThan(1_000_000).WithMessage("Enter the amount received.");
+        RuleFor(x => x.Mode).Must(m => m is "Cash" or "UPI" or "Paytm" or "Cheque" or "DD")
+            .WithMessage("Payment mode is Cash, UPI, Paytm, Cheque or DD.");
+        RuleFor(x => x.Reference).NotEmpty().When(x => x.Mode != "Cash")
+            .WithMessage("Enter the reference / cheque number.").MaximumLength(60);
+        RuleFor(x => x.PaidOn).LessThanOrEqualTo(_ => DateOnly.FromDateTime(DateTime.Today))
+            .When(x => x.PaidOn.HasValue).WithMessage("The payment date cannot be in the future.");
+        RuleFor(x => x.Notes).MaximumLength(300);
+    }
+}
 
 public record PreSchoolStudentDetailDto(
     int Id,
@@ -177,6 +210,12 @@ public record PreSchoolCollectRequest
     public DateOnly? ReceivedOn { get; init; }
 
     public string? Notes { get; init; }
+
+    /// <summary>
+    /// Paying in instalments: what is paid now (the first instalment). Left out
+    /// (or the whole total) when paid in full.
+    /// </summary>
+    public decimal? PaidNow { get; init; }
 }
 
 public class PreSchoolCollectRequestValidator : AbstractValidator<PreSchoolCollectRequest>
@@ -214,6 +253,8 @@ public class PreSchoolCollectRequestValidator : AbstractValidator<PreSchoolColle
         RuleFor(x => x.ReceivedOn).LessThanOrEqualTo(_ => DateOnly.FromDateTime(DateTime.Today))
             .When(x => x.ReceivedOn.HasValue).WithMessage("The payment date cannot be in the future.");
         RuleFor(x => x.Notes).MaximumLength(300);
+        RuleFor(x => x.PaidNow).GreaterThan(0).When(x => x.PaidNow.HasValue)
+            .WithMessage("Enter the first instalment received.");
     }
 }
 
@@ -250,7 +291,12 @@ public record PreSchoolReceiptDto(
     string? MotherName = null,
     string? Address = null,
     DateOnly? ChequeDate = null,
-    string? DrawnOn = null);
+    string? DrawnOn = null,
+    // Instalments: what has been received so far, what is left, and each payment.
+    decimal Paid = 0,
+    decimal Balance = 0,
+    string? PaidInWords = null,
+    IReadOnlyList<PreSchoolPaymentDto>? Payments = null);
 
 public record PreSchoolPendingRowDto(
     int StudentId,
@@ -262,7 +308,9 @@ public record PreSchoolPendingRowDto(
     IReadOnlyList<DateOnly> Months,
     decimal MonthlyFee,
     decimal AdmissionDue,
-    decimal Amount);
+    decimal Amount,
+    // Still to come on receipts being paid in instalments (included in Amount).
+    decimal InstalmentDue = 0);
 
 public record PreSchoolPendingReportDto(
     IReadOnlyList<PreSchoolPendingRowDto> Rows,
@@ -279,7 +327,13 @@ public record PreSchoolAdmissionRowDto(
     string Phone,
     DateOnly JoinedOn,
     string Status,
-    decimal AdmissionFeeReceived);
+    decimal AdmissionFeeReceived,
+    string? Section = null,
+    // The admission receipt(s): billed, received so far and still to come.
+    decimal Billed = 0,
+    decimal Paid = 0,
+    decimal Balance = 0,
+    DateOnly? DateOfBirth = null);
 
 /// <summary>One month of the year: how many children joined, by class, with the admission fees taken.</summary>
 public record PreSchoolAdmissionMonthDto(
@@ -289,7 +343,9 @@ public record PreSchoolAdmissionMonthDto(
     IReadOnlyDictionary<string, int> ByClass,
     IReadOnlyList<PreSchoolAdmissionRowDto> Children);
 
-public record PreSchoolAdmissionReportDto(int Year, int Total, decimal AdmissionFees, IReadOnlyList<PreSchoolAdmissionMonthDto> Months);
+public record PreSchoolAdmissionReportDto(int Year, int Total, decimal AdmissionFees, IReadOnlyList<PreSchoolAdmissionMonthDto> Months,
+    DateOnly? From = null, DateOnly? To = null, decimal Billed = 0, decimal Paid = 0, decimal Balance = 0,
+    IReadOnlyDictionary<string, int>? ByClass = null);
 
 /// <summary>A child's three ID-card photos, as data URLs; null where none has been taken.</summary>
 public record PreSchoolStudentPhotosDto(string? Child, string? Guardian1, string? Guardian2);
@@ -323,8 +379,11 @@ public interface IPreSchoolStudentService
     Task<Result<PreSchoolReceiptDto>> GetReceiptAsync(int receiptId, CancellationToken ct = default);
     Task<Result<PreSchoolReceiptDto>> CancelReceiptAsync(int receiptId, string? actor, CancellationToken ct = default);
 
-    /// <summary>Admissions in a calendar year, month by month, by joining date.</summary>
-    Task<PreSchoolAdmissionReportDto> AdmissionsAsync(int year, int? classId, CancellationToken ct = default);
+    /// <summary>A further instalment against a receipt being paid in parts.</summary>
+    Task<Result<PreSchoolReceiptDto>> AddPaymentAsync(int receiptId, PreSchoolPaymentRequest request, string? actor, CancellationToken ct = default);
+
+    /// <summary>Admissions between two dates (by joining date), month by month.</summary>
+    Task<Result<PreSchoolAdmissionReportDto>> AdmissionsAsync(DateOnly from, DateOnly to, int? classId, CancellationToken ct = default);
 
     /// <summary>Children with unpaid months up to this month (and admission fees not taken).</summary>
     Task<PreSchoolPendingReportDto> PendingAsync(int? classId, int minMonths, CancellationToken ct = default);

@@ -154,7 +154,9 @@ public record PreSchoolIncomeReportDto(
     decimal Net,
     IReadOnlyDictionary<string, decimal> IncomeByMode,
     IReadOnlyDictionary<string, decimal> ExpensesByHead,
-    decimal Purchases = 0);
+    decimal Purchases = 0,
+    // Fees received, by the login that collected them.
+    IReadOnlyDictionary<string, decimal>? IncomeByCollector = null);
 
 /// <summary>One delivery of store stock, with what it cost.</summary>
 public record PreSchoolIncomePurchaseLineDto(DateOnly OnDate, string ItemName, string ClassName, string Supplier, int Quantity, decimal UnitCost, decimal Amount);
@@ -165,7 +167,12 @@ public record PreSchoolIncomePurchaseLineDto(DateOnly OnDate, string ItemName, s
 /// </summary>
 public record PreSchoolStoreMarginDto(string Item, string? ChargeHead, decimal ReceivedFromParents, decimal Spent, decimal Margin, int Bought, int Given);
 
-public record PreSchoolIncomeReceiptLineDto(DateOnly ReceivedOn, string ReceiptCode, string ChildName, string ClassName, string Mode, decimal AdmissionFee, decimal MonthlyFees, decimal Total, decimal OtherFees = 0, decimal Discount = 0);
+/// <summary>
+/// One payment received (the whole receipt, or one instalment of it). The fee
+/// columns are this payment's share of the receipt's rows.
+/// </summary>
+public record PreSchoolIncomeReceiptLineDto(DateOnly ReceivedOn, string ReceiptCode, string ChildName, string ClassName, string Mode, decimal AdmissionFee, decimal MonthlyFees, decimal Total, decimal OtherFees = 0, decimal Discount = 0,
+    string? CollectedBy = null, int InstalmentNo = 1, decimal BillTotal = 0);
 public record PreSchoolIncomeSalaryLineDto(DateOnly PaidOn, string StaffName, string Role, DateOnly ForMonth, string Mode, decimal Amount);
 
 /// <summary>
@@ -196,7 +203,9 @@ public record PreSchoolIncomeRangeDto(
     // Stock received in these dates at its price (owed, not yet a cost until paid).
     decimal StockReceived = 0,
     // Discounts and special offers given on receipts in these dates (already taken off Income).
-    decimal Discounts = 0);
+    decimal Discounts = 0,
+    // Fees received, by the login that collected them.
+    IReadOnlyDictionary<string, decimal>? IncomeByCollector = null);
 
 /// <summary>The PreSchool's staff and salaries, expenses and income report. Nothing here reads a Computer Centre table.</summary>
 public interface IPreSchoolFinanceService

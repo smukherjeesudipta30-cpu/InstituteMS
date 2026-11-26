@@ -188,10 +188,7 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
         var from = new DateOnly(year, 1, 1);
         var to = new DateOnly(year, 12, 31);
 
-        var lines = await _db.PreSchoolReceiptLines.AsNoTracking()
-            .Where(l => !l.Receipt!.IsCancelled && l.Receipt.ReceivedOn >= from && l.Receipt.ReceivedOn <= to)
-            .Select(l => new { l.Receipt!.ReceivedOn, l.Kind, l.Amount, l.Receipt.Mode })
-            .ToListAsync(ct);
+        var lines = await CollectionsAsync(from, to, ct);
         var salaries = await _db.PreSchoolSalaryPayments.AsNoTracking()
             .Where(p => p.PaidOn >= from && p.PaidOn <= to)
             .Select(p => new { p.PaidOn, p.NetPaid })
@@ -208,10 +205,11 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
 
         var months = Enumerable.Range(1, 12).Select(m =>
         {
-            var admission = lines.Where(l => l.ReceivedOn.Month == m && l.Kind == "Admission").Sum(l => l.Amount);
-            var monthly = lines.Where(l => l.ReceivedOn.Month == m && l.Kind == "Monthly").Sum(l => l.Amount);
-            var other = lines.Where(l => l.ReceivedOn.Month == m && l.Kind == "Charge").Sum(l => l.Amount);
-            var discounts = -lines.Where(l => l.ReceivedOn.Month == m && l.Kind == "Discount").Sum(l => l.Amount);
+            var inMonth = lines.Where(l => l.ReceivedOn.Month == m).ToList();
+            var admission = inMonth.Sum(l => l.AdmissionFee);
+            var monthly = inMonth.Sum(l => l.MonthlyFees);
+            var other = inMonth.Sum(l => l.OtherFees);
+            var discounts = inMonth.Sum(l => l.Discount);
             var paid = salaries.Where(p => p.PaidOn.Month == m).Sum(p => p.NetPaid);
             var spent = expenses.Where(e => e.SpentOn.Month == m).Sum(e => e.Amount);
             var bought = purchases.Where(p => p.OnDate.Month == m).Sum(p => p.Amount);
@@ -226,9 +224,42 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
 
         return new PreSchoolIncomeReportDto(
             year, months, income, salaryTotal, expenseTotal, income - salaryTotal - expenseTotal - purchaseTotal,
-            lines.GroupBy(l => l.Mode).ToDictionary(g => g.Key, g => g.Sum(l => l.Amount)),
+            lines.GroupBy(l => l.Mode).ToDictionary(g => g.Key, g => g.Sum(l => l.Total)),
             expenses.GroupBy(e => e.Head).OrderByDescending(g => g.Sum(e => e.Amount)).ToDictionary(g => g.Key, g => g.Sum(e => e.Amount)),
-            purchaseTotal);
+            purchaseTotal, ByCollector(lines));
+    }
+
+    private static Dictionary<string, decimal> ByCollector(IEnumerable<PreSchoolIncomeReceiptLineDto> lines) =>
+        lines.GroupBy(l => string.IsNullOrWhiteSpace(l.CollectedBy) ? "(not recorded)" : l.CollectedBy!)
+            .OrderByDescending(g => g.Sum(l => l.Total))
+            .ToDictionary(g => g.Key, g => g.Sum(l => l.Total));
+
+    /// <summary>
+    /// Every payment received in the dates (a whole receipt, or one instalment
+    /// of it), on the day it was paid. Each carries its share of the receipt's
+    /// admission, monthly, other and discount rows, so a receipt paid in parts
+    /// adds up to the receipt once fully paid. Cancelled receipts count for nothing.
+    /// </summary>
+    private async Task<List<PreSchoolIncomeReceiptLineDto>> CollectionsAsync(DateOnly from, DateOnly to, CancellationToken ct)
+    {
+        var prefix = (await _db.PreSchoolSettings.AsNoTracking().Select(x => x.ReceiptPrefix).FirstOrDefaultAsync(ct)) ?? "APS";
+        var payments = await _db.PreSchoolReceiptPayments.AsNoTracking()
+            .Include(p => p.Receipt!).ThenInclude(r => r.Lines)
+            .Include(p => p.Receipt!).ThenInclude(r => r.Student!).ThenInclude(s => s.Class)
+            .Where(p => !p.Receipt!.IsCancelled && p.PaidOn >= from && p.PaidOn <= to)
+            .OrderBy(p => p.PaidOn).ThenBy(p => p.Receipt!.ReceiptNo).ThenBy(p => p.InstalmentNo)
+            .ToListAsync(ct);
+
+        return payments.Select(p =>
+        {
+            var r = p.Receipt!;
+            var share = r.Total == 0 ? 1m : p.Amount / r.Total;
+            decimal Part(string kind) => Math.Round(r.Lines.Where(l => l.Kind == kind).Sum(l => l.Amount) * share, 2);
+            return new PreSchoolIncomeReceiptLineDto(
+                p.PaidOn, $"{prefix}/{r.ReceiptNo:0000}", r.Student?.ChildName ?? "", r.Student?.Class?.Name ?? "", p.Mode,
+                Part("Admission"), Part("Monthly"), p.Amount, Part("Charge"), -Part("Discount"),
+                p.CollectedBy, p.InstalmentNo, r.Total);
+        }).ToList();
     }
 
     public async Task<Result<PreSchoolIncomeRangeDto>> IncomeRangeAsync(DateOnly from, DateOnly to, CancellationToken ct = default)
@@ -236,20 +267,12 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
         if (to < from) return Result<PreSchoolIncomeRangeDto>.Failure("The end date is before the start date.");
         if (to.DayNumber - from.DayNumber > 3700) return Result<PreSchoolIncomeRangeDto>.Failure("Pick at most about ten years at a time.");
 
-        var prefix = (await _db.PreSchoolSettings.AsNoTracking().Select(x => x.ReceiptPrefix).FirstOrDefaultAsync(ct)) ?? "APS";
-
+        // Receipts written in the dates (what parents were billed for store items), and the money received in them.
         var receipts = await _db.PreSchoolReceipts.AsNoTracking()
-            .Include(r => r.Lines).Include(r => r.Student).ThenInclude(s => s!.Class)
+            .Include(r => r.Lines)
             .Where(r => !r.IsCancelled && r.ReceivedOn >= from && r.ReceivedOn <= to)
-            .OrderBy(r => r.ReceivedOn).ThenBy(r => r.ReceiptNo)
             .ToListAsync(ct);
-        var receiptLines = receipts.Select(r => new PreSchoolIncomeReceiptLineDto(
-            r.ReceivedOn, $"{prefix}/{r.ReceiptNo:0000}", r.Student?.ChildName ?? "", r.Student?.Class?.Name ?? "", r.Mode,
-            r.Lines.Where(l => l.Kind == "Admission").Sum(l => l.Amount),
-            r.Lines.Where(l => l.Kind == "Monthly").Sum(l => l.Amount),
-            r.Total,
-            r.Lines.Where(l => l.Kind == "Charge").Sum(l => l.Amount),
-            -r.Lines.Where(l => l.Kind == "Discount").Sum(l => l.Amount))).ToList();
+        var receiptLines = await CollectionsAsync(from, to, ct);
 
         var salaries = await _db.PreSchoolSalaryPayments.AsNoTracking().Include(p => p.Staff)
             .Where(p => p.PaidOn >= from && p.PaidOn <= to)
@@ -311,7 +334,8 @@ public class PreSchoolFinanceService : IPreSchoolFinanceService
             receiptLines.GroupBy(r => r.Mode).ToDictionary(g => g.Key, g => g.Sum(r => r.Total)),
             expenses.GroupBy(e => e.Head).OrderByDescending(g => g.Sum(e => e.Amount)).ToDictionary(g => g.Key, g => g.Sum(e => e.Amount)),
             receiptLines, salaries, expenses, receiptLines.Sum(r => r.OtherFees), bought, purchaseLines, margins,
-            supplierPayments, Math.Round(everBought - everPaid, 2), Math.Round(received, 2), receiptLines.Sum(r => r.Discount)));
+            supplierPayments, Math.Round(everBought - everPaid, 2), Math.Round(received, 2), receiptLines.Sum(r => r.Discount),
+            ByCollector(receiptLines)));
     }
 
     /* ------------------------------------------------------ own payslips */

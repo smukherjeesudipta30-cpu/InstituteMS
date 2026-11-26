@@ -371,6 +371,10 @@ public static class PreSchoolChargeHeads
     public const string Food = "Food";
     public const string Transport = "Transport";
     public const string WinterGarments = "WinterGarments";
+    // From the 2027–28 fee chart; printed in the receipt's "Others" row.
+    public const string Development = "Development";
+    public const string Session = "Session";
+    public const string Materials = "Materials";
     public const string Others = "Others";
 
     /// <summary>Head → the words printed on the receipt.</summary>
@@ -385,6 +389,9 @@ public static class PreSchoolChargeHeads
         [Food] = "Food Charges",
         [Transport] = "Transport Charges",
         [WinterGarments] = "Winter Garments",
+        [Development] = "Development Charges",
+        [Session] = "Session Charges",
+        [Materials] = "Additional Educational Materials",
         [Others] = "Others",
     };
 }
@@ -432,6 +439,41 @@ public class PreSchoolReceipt
 
     public PreSchoolStudent? Student { get; set; }
     public ICollection<PreSchoolReceiptLine> Lines { get; set; } = [];
+
+    /// <summary>
+    /// The money actually received against the receipt: one payment when paid
+    /// in full, or up to four instalments. <see cref="Total"/> is the bill.
+    /// </summary>
+    public ICollection<PreSchoolReceiptPayment> Payments { get; set; } = [];
+}
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolReceiptPayment</c> — one payment (instalment) against
+/// a receipt, with who collected it. Fees count as income on the day paid.
+/// </summary>
+public class PreSchoolReceiptPayment
+{
+    /// <summary>An admission package may be paid in at most this many parts.</summary>
+    public const int MaxInstalments = 4;
+
+    public int Id { get; set; }
+    public int ReceiptId { get; set; }
+
+    /// <summary>1 for the payment made when the receipt was written, then 2, 3, 4.</summary>
+    public int InstalmentNo { get; set; }
+    public DateOnly PaidOn { get; set; }
+    public decimal Amount { get; set; }
+
+    /// <summary>Cash, UPI, Paytm, Cheque or DD.</summary>
+    public string Mode { get; set; } = "Cash";
+    public string? Reference { get; set; }
+    public string? Notes { get; set; }
+
+    /// <summary>The login that took the money.</summary>
+    public string? CollectedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+
+    public PreSchoolReceipt? Receipt { get; set; }
 }
 
 /// <summary>
