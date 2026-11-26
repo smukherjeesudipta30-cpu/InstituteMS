@@ -75,6 +75,41 @@ public class PreSchoolStudentsController : ApiControllerBase
     public async Task<IActionResult> CancelReceipt(int id, CancellationToken ct)
         => Envelope(await _students.CancelReceiptAsync(id, CurrentUserName, ct), "Receipt cancelled.");
 
+    /// <summary>
+    /// Emails the receipt to the child's guardian from the PreSchool's mailbox,
+    /// with the parent copy attached when the screen sends it as a PDF.
+    /// </summary>
+    [HttpPost("receipts/{id:int}/email")]
+    [RequestSizeLimit(4_000_000)]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolReceiptMailResultDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> EmailReceipt(int id, [FromBody] PreSchoolReceiptEmailRequest request, CancellationToken ct)
+    {
+        byte[]? pdf = null;
+        if (!string.IsNullOrWhiteSpace(request.PdfBase64))
+        {
+            var b64 = request.PdfBase64;
+            var comma = b64.IndexOf(',');
+            if (b64.StartsWith("data:") && comma > 0) b64 = b64[(comma + 1)..];
+            try { pdf = Convert.FromBase64String(b64); } catch (FormatException) { pdf = null; }
+            // Only a real PDF is attached.
+            if (pdf is not { Length: > 4 } || pdf[0] != '%' || pdf[1] != 'P' || pdf[2] != 'D' || pdf[3] != 'F') pdf = null;
+        }
+        return Envelope(await _students.EmailReceiptAsync(id, pdf, CurrentUserName, ct));
+    }
+
+    /// <summary>The PreSchool's teachers and receptionists who can be named as a child's referrer.</summary>
+    [HttpGet("referrers")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<PreSchoolReferrerDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Referrers(CancellationToken ct)
+        => Envelope(Result<IReadOnlyList<PreSchoolReferrerDto>>.Success(await _students.ReferrersAsync(ct)));
+
+    /// <summary>Every payment received between two dates, with who collected it and by what mode.</summary>
+    [HttpGet("reports/collections")]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolCollectionReportDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Collections([FromQuery] DateOnly from, [FromQuery] DateOnly to,
+        [FromServices] IPreSchoolFinanceService finance, CancellationToken ct)
+        => Envelope(await finance.CollectionReportAsync(from, to, ct));
+
     /// <summary>A further instalment against a receipt being paid in parts; the login that took it is recorded.</summary>
     [HttpPost("receipts/{id:int}/payments")]
     [ProducesResponseType(typeof(ApiResponse<PreSchoolReceiptDto>), StatusCodes.Status200OK)]

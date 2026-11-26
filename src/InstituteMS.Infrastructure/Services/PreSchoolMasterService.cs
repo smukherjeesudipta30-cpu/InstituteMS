@@ -304,6 +304,7 @@ public class PreSchoolMasterService : IPreSchoolMasterService
         entity.Latitude = request.Latitude;
         entity.Longitude = request.Longitude;
         entity.GeofenceMetres = request.GeofenceMetres;
+        if (request.ReferralPercent is decimal pct) entity.ReferralPercent = pct;
         entity.ModifiedBy = actor;
         entity.ModifiedOn = DateTime.Now;
         await _db.SaveChangesAsync(ct);
@@ -348,5 +349,5 @@ public class PreSchoolMasterService : IPreSchoolMasterService
         : new PreSchoolSettingDto(
             s.SchoolName, s.Address, s.Phone, s.OfficePhone, s.Email, s.MapUrl,
             s.UniformShopName, s.UniformShopAddress, s.UniformShopPhone, s.UniformShopMapUrl,
-            s.ReceiptPrefix, s.OpensOn, s.ModifiedBy, s.ModifiedOn, s.Latitude, s.Longitude, s.GeofenceMetres);
+            s.ReceiptPrefix, s.OpensOn, s.ModifiedBy, s.ModifiedOn, s.Latitude, s.Longitude, s.GeofenceMetres, s.ReferralPercent);
 }

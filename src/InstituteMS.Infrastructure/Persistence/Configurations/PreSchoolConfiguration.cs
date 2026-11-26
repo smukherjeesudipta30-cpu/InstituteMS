@@ -66,6 +66,7 @@ public class PreSchoolSettingConfiguration : IEntityTypeConfiguration<PreSchoolS
     public void Configure(EntityTypeBuilder<PreSchoolSetting> b)
     {
         b.ToTable("PreSchoolSetting");
+        b.Property(x => x.ReferralPercent).HasPrecision(5, 2);
         b.HasKey(x => x.Id);
         b.Property(x => x.Id).ValueGeneratedNever();
         b.Property(x => x.SchoolName).HasMaxLength(150).IsRequired();
@@ -312,6 +313,8 @@ public class PreSchoolStudentConfiguration : IEntityTypeConfiguration<PreSchoolS
         b.Property(x => x.WeightKg).HasPrecision(5, 1);
         b.Property(x => x.Status).HasMaxLength(20).IsRequired();
         b.Property(x => x.Section).HasMaxLength(10);
+        b.Property(x => x.ReferenceType).HasMaxLength(10).IsUnicode(false);
+        b.HasOne(x => x.ReferredBy).WithMany().HasForeignKey(x => x.ReferredByStaffId).OnDelete(DeleteBehavior.Restrict);
         b.Property(x => x.Notes).HasMaxLength(500);
         b.Property(x => x.CreatedBy).HasMaxLength(250);
         b.Property(x => x.ModifiedBy).HasMaxLength(250);
@@ -387,6 +390,24 @@ public class PreSchoolStaffConfiguration : IEntityTypeConfiguration<PreSchoolSta
     }
 }
 
+public class PreSchoolReferralCreditConfiguration : IEntityTypeConfiguration<PreSchoolReferralCredit>
+{
+    public void Configure(EntityTypeBuilder<PreSchoolReferralCredit> b)
+    {
+        b.ToTable("PreSchoolReferralCredit");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.PaymentAmount).HasPrecision(10, 2);
+        b.Property(x => x.Percent).HasPrecision(5, 2);
+        b.Property(x => x.Amount).HasPrecision(10, 2);
+        b.Property(x => x.CreatedBy).HasMaxLength(250);
+        b.HasIndex(x => x.ReceiptPaymentId).IsUnique();
+        b.HasOne(x => x.Student).WithMany().HasForeignKey(x => x.StudentId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne(x => x.ReceiptPayment).WithMany().HasForeignKey(x => x.ReceiptPaymentId).OnDelete(DeleteBehavior.Cascade);
+        b.HasOne(x => x.Staff).WithMany().HasForeignKey(x => x.StaffId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne(x => x.SalaryPayment).WithMany().HasForeignKey(x => x.SalaryPaymentId).OnDelete(DeleteBehavior.SetNull);
+    }
+}
+
 public class PreSchoolSalaryPaymentConfiguration : IEntityTypeConfiguration<PreSchoolSalaryPayment>
 {
     public void Configure(EntityTypeBuilder<PreSchoolSalaryPayment> b)
@@ -397,6 +418,7 @@ public class PreSchoolSalaryPaymentConfiguration : IEntityTypeConfiguration<PreS
         b.Property(x => x.DaysAbsent).HasPrecision(5, 1);
         b.Property(x => x.Deduction).HasPrecision(10, 2);
         b.Property(x => x.NetPaid).HasPrecision(10, 2);
+        b.Property(x => x.ReferralBonus).HasPrecision(10, 2);
         b.Property(x => x.Mode).HasMaxLength(10).IsRequired();
         b.Property(x => x.Reference).HasMaxLength(60);
         b.Property(x => x.Notes).HasMaxLength(300);

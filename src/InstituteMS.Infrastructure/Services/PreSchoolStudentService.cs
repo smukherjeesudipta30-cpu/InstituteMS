@@ -1,4 +1,5 @@
 using InstituteMS.Application.Common;
+using InstituteMS.Application.Notifications;
 using InstituteMS.Application.PreSchool;
 using InstituteMS.Domain.Entities;
 using InstituteMS.Infrastructure.Persistence;
@@ -31,8 +32,13 @@ public class PreSchoolStudentService : IPreSchoolStudentService
     private const int AdvanceMonths = 12;
 
     private readonly AppDbContext _db;
+    private readonly IStudentMailer? _mailer;
 
-    public PreSchoolStudentService(AppDbContext db) => _db = db;
+    public PreSchoolStudentService(AppDbContext db, IStudentMailer? mailer = null)
+    {
+        _db = db;
+        _mailer = mailer;
+    }
 
     /* --------------------------------------------------------- students */
 
@@ -69,7 +75,8 @@ public class PreSchoolStudentService : IPreSchoolStudentService
 
     public async Task<Result<PreSchoolStudentDetailDto>> GetAsync(int id, CancellationToken ct = default)
     {
-        var s = await _db.PreSchoolStudents.AsNoTracking().Include(x => x.Class).FirstOrDefaultAsync(x => x.Id == id, ct);
+        var s = await _db.PreSchoolStudents.AsNoTracking().Include(x => x.Class).Include(x => x.ReferredBy)
+            .FirstOrDefaultAsync(x => x.Id == id, ct);
         if (s is null) return Result<PreSchoolStudentDetailDto>.Failure("That child is not on the list.", ResultStatus.NotFound);
 
         return Result<PreSchoolStudentDetailDto>.Success(ToDetail(s, await LoadContextAsync([s.Id], ct)));
@@ -84,6 +91,11 @@ public class PreSchoolStudentService : IPreSchoolStudentService
         var ageProblem = CheckAge(cls, request.DateOfBirth, request.JoinedOn);
         if (ageProblem is not null) return Result<PreSchoolStudentDetailDto>.Failure(ageProblem);
 
+        if (request.ReferenceType is null)
+            return Result<PreSchoolStudentDetailDto>.Failure("Choose who referred the child (a teacher or receptionist), or No reference.");
+        var referenceProblem = await CheckReferrerAsync(request, ct);
+        if (referenceProblem is not null) return Result<PreSchoolStudentDetailDto>.Failure(referenceProblem);
+
         var entity = new PreSchoolStudent
         {
             AdmissionNo = await NextAsync("PreSchoolAdmissionNo", ct),
@@ -91,6 +103,7 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             CreatedOn = DateTime.Now
         };
         Apply(entity, request);
+        ApplyReference(entity, request);
         _db.PreSchoolStudents.Add(entity);
         await _db.SaveChangesAsync(ct);
 
@@ -105,11 +118,65 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             return Result<PreSchoolStudentDetailDto>.Failure("That class no longer exists.", ResultStatus.NotFound);
 
         Apply(entity, request);
+        if (request.ReferenceType is not null)
+        {
+            var referenceProblem = await CheckReferrerAsync(request, ct);
+            if (referenceProblem is not null) return Result<PreSchoolStudentDetailDto>.Failure(referenceProblem);
+            ApplyReference(entity, request);
+        }
         entity.ModifiedBy = actor;
         entity.ModifiedOn = DateTime.Now;
         await _db.SaveChangesAsync(ct);
 
         return await GetAsync(id, ct);
+    }
+
+    /* ------------------------------------------------------- references */
+
+    public async Task<IReadOnlyList<PreSchoolReferrerDto>> ReferrersAsync(CancellationToken ct = default)
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        return await _db.PreSchoolStaff.AsNoTracking()
+            .Where(s => (s.Role == PreSchoolStaffRoles.Teacher || s.Role == PreSchoolStaffRoles.Receptionist)
+                        && (s.LeftOn == null || s.LeftOn >= today))
+            .OrderBy(s => s.Role).ThenBy(s => s.Name)
+            .Select(s => new PreSchoolReferrerDto(s.Id, s.Name, s.Role))
+            .ToListAsync(ct);
+    }
+
+    /// <summary>Only a PreSchool teacher or receptionist on the staff list can be a referrer.</summary>
+    private async Task<string?> CheckReferrerAsync(PreSchoolStudentSaveRequest r, CancellationToken ct)
+    {
+        if (r.ReferenceType != PreSchoolReferenceTypes.Staff) return null;
+        var staff = await _db.PreSchoolStaff.AsNoTracking().FirstOrDefaultAsync(s => s.Id == r.ReferredByStaffId, ct);
+        if (staff is null) return "That referrer is not on the PreSchool staff list.";
+        return staff.Role is PreSchoolStaffRoles.Teacher or PreSchoolStaffRoles.Receptionist
+            ? null
+            : "Only a PreSchool teacher or receptionist can be named as the referrer.";
+    }
+
+    private static void ApplyReference(PreSchoolStudent e, PreSchoolStudentSaveRequest r)
+    {
+        e.ReferenceType = r.ReferenceType;
+        e.ReferredByStaffId = r.ReferenceType == PreSchoolReferenceTypes.Staff ? r.ReferredByStaffId : null;
+    }
+
+    /// <summary>
+    /// The referrer's share of a payment on the child's admission receipt; null
+    /// when there is nothing to credit (no referrer, not the admission receipt, or 0%).
+    /// </summary>
+    private async Task<PreSchoolReferralCredit?> ReferralCreditAsync(
+        PreSchoolStudent s, bool isAdmissionReceipt, PreSchoolReceiptPayment payment, string? actor, CancellationToken ct)
+    {
+        if (!isAdmissionReceipt || s.ReferenceType != PreSchoolReferenceTypes.Staff || s.ReferredByStaffId is not int staffId) return null;
+        var percent = await _db.PreSchoolSettings.AsNoTracking().Select(x => (decimal?)x.ReferralPercent).FirstOrDefaultAsync(ct) ?? 5m;
+        var amount = Math.Round(payment.Amount * percent / 100m, 2, MidpointRounding.AwayFromZero);
+        if (amount <= 0) return null;
+        return new PreSchoolReferralCredit
+        {
+            StudentId = s.Id, ReceiptPayment = payment, StaffId = staffId, PaymentAmount = payment.Amount,
+            Percent = percent, Amount = amount, CreditedOn = payment.PaidOn, CreatedBy = actor, CreatedOn = DateTime.Now
+        };
     }
 
     /// <summary>The class's age limits, checked at admission only: a child keeps their place as they grow.</summary>
@@ -267,18 +334,18 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             Notes = Clean(request.Notes),
             CreatedBy = actor,
             CreatedOn = DateTime.Now,
-            Lines = lines,
-            Payments =
-            [
-                new PreSchoolReceiptPayment
-                {
-                    InstalmentNo = 1, PaidOn = receivedOn, Amount = paidNow, Mode = request.Mode,
-                    Reference = request.Mode == "Cash" ? null : Clean(request.Reference),
-                    CollectedBy = actor, CreatedOn = DateTime.Now
-                }
-            ]
+            Lines = lines
         };
+        var firstPayment = new PreSchoolReceiptPayment
+        {
+            InstalmentNo = 1, PaidOn = receivedOn, Amount = paidNow, Mode = request.Mode,
+            Reference = request.Mode == "Cash" ? null : Clean(request.Reference),
+            CollectedBy = actor, CreatedOn = DateTime.Now
+        };
+        receipt.Payments.Add(firstPayment);
         _db.PreSchoolReceipts.Add(receipt);
+        if (await ReferralCreditAsync(s, lines.Any(l => l.Kind == KindAdmission), firstPayment, actor, ct) is { } credit)
+            _db.PreSchoolReferralCredits.Add(credit);
         await _db.SaveChangesAsync(ct);
 
         return await GetReceiptAsync(receipt.Id, ct);
@@ -308,11 +375,38 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             Paid(r), Balance(r), NumberToWords.Convert(Paid(r)), Payments(r)));
     }
 
+    /* ------------------------------------------------------------ email */
+
+    public async Task<Result<PreSchoolReceiptMailResultDto>> EmailReceiptAsync(int receiptId, byte[]? pdf, string? actor, CancellationToken ct = default)
+    {
+        var found = await GetReceiptAsync(receiptId, ct);
+        if (!found.Succeeded) return Result<PreSchoolReceiptMailResultDto>.Failure(found.Error!, ResultStatus.NotFound);
+        var r = found.Value!;
+        if (r.IsCancelled) return Result<PreSchoolReceiptMailResultDto>.Success(new(false, "A cancelled receipt is not emailed."));
+
+        var email = await _db.PreSchoolStudents.AsNoTracking().Where(s => s.Id == r.StudentId).Select(s => s.Email).FirstOrDefaultAsync(ct);
+        if (string.IsNullOrWhiteSpace(email))
+            return Result<PreSchoolReceiptMailResultDto>.Success(new(false, $"No guardian email on {r.ChildName}'s record, so the receipt was not emailed."));
+        if (_mailer is null)
+            return Result<PreSchoolReceiptMailResultDto>.Success(new(false, "Email is not set up on this server."));
+
+        var sent = await _mailer.SendPreSchoolReceiptAsync(new PreSchoolReceiptMailRequest(
+            email.Trim(), r.ParentName, r.ChildName, r.ClassName, r.ReceiptCode, r.ReceivedOn,
+            r.Lines.Select(l => (l.Description, l.Amount)).ToList(), r.Total, r.Paid, r.Balance, r.Mode,
+            r.SchoolName, r.SchoolAddress, r.SchoolPhone,
+            pdf, $"FeeReceipt_{r.ReceiptCode.Replace('/', '-')}.pdf"), actor, ct);
+
+        return Result<PreSchoolReceiptMailResultDto>.Success(sent
+            ? new(true, $"Receipt emailed to {email.Trim()}.", email.Trim())
+            : new(false, "The receipt could not be emailed just now. Try again with the email button.", email.Trim()));
+    }
+
     /* ------------------------------------------------------ instalments */
 
     public async Task<Result<PreSchoolReceiptDto>> AddPaymentAsync(int receiptId, PreSchoolPaymentRequest request, string? actor, CancellationToken ct = default)
     {
-        var r = await _db.PreSchoolReceipts.Include(x => x.Payments).FirstOrDefaultAsync(x => x.Id == receiptId, ct);
+        var r = await _db.PreSchoolReceipts.Include(x => x.Payments).Include(x => x.Lines).Include(x => x.Student)
+            .FirstOrDefaultAsync(x => x.Id == receiptId, ct);
         if (r is null) return Result<PreSchoolReceiptDto>.Failure("That receipt does not exist.", ResultStatus.NotFound);
         if (r.IsCancelled) return Result<PreSchoolReceiptDto>.Failure("That receipt is cancelled.", ResultStatus.Conflict);
 
@@ -330,12 +424,15 @@ public class PreSchoolStudentService : IPreSchoolStudentService
         var paidOn = request.PaidOn ?? DateOnly.FromDateTime(DateTime.Today);
         if (paidOn < r.ReceivedOn) return Result<PreSchoolReceiptDto>.Failure("An instalment cannot be dated before the receipt.");
 
-        r.Payments.Add(new PreSchoolReceiptPayment
+        var payment = new PreSchoolReceiptPayment
         {
             InstalmentNo = next, PaidOn = paidOn, Amount = request.Amount, Mode = request.Mode,
             Reference = request.Mode == "Cash" ? null : Clean(request.Reference), Notes = Clean(request.Notes),
             CollectedBy = actor, CreatedOn = DateTime.Now
-        });
+        };
+        r.Payments.Add(payment);
+        if (await ReferralCreditAsync(r.Student!, r.Lines.Any(l => l.Kind == KindAdmission), payment, actor, ct) is { } credit)
+            _db.PreSchoolReferralCredits.Add(credit);
         await _db.SaveChangesAsync(ct);
 
         return await GetReceiptAsync(receiptId, ct);
@@ -364,6 +461,10 @@ public class PreSchoolStudentService : IPreSchoolStudentService
         r.IsCancelled = true;
         r.CancelledBy = actor;
         r.CancelledOn = DateTime.Now;
+        // The referrer's share of a cancelled receipt is taken back, unless a salary has already paid it.
+        var unpaid = await _db.PreSchoolReferralCredits
+            .Where(c => c.ReceiptPayment!.ReceiptId == receiptId && c.SalaryPaymentId == null).ToListAsync(ct);
+        _db.PreSchoolReferralCredits.RemoveRange(unpaid);
         await _db.SaveChangesAsync(ct);
 
         return await GetReceiptAsync(receiptId, ct);
@@ -538,7 +639,7 @@ public class PreSchoolStudentService : IPreSchoolStudentService
             s.ParentName, s.Phone, s.EmergencyPhone, s.Email, s.Address,
             s.GuardianRelation, s.Guardian2Name, s.Guardian2Relation, s.Guardian2Phone, s.HeightCm, s.WeightKg, s.ClassId, s.Class?.Name ?? "", s.JoinedOn,
             s.MonthlyDiscount, s.Status, s.EndedOn, s.Notes, fee, s.Class?.AdmissionFee ?? 0, ctx.AdmissionPaid.Contains(s.Id),
-            months, receipts, s.Section);
+            months, receipts, s.Section, s.ReferenceType, s.ReferredByStaffId, s.ReferredBy?.Name);
     }
 
     /// <summary>"Admission + Nov 2026, Dec 2026" — what a receipt paid for, in a line.</summary>

@@ -30,6 +30,15 @@ public record PreSchoolMonthDto(DateOnly Month, bool IsPaid, decimal Amount, str
 public record PreSchoolReceiptSummaryDto(int Id, string ReceiptCode, DateOnly ReceivedOn, decimal Total, string Mode, bool IsCancelled, string Summary,
     decimal Paid = 0, decimal Balance = 0, IReadOnlyList<PreSchoolPaymentDto>? Payments = null);
 
+/// <summary>Whether a receipt went to the guardian, and to which address (or why not).</summary>
+public record PreSchoolReceiptMailResultDto(bool Sent, string Message, string? To = null);
+
+/// <summary>The parent copy of a receipt as a PDF, made on the screen that printed it.</summary>
+public record PreSchoolReceiptEmailRequest
+{
+    public string? PdfBase64 { get; init; }
+}
+
 /// <summary>One payment (instalment) against a receipt, with the login that collected it.</summary>
 public record PreSchoolPaymentDto(int Id, int InstalmentNo, DateOnly PaidOn, decimal Amount, string Mode, string? Reference, string? Notes, string? CollectedBy);
 
@@ -49,9 +58,9 @@ public class PreSchoolPaymentRequestValidator : AbstractValidator<PreSchoolPayme
     public PreSchoolPaymentRequestValidator()
     {
         RuleFor(x => x.Amount).GreaterThan(0).LessThan(1_000_000).WithMessage("Enter the amount received.");
-        RuleFor(x => x.Mode).Must(m => m is "Cash" or "UPI" or "Paytm" or "Cheque" or "DD")
-            .WithMessage("Payment mode is Cash, UPI, Paytm, Cheque or DD.");
-        RuleFor(x => x.Reference).NotEmpty().When(x => x.Mode != "Cash")
+        RuleFor(x => x.Mode).Must(m => m is "Cash" or "Bank" or "UPI" or "Paytm" or "Cheque" or "DD")
+            .WithMessage("Payment mode is Cash, Bank, UPI, Paytm, Cheque or DD.");
+        RuleFor(x => x.Reference).NotEmpty().When(x => x.Mode is not ("Cash" or "Bank"))
             .WithMessage("Enter the reference / cheque number.").MaximumLength(60);
         RuleFor(x => x.PaidOn).LessThanOrEqualTo(_ => DateOnly.FromDateTime(DateTime.Today))
             .When(x => x.PaidOn.HasValue).WithMessage("The payment date cannot be in the future.");
@@ -92,7 +101,14 @@ public record PreSchoolStudentDetailDto(
     bool AdmissionPaid,
     IReadOnlyList<PreSchoolMonthDto> Months,
     IReadOnlyList<PreSchoolReceiptSummaryDto> Receipts,
-    string? Section = null);
+    string? Section = null,
+    // Who referred the child: "Staff" with the teacher or receptionist, "None", or null (admitted before references).
+    string? ReferenceType = null,
+    int? ReferredByStaffId = null,
+    string? ReferredByName = null);
+
+/// <summary>A PreSchool teacher or receptionist who can be named as a child's referrer.</summary>
+public record PreSchoolReferrerDto(int Id, string Name, string Role);
 
 public record PreSchoolStudentSaveRequest
 {
@@ -122,6 +138,10 @@ public record PreSchoolStudentSaveRequest
 
     /// <summary>"A", "B" … printed on the fee receipt.</summary>
     public string? Section { get; init; }
+
+    /// <summary>"Staff" (with <see cref="ReferredByStaffId"/>) or "None"; required for a new admission.</summary>
+    public string? ReferenceType { get; init; }
+    public int? ReferredByStaffId { get; init; }
 }
 
 public class PreSchoolStudentSaveRequestValidator : AbstractValidator<PreSchoolStudentSaveRequest>
@@ -171,6 +191,10 @@ public class PreSchoolStudentSaveRequestValidator : AbstractValidator<PreSchoolS
             .WithMessage("The end date cannot be before the joining date.");
         RuleFor(x => x.Notes).MaximumLength(500);
         RuleFor(x => x.Section).MaximumLength(10);
+        RuleFor(x => x.ReferenceType).Must(t => t is null or PreSchoolReferenceTypes.Staff or PreSchoolReferenceTypes.None)
+            .WithMessage("Choose who referred the child, or No reference.");
+        RuleFor(x => x.ReferredByStaffId).NotNull().GreaterThan(0).When(x => x.ReferenceType == PreSchoolReferenceTypes.Staff)
+            .WithMessage("Choose the teacher or receptionist who referred the child.");
     }
 }
 
@@ -240,8 +264,8 @@ public class PreSchoolCollectRequestValidator : AbstractValidator<PreSchoolColle
         RuleFor(x => x.Months.Count).LessThanOrEqualTo(24).WithMessage("At most 24 months on one receipt.");
         RuleFor(x => x.AdmissionAmount).GreaterThan(0).When(x => x.AdmissionAmount.HasValue)
             .WithMessage("The admission amount must be above zero.");
-        RuleFor(x => x.Mode).Must(m => m is "Cash" or "UPI" or "Paytm" or "Cheque" or "DD")
-            .WithMessage("Payment mode is Cash, UPI, Paytm, Cheque or DD.");
+        RuleFor(x => x.Mode).Must(m => m is "Cash" or "Bank" or "UPI" or "Paytm" or "Cheque" or "DD")
+            .WithMessage("Payment mode is Cash, Bank, UPI, Paytm, Cheque or DD.");
         RuleFor(x => x.Reference).NotEmpty().When(x => x.Mode is "UPI" or "Paytm")
             .WithMessage("Enter the UPI or Paytm reference number.").MaximumLength(60);
         RuleFor(x => x.Reference).NotEmpty().When(x => x.Mode is "Cheque" or "DD")
@@ -378,6 +402,12 @@ public interface IPreSchoolStudentService
     Task<Result<PreSchoolReceiptDto>> CollectAsync(int studentId, PreSchoolCollectRequest request, string? actor, CancellationToken ct = default);
     Task<Result<PreSchoolReceiptDto>> GetReceiptAsync(int receiptId, CancellationToken ct = default);
     Task<Result<PreSchoolReceiptDto>> CancelReceiptAsync(int receiptId, string? actor, CancellationToken ct = default);
+
+    /// <summary>The PreSchool's teachers and receptionists still working: who can be named as a referrer.</summary>
+    Task<IReadOnlyList<PreSchoolReferrerDto>> ReferrersAsync(CancellationToken ct = default);
+
+    /// <summary>Emails the receipt (with the parent copy as a PDF, when given) to the guardian's email.</summary>
+    Task<Result<PreSchoolReceiptMailResultDto>> EmailReceiptAsync(int receiptId, byte[]? pdf, string? actor, CancellationToken ct = default);
 
     /// <summary>A further instalment against a receipt being paid in parts.</summary>
     Task<Result<PreSchoolReceiptDto>> AddPaymentAsync(int receiptId, PreSchoolPaymentRequest request, string? actor, CancellationToken ct = default);

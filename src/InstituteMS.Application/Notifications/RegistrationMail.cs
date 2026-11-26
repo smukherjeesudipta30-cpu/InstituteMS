@@ -86,7 +86,46 @@ public class MailOptions
     /// Falls back to <see cref="FromAddress"/> when it is not configured.
     /// </summary>
     public string? AdminNotifyAddress { get; set; }
+
+    /* ------------------------------------------------------- PreSchool */
+
+    /// <summary>
+    /// The PreSchool's own Gmail, which its fee receipts are sent from. Gmail
+    /// sends only as the account that signs in, so mail comes from this address
+    /// only when <see cref="PreSchoolUserName"/> and <see cref="PreSchoolPassword"/>
+    /// (that account's Google App Password) are configured on the server. Until
+    /// then PreSchool mail goes from <see cref="FromAddress"/> under the
+    /// PreSchool's name, with replies to this address.
+    /// </summary>
+    public string PreSchoolFromAddress { get; set; } = "avijanpreschool@gmail.com";
+
+    public string PreSchoolFromName { get; set; } = "Avijan PreSchool";
+
+    /// <summary>The PreSchool Gmail account's sign-in; blank to send from the main mailbox.</summary>
+    public string? PreSchoolUserName { get; set; }
+
+    /// <summary>The PreSchool Gmail account's App Password. Server configuration only — never in source control.</summary>
+    public string? PreSchoolPassword { get; set; }
 }
+
+/// <summary>A PreSchool fee receipt for the child's guardian, with the parent copy as a PDF.</summary>
+public record PreSchoolReceiptMailRequest(
+    string ToEmail,
+    string ParentName,
+    string ChildName,
+    string ClassName,
+    string ReceiptCode,
+    DateOnly ReceivedOn,
+    IReadOnlyList<(string Description, decimal Amount)> Lines,
+    decimal Total,
+    decimal Paid,
+    decimal Balance,
+    string Mode,
+    string SchoolName,
+    string? SchoolAddress,
+    string? SchoolPhone,
+    byte[]? Pdf,
+    string? PdfFileName);
 
 /// <summary>What a newly admitted student is told.</summary>
 public record RegistrationMailRequest(
@@ -249,4 +288,12 @@ public interface IStudentMailer
     /// </returns>
     Task<bool> SendPasswordResetCodeAsync(
         PasswordResetCodeMailRequest request, string? actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// A PreSchool fee receipt to the child's guardian, from the PreSchool's own
+    /// mailbox when it is configured.
+    /// </summary>
+    /// <returns>False when it could not be sent (or mail is switched off).</returns>
+    Task<bool> SendPreSchoolReceiptAsync(
+        PreSchoolReceiptMailRequest request, string? actor, CancellationToken ct = default);
 }

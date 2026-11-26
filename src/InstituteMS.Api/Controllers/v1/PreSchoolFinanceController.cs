@@ -104,4 +104,14 @@ public class PreSchoolFinanceController : ApiControllerBase
     [ProducesResponseType(typeof(ApiResponse<PreSchoolIncomeRangeDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> IncomeRange([FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken ct)
         => Envelope(await _finance.IncomeRangeAsync(from, to, ct));
+
+    /// <summary>
+    /// Honorarium paid to the PreSchool's staff. basis=month (the default): whole
+    /// months, 1st to last day, by the month each honorarium is for. basis=paid:
+    /// every payment made between the two dates.
+    /// </summary>
+    [HttpGet("reports/honorarium")]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolHonorariumReportDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Honorarium([FromQuery] DateOnly from, [FromQuery] DateOnly to, [FromQuery] string? basis, CancellationToken ct)
+        => Envelope(await _finance.HonorariumReportAsync(from, to, basis ?? "month", ct));
 }

@@ -185,6 +185,77 @@ public class SmtpStudentMailer : IStudentMailer
         }
     }
 
+    /* ---------------------------------------------------------- PreSchool */
+
+    public async Task<bool> SendPreSchoolReceiptAsync(
+        PreSchoolReceiptMailRequest r, string? actor, CancellationToken ct = default)
+    {
+        if (!_options.Enabled || string.IsNullOrWhiteSpace(r.ToEmail)) return false;
+        try
+        {
+            await SendAsync(
+                to: r.ToEmail,
+                subject: $"{r.SchoolName} - Fee receipt {r.ReceiptCode} for {r.ChildName}",
+                html: PreSchoolReceiptHtml(r),
+                text: PreSchoolReceiptText(r),
+                logReference: r.ReceiptCode,
+                what: $"PreSchool receipt {r.ReceiptCode}",
+                pdf: r.Pdf,
+                pdfFileName: r.PdfFileName,
+                actor: actor,
+                ct: ct,
+                preSchool: true);
+
+            var status = await _db.MailLog.AsNoTracking()
+                .Where(m => m.ForRegistrationId == r.ReceiptCode && m.ToEmail == r.ToEmail.Trim())
+                .OrderByDescending(m => m.Id).Select(m => m.Status).FirstOrDefaultAsync(ct);
+            return string.Equals(status, "SENT", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "PreSchool receipt {Receipt} could not be sent.", r.ReceiptCode);
+            return false;
+        }
+    }
+
+    private static string PreSchoolReceiptHtml(PreSchoolReceiptMailRequest r)
+    {
+        var rows = string.Concat(r.Lines.Select(l =>
+            $"<tr><td style=\"padding:6px 8px;border-bottom:1px solid #eee\">{Escape(l.Description)}</td>" +
+            $"<td style=\"padding:6px 8px;border-bottom:1px solid #eee;text-align:right;white-space:nowrap\">{Money(l.Amount)}</td></tr>"));
+        var instalment = r.Balance > 0
+            ? $"<p style=\"margin:12px 0 0\">Received so far: <b>{Money(r.Paid)}</b> &nbsp;·&nbsp; Balance to pay: <b>{Money(r.Balance)}</b></p>"
+            : string.Empty;
+        return $"""
+            <div style="font-family:Arial,Helvetica,sans-serif;color:#222;max-width:560px">
+              <h2 style="margin:0 0 4px">{Escape(r.SchoolName)}</h2>
+              <p style="margin:0 0 14px;color:#555;font-size:13px">{Escape(r.SchoolAddress)}{(string.IsNullOrWhiteSpace(r.SchoolPhone) ? "" : " · " + Escape(r.SchoolPhone))}</p>
+              <p>Dear {Escape(r.ParentName)},</p>
+              <p>Thank you. We have received the fees for <b>{Escape(r.ChildName)}</b> ({Escape(r.ClassName)}).
+                The receipt is attached as a PDF.</p>
+              <p style="margin:0">Receipt <b>{Escape(r.ReceiptCode)}</b> · {r.ReceivedOn:dd/MM/yyyy} · {Escape(r.Mode)}</p>
+              <table style="width:100%;border-collapse:collapse;margin-top:10px;font-size:14px">
+                {rows}
+                <tr><td style="padding:8px;font-weight:bold">Total</td><td style="padding:8px;text-align:right;font-weight:bold">{Money(r.Total)}</td></tr>
+              </table>
+              {instalment}
+              <p style="margin-top:18px;color:#555;font-size:12px">This is a system generated receipt. No signature is required.</p>
+            </div>
+            """;
+    }
+
+    private static string PreSchoolReceiptText(PreSchoolReceiptMailRequest r)
+    {
+        var lines = string.Join("\n", r.Lines.Select(l => $"  {l.Description}: {Money(l.Amount)}"));
+        var balance = r.Balance > 0 ? $"\nReceived so far: {Money(r.Paid)}. Balance to pay: {Money(r.Balance)}." : "";
+        return $"Dear {r.ParentName},\n\nThank you. We have received the fees for {r.ChildName} ({r.ClassName}).\n" +
+               $"Receipt {r.ReceiptCode} · {r.ReceivedOn:dd/MM/yyyy} · {r.Mode}\n\n{lines}\n  Total: {Money(r.Total)}{balance}\n\n" +
+               $"The receipt is attached as a PDF. This is a system generated receipt.\n\n{r.SchoolName}";
+    }
+
+    private static string Money(decimal amount) =>
+        "Rs. " + amount.ToString("#,##,##0.00", System.Globalization.CultureInfo.GetCultureInfo("en-IN"));
+
     /* ---------------------------------------------------------------- send */
 
     private async Task SendAsync(
@@ -200,8 +271,21 @@ public class SmtpStudentMailer : IStudentMailer
         // address. The sending mailbox stays FromAddress: the relay refuses any
         // other. Left out, both are as they always were.
         string? fromName = null,
-        string? replyTo = null)
+        string? replyTo = null,
+        // PreSchool mail: from the PreSchool's own Gmail when its App Password is
+        // configured; otherwise from the main mailbox under the PreSchool's name,
+        // with replies to the PreSchool's address.
+        bool preSchool = false)
     {
+        var ownMailbox = preSchool
+            && !string.IsNullOrWhiteSpace(_options.PreSchoolUserName)
+            && !string.IsNullOrWhiteSpace(_options.PreSchoolPassword);
+        if (preSchool)
+        {
+            fromName ??= _options.PreSchoolFromName;
+            if (!ownMailbox) replyTo ??= _options.PreSchoolFromAddress;
+        }
+
         /* Disabled means DORMANT, not "log that nothing happened". Checked before
            anything else so a switched-off mailer writes no rows at all and an
            admission behaves exactly as it did before this class existed. */
@@ -231,7 +315,12 @@ public class SmtpStudentMailer : IStudentMailer
 
             /* The GoDaddy relay authenticates by source IP and rejects a login
                attempt, so credentials are sent only when configured. */
-            if (!string.IsNullOrWhiteSpace(_options.UserName))
+            if (ownMailbox)
+            {
+                client.UseDefaultCredentials = false;
+                client.Credentials = new NetworkCredential(_options.PreSchoolUserName, _options.PreSchoolPassword);
+            }
+            else if (!string.IsNullOrWhiteSpace(_options.UserName))
             {
                 client.UseDefaultCredentials = false;
                 client.Credentials = new NetworkCredential(_options.UserName, _options.Password);
@@ -239,7 +328,7 @@ public class SmtpStudentMailer : IStudentMailer
 
             using var message = new MailMessage
             {
-                From = new MailAddress(_options.FromAddress, fromName ?? _options.FromName),
+                From = new MailAddress(ownMailbox ? _options.PreSchoolFromAddress : _options.FromAddress, fromName ?? _options.FromName),
                 Subject = subject
             };
 

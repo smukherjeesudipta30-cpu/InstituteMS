@@ -60,7 +60,9 @@ public record PreSchoolSettingDto(
     // The attendance fence: staff can mark only within GeofenceMetres of this point.
     decimal? Latitude = null,
     decimal? Longitude = null,
-    int GeofenceMetres = 100);
+    int GeofenceMetres = 100,
+    // The referring teacher's or receptionist's share of each admission payment, in percent.
+    decimal ReferralPercent = 5);
 
 /// <summary>Everything the PreSchool dashboard and masters screen show, in one call.</summary>
 public record PreSchoolOverviewDto(
@@ -180,6 +182,9 @@ public record PreSchoolSettingSaveRequest
     public decimal? Latitude { get; init; }
     public decimal? Longitude { get; init; }
     public int GeofenceMetres { get; init; } = 100;
+
+    /// <summary>Reference fee in percent; left out by older screens, which keeps it as it is.</summary>
+    public decimal? ReferralPercent { get; init; }
 }
 
 /// <summary>The PreSchool's email: shown to parents, and where replies to its mail go.</summary>
@@ -215,6 +220,8 @@ public class PreSchoolSettingSaveRequestValidator : AbstractValidator<PreSchoolS
         RuleFor(x => x.Longitude).InclusiveBetween(-180, 180).When(x => x.Longitude.HasValue).WithMessage("Longitude runs from -180 to 180.");
         RuleFor(x => x).Must(x => x.Latitude.HasValue == x.Longitude.HasValue)
             .WithMessage("Give both the latitude and the longitude, or neither.");
+        RuleFor(x => x.ReferralPercent).InclusiveBetween(0, 50).When(x => x.ReferralPercent.HasValue)
+            .WithMessage("The reference fee is a percentage from 0 to 50.");
         RuleFor(x => x.GeofenceMetres).InclusiveBetween(20, 1000)
             .WithMessage("The attendance distance must be between 20 and 1000 metres.");
         RuleFor(x => x.ReceiptPrefix).NotEmpty().MaximumLength(10)

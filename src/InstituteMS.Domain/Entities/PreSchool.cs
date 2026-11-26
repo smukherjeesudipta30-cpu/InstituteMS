@@ -146,6 +146,9 @@ public class PreSchoolSetting
     /// <summary>How far from that point, in metres, a mark is still accepted.</summary>
     public int GeofenceMetres { get; set; } = 100;
 
+    /// <summary>The referring teacher's or receptionist's share of each admission payment, in percent.</summary>
+    public decimal ReferralPercent { get; set; } = 5;
+
     public string? ModifiedBy { get; set; }
     public DateTime? ModifiedOn { get; set; }
 }
@@ -331,6 +334,12 @@ public class PreSchoolStudent
     /// <summary>"A", "B" … printed on the fee receipt; set by the office.</summary>
     public string? Section { get; set; }
 
+    /// <summary>"Staff" (see <see cref="ReferredByStaffId"/>) or "None" (walk-in); null for children admitted before references.</summary>
+    public string? ReferenceType { get; set; }
+
+    /// <summary>The PreSchool teacher or receptionist who referred the child.</summary>
+    public int? ReferredByStaffId { get; set; }
+
     public string? Notes { get; set; }
 
     public string? CreatedBy { get; set; }
@@ -339,6 +348,7 @@ public class PreSchoolStudent
     public DateTime? ModifiedOn { get; set; }
 
     public PreSchoolClass? Class { get; set; }
+    public PreSchoolStaffMember? ReferredBy { get; set; }
     public ICollection<PreSchoolReceipt> Receipts { get; set; } = [];
 }
 
@@ -701,6 +711,40 @@ public class PreSchoolMark
     public DateTime UpdatedOn { get; set; }
 }
 
+public static class PreSchoolReferenceTypes
+{
+    /// <summary>Referred by a PreSchool teacher or receptionist.</summary>
+    public const string Staff = "Staff";
+
+    /// <summary>No reference (walk-in): all of the fee stays PreSchool income.</summary>
+    public const string None = "None";
+}
+
+/// <summary>
+/// Maps to <c>dbo.PreSchoolReferralCredit</c> — the referrer's share of one
+/// payment on a child's admission receipt. Paid out with the referrer's next
+/// salary (<see cref="SalaryPaymentId"/>), as at the Computer Centre.
+/// </summary>
+public class PreSchoolReferralCredit
+{
+    public int Id { get; set; }
+    public int StudentId { get; set; }
+    public int ReceiptPaymentId { get; set; }
+    public int StaffId { get; set; }
+    public decimal PaymentAmount { get; set; }
+    public decimal Percent { get; set; }
+    public decimal Amount { get; set; }
+    public DateOnly CreditedOn { get; set; }
+    public int? SalaryPaymentId { get; set; }
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedOn { get; set; }
+
+    public PreSchoolStudent? Student { get; set; }
+    public PreSchoolReceiptPayment? ReceiptPayment { get; set; }
+    public PreSchoolStaffMember? Staff { get; set; }
+    public PreSchoolSalaryPayment? SalaryPayment { get; set; }
+}
+
 public static class PreSchoolStaffRoles
 {
     public const string Receptionist = "Receptionist";
@@ -733,8 +777,11 @@ public class PreSchoolSalaryPayment
     /// <summary>Taken off for absence; the admin decides the amount.</summary>
     public decimal Deduction { get; set; }
 
-    /// <summary>Salary less deduction: what was actually paid.</summary>
+    /// <summary>Salary less deduction, plus any reference fees: what was actually paid.</summary>
     public decimal NetPaid { get; set; }
+
+    /// <summary>Reference fees paid out with this salary (included in <see cref="NetPaid"/>).</summary>
+    public decimal ReferralBonus { get; set; }
 
     /// <summary>Cash, Bank or UPI.</summary>
     public string Mode { get; set; } = "Cash";

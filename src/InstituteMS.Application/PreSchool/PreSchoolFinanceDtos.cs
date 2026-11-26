@@ -64,10 +64,61 @@ public record PreSchoolSalaryPaymentDto(
     string? Notes,
     string? PaidBy,
     string SchoolName,
-    string? SchoolAddress);
+    string? SchoolAddress,
+    // Reference fees paid with this salary (included in NetPaid).
+    decimal ReferralBonus = 0);
+
+/// <summary>One reference fee: the referrer's share of one payment on a child's admission receipt.</summary>
+public record PreSchoolReferralCreditDto(
+    int Id, DateOnly CreditedOn, string ChildName, string AdmissionCode, string ReceiptCode, int InstalmentNo,
+    decimal PaymentAmount, decimal Percent, decimal Amount, string StaffName, DateOnly? PaidWithSalaryFor);
+
+/// <summary>One person's honorarium over the report's dates.</summary>
+public record PreSchoolHonorariumStaffDto(
+    int StaffId, string Name, string Role, int Payments, decimal Honorarium, decimal Deduction, decimal ReferenceFees, decimal NetPaid,
+    // Reference fees earned in the dates (paid or still to come).
+    decimal ReferenceEarned);
+
+/// <summary>
+/// Honorarium paid to teachers, receptionists and housekeepers. By month: the
+/// honorarium for each month from the 1st to the last day of From..To's months.
+/// By dates: every payment made between From and To.
+/// </summary>
+public record PreSchoolHonorariumReportDto(
+    DateOnly From,
+    DateOnly To,
+    string Basis,
+    decimal Honorarium,
+    decimal Deduction,
+    decimal ReferenceFees,
+    decimal NetPaid,
+    IReadOnlyList<PreSchoolHonorariumStaffDto> ByStaff,
+    IReadOnlyList<PreSchoolSalaryPaymentDto> Payments,
+    IReadOnlyList<PreSchoolReferralCreditDto> ReferenceCredits);
+
+/// <summary>A teacher's or receptionist's reference fees: those still to be paid and those paid with a salary.</summary>
+public record PreSchoolMyReferralsDto(decimal Pending, decimal PaidOut, IReadOnlyList<PreSchoolReferralCreditDto> Credits);
+
+/// <summary>Every payment received between two dates, with who collected it, and the totals by mode, collector, class and day.</summary>
+public record PreSchoolCollectionReportDto(
+    DateOnly From,
+    DateOnly To,
+    decimal Total,
+    int Payments,
+    IReadOnlyList<PreSchoolIncomeReceiptLineDto> Rows,
+    IReadOnlyDictionary<string, decimal> ByMode,
+    IReadOnlyDictionary<string, decimal> ByCollector,
+    IReadOnlyDictionary<string, decimal> ByClass,
+    IReadOnlyDictionary<DateOnly, decimal> ByDay,
+    decimal AdmissionFees,
+    decimal MonthlyFees,
+    decimal OtherFees,
+    decimal Discounts);
 
 /// <summary>One person in a month's salary sheet; <see cref="Payment"/> is null until they are paid.</summary>
-public record PreSchoolSalaryRowDto(int StaffId, string Name, string Role, decimal MonthlySalary, PreSchoolSalaryPaymentDto? Payment);
+public record PreSchoolSalaryRowDto(int StaffId, string Name, string Role, decimal MonthlySalary, PreSchoolSalaryPaymentDto? Payment,
+    // Reference fees earned up to the end of the month and not yet paid: added when the salary is paid.
+    decimal PendingReferral = 0);
 
 public record PreSchoolSalarySheetDto(DateOnly Month, IReadOnlyList<PreSchoolSalaryRowDto> Rows, decimal TotalSalary, decimal TotalPaid, decimal TotalUnpaid);
 
@@ -138,7 +189,9 @@ public record PreSchoolIncomeMonthDto(
     // Paid to My Chhota School for store stock, by the day paid (bulk payments, not deliveries).
     decimal Purchases = 0,
     // Discounts and special offers given on receipts (already taken off Income).
-    decimal Discounts = 0);
+    decimal Discounts = 0,
+    // Reference fees paid to teachers and receptionists with their salaries (not in Salaries).
+    decimal Referrals = 0);
 
 /// <summary>
 /// A year of the PreSchool's money, month by month: fees received (by receipt
@@ -156,7 +209,9 @@ public record PreSchoolIncomeReportDto(
     IReadOnlyDictionary<string, decimal> ExpensesByHead,
     decimal Purchases = 0,
     // Fees received, by the login that collected them.
-    IReadOnlyDictionary<string, decimal>? IncomeByCollector = null);
+    IReadOnlyDictionary<string, decimal>? IncomeByCollector = null,
+    // Reference fees paid to teachers and receptionists with their salaries (not in Salaries).
+    decimal Referrals = 0);
 
 /// <summary>One delivery of store stock, with what it cost.</summary>
 public record PreSchoolIncomePurchaseLineDto(DateOnly OnDate, string ItemName, string ClassName, string Supplier, int Quantity, decimal UnitCost, decimal Amount);
@@ -172,8 +227,13 @@ public record PreSchoolStoreMarginDto(string Item, string? ChargeHead, decimal R
 /// columns are this payment's share of the receipt's rows.
 /// </summary>
 public record PreSchoolIncomeReceiptLineDto(DateOnly ReceivedOn, string ReceiptCode, string ChildName, string ClassName, string Mode, decimal AdmissionFee, decimal MonthlyFees, decimal Total, decimal OtherFees = 0, decimal Discount = 0,
-    string? CollectedBy = null, int InstalmentNo = 1, decimal BillTotal = 0);
-public record PreSchoolIncomeSalaryLineDto(DateOnly PaidOn, string StaffName, string Role, DateOnly ForMonth, string Mode, decimal Amount);
+    string? CollectedBy = null, int InstalmentNo = 1, decimal BillTotal = 0,
+    // The child's admission details, for the fee collection report.
+    string? AdmissionCode = null, string? ParentName = null, string? Phone = null, DateOnly? JoinedOn = null, string? Section = null,
+    string? Reference = null, int StudentId = 0);
+public record PreSchoolIncomeSalaryLineDto(DateOnly PaidOn, string StaffName, string Role, DateOnly ForMonth, string Mode, decimal Amount,
+    // Of Amount, the reference fees paid with this salary.
+    decimal ReferralBonus = 0);
 
 /// <summary>
 /// The PreSchool's money between any two dates, with every receipt, salary and
@@ -205,7 +265,9 @@ public record PreSchoolIncomeRangeDto(
     // Discounts and special offers given on receipts in these dates (already taken off Income).
     decimal Discounts = 0,
     // Fees received, by the login that collected them.
-    IReadOnlyDictionary<string, decimal>? IncomeByCollector = null);
+    IReadOnlyDictionary<string, decimal>? IncomeByCollector = null,
+    // Reference fees paid to teachers and receptionists with their salaries (not in Salaries).
+    decimal Referrals = 0);
 
 /// <summary>The PreSchool's staff and salaries, expenses and income report. Nothing here reads a Computer Centre table.</summary>
 public interface IPreSchoolFinanceService
@@ -236,4 +298,13 @@ public interface IPreSchoolFinanceService
     /// when the admin has not entered it.
     /// </summary>
     Task<IReadOnlyList<PreSchoolSalaryPaymentDto>> MyPayslipsAsync(string email, CancellationToken ct = default);
+
+    /// <summary>The signed-in teacher's or receptionist's reference fees, paid and still to come.</summary>
+    Task<PreSchoolMyReferralsDto> MyReferralsAsync(string email, CancellationToken ct = default);
+
+    /// <summary>Honorarium paid, for whole months ("month") or by the date paid ("paid").</summary>
+    Task<Result<PreSchoolHonorariumReportDto>> HonorariumReportAsync(DateOnly from, DateOnly to, string basis, CancellationToken ct = default);
+
+    /// <summary>Every payment received between two dates, with who collected it.</summary>
+    Task<Result<PreSchoolCollectionReportDto>> CollectionReportAsync(DateOnly from, DateOnly to, CancellationToken ct = default);
 }

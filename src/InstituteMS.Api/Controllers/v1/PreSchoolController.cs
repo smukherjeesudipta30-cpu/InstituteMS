@@ -55,6 +55,17 @@ public class PreSchoolController : ApiControllerBase
         return Envelope(Result<IReadOnlyList<PreSchoolSalaryPaymentDto>>.Success(await finance.MyPayslipsAsync(email, ct)));
     }
 
+    /// <summary>The signed-in teacher's or receptionist's reference fees — matched by the email on their staff record.</summary>
+    [HttpGet("my-referrals")]
+    [ProducesResponseType(typeof(ApiResponse<PreSchoolMyReferralsDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> MyReferrals([FromServices] IPreSchoolFinanceService finance, CancellationToken ct)
+    {
+        var email = User.FindFirstValue(ClaimTypes.Email);
+        if (string.IsNullOrWhiteSpace(email))
+            return Envelope(Result<PreSchoolMyReferralsDto>.Success(new PreSchoolMyReferralsDto(0, 0, [])));
+        return Envelope(Result<PreSchoolMyReferralsDto>.Success(await finance.MyReferralsAsync(email, ct)));
+    }
+
     /// <summary>The PreSchool's holidays in one year (this year when none is given), in date order.</summary>
     [HttpGet("holidays")]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<PreSchoolHolidayDto>>), StatusCodes.Status200OK)]
