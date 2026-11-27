@@ -849,7 +849,14 @@ public class ReceptionistService : IReceptionistService
         // configured cycle (26th-to-26th by default), not the calendar month —
         // so the coverage window uses PayCycleRange.
         var payCycleStartDay = await GetPayCycleStartDayAsync(ct);
-        var (monthStart, monthEnd) = PayCycleRange(forMonth, payCycleStartDay);
+        // forMonth is the PAY MONTH, not a day inside the cycle: November pay is the
+        // cycle ending in November (26 Oct - 25 Nov), the same range the payment screen
+        // shows. The form sends whatever day its month picker holds - today, by default -
+        // so anchoring on that day put a payment made on or after the 26th into the
+        // NEXT cycle, which had barely started: no covered shifts, a bonus of 0, and
+        // that 0 saved with the payment. Anchoring on the 1st always gives the cycle
+        // that ends in the pay month.
+        var (monthStart, monthEnd) = PayCycleRange(MonthStart(forMonth), payCycleStartDay);
         var today = DateOnly.FromDateTime(DateTime.Today);
         var countEnd = monthEnd > today ? today : monthEnd;
 
