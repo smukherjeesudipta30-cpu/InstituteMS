@@ -334,10 +334,21 @@ public class TeacherService : ITeacherService
             .Select(g => new
             {
                 TeacherId = g.Key,
-                Total = g.Sum(x => (decimal?)x.Salary ?? 0m),
-                LastPaid = g.Max(x => x.PaidOn)
+                Total = g.Sum(x => (decimal?)x.Salary ?? 0m)
             })
             .ToListAsync(ct);
+
+        // "Last paid" is the date the Receptionist/Admin entered on the latest
+        // payment made TO the teacher (TecExpense). It used to be the latest
+        // TecFees date - when a student last paid a fee that credits the teacher's
+        // share - which is nearly always today or yesterday and says nothing about
+        // when the teacher was actually paid.
+        var lastPaid = await _db.TeacherExpenses
+            .AsNoTracking()
+            .Where(e => e.TeacherId != null && ids.Contains(e.TeacherId.Value) && e.ExpenseDate != null)
+            .GroupBy(e => e.TeacherId!.Value)
+            .Select(g => new { TeacherId = g.Key, LastPaid = g.Max(e => e.ExpenseDate) })
+            .ToDictionaryAsync(x => x.TeacherId, x => x.LastPaid, ct);
 
         // Admission referral credits are part of what a teacher has earned.
         var referrals = await _db.ReferralCredits
@@ -361,7 +372,7 @@ public class TeacherService : ITeacherService
                 assigned.Count(s => s.IsActive == true),
                 assigned.Count,
                 (money?.Total ?? 0m) + referrals.GetValueOrDefault(t.Id),
-                money?.LastPaid,
+                lastPaid.GetValueOrDefault(t.Id),
                 t.IsPlaceholder,
                 assigned.Count > 0 || money is not null);
         }).ToList();
